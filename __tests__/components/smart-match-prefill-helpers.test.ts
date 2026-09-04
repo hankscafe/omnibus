@@ -4,6 +4,7 @@
 // (empty fields only, mathematically incapable of overwriting curation).
 import { describe, it, expect } from 'vitest';
 import { seedValue, providerFillPlan } from '@/components/smart-match-metadata-dialog';
+import { acceptableForBulk } from '@/lib/utils/smart-match-search';
 
 describe('seedValue', () => {
     const filePrefill = { value: 'Dylan Dog', source: 'comicinfo' };
@@ -35,5 +36,20 @@ describe('providerFillPlan', () => {
     it('ignores empty provider values and yields an empty plan when there is nothing to add', () => {
         expect(providerFillPlan({ writer: 'Kept' }, { writer: 'X', penciller: '  ' })).toEqual({});
         expect(providerFillPlan({}, undefined)).toEqual({});
+    });
+});
+
+describe('acceptableForBulk — Accept All candidates (ignore state)', () => {
+    const suggestions = { a: { id: '1' }, b: 'NOT_FOUND', c: 'ERROR', d: { id: '2' } };
+
+    it('takes only rows with a real suggestion', () => {
+        const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'e' }];
+        expect(acceptableForBulk(items, suggestions).map(i => i.id)).toEqual(['a']);
+    });
+
+    it('never includes an ignored row, even when it has a good suggestion', () => {
+        // The "Show ignored" toggle puts these on screen; a bulk accept must not undo the decision.
+        const items = [{ id: 'a' }, { id: 'd', isIgnored: true }];
+        expect(acceptableForBulk(items, suggestions).map(i => i.id)).toEqual(['a']);
     });
 });

@@ -99,6 +99,21 @@ pub async fn record_sweep_result(db: &Db, value: serde_json::Value) {
 /// Budget-aware: free file evidence always runs; API work (issue-id resolution, name search) stops
 /// once ComicVine's hourly window nears the wall and RESUMES on the next scheduled run — the fix
 /// for "matching just gives up after the rate limit" (discussion #177).
+/// The series the automatic sweep is allowed to touch.
+///
+/// The three OR'd conditions are the historical definition of "not matched yet" — a state of
+/// UNMATCHED, no provider id at all, or a placeholder `unmatched_*` id (rows born from a scan).
+/// The IGNORED exclusion is the one that needs stating: an admin who marks a series ignored has
+/// said "I curated this by hand, stop offering to match it" — but such a series still has a null or
+/// placeholder metadataId, so without this clause the very next sweep would pick it up and
+/// auto-match it anyway, which is precisely the nagging the state exists to end.
+pub(crate) fn unmatched_candidates_sql() -> &'static str {
+    r#"SELECT id, name, year, "folderPath" FROM "Series"
+       WHERE ("matchState" IS NULL OR "matchState" <> 'IGNORED')
+         AND ("matchState" = 'UNMATCHED' OR "metadataId" IS NULL OR "metadataId" LIKE 'unmatched%')
+       ORDER BY "updatedAt" ASC LIMIT 100"#
+}
+
 pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
     let get_setting = |key: &'static str| {
         let pool = db.pool.clone();
@@ -128,11 +143,7 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
     let cv_key = crate::secret_crypto::decrypt_setting(&db.pool, get_setting("cv_api_key").await).await
         .filter(|k| !k.trim().is_empty());
 
-    let rows = sqlx::query(
-        r#"SELECT id, name, year, "folderPath" FROM "Series"
-           WHERE "matchState" = 'UNMATCHED' OR "metadataId" IS NULL OR "metadataId" LIKE 'unmatched%'
-           ORDER BY "updatedAt" ASC LIMIT 100"#,
-    )
+    let rows = sqlx::query(unmatched_candidates_sql())
     .fetch_all(&db.pool)
     .await?;
 
@@ -400,6 +411,46 @@ pub(crate) fn budget_exhausted(calls_last_window: usize, limit: usize, reserve: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sweep must leave IGNORED series alone — they still carry a null/placeholder metadataId,
+    /// so the pre-IGNORED query would have re-offered them on every run (field report from
+    /// robotshavehearts2: hand-curated TPBs ComicVine simply doesn't have).
+    #[tokio::test]
+    async fn sweep_candidates_skip_ignored_but_keep_every_other_unmatched_shape() {
+        let base = std::env::temp_dir().join(format!("omnibus_matchsweep_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create fixture dir");
+        let db_file = base.join("sweep.db");
+        std::fs::File::create(&db_file).expect("pre-create sqlite file");
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+
+        sqlx::query(
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, year INTEGER, "folderPath" TEXT,
+               "matchState" TEXT, "metadataId" TEXT, "updatedAt" TEXT)"#,
+        )
+        .execute(&db.pool).await.expect("create schema");
+
+        for (id, state, meta) in [
+            ("s_unmatched", Some("UNMATCHED"), None),
+            ("s_null_id", Some("MATCHED"), None),                       // no id yet = still a candidate
+            ("s_placeholder", Some("MATCHED"), Some("unmatched_abc")),  // scan-born placeholder id
+            ("s_ignored", Some("IGNORED"), None),                       // hand-curated: leave it alone
+            ("s_matched", Some("MATCHED"), Some("42821")),
+        ] {
+            sqlx::query(r#"INSERT INTO "Series" (id, name, year, "folderPath", "matchState", "metadataId", "updatedAt") VALUES ($1, $1, 2024, '/c', $2, $3, '2026-08-27')"#)
+                .bind(id).bind(state).bind(meta)
+                .execute(&db.pool).await.expect("seed series");
+        }
+
+        let rows = sqlx::query(unmatched_candidates_sql()).fetch_all(&db.pool).await.expect("candidates");
+        let mut ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("id")).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["s_null_id", "s_placeholder", "s_unmatched"]);
+        assert!(!ids.contains(&"s_ignored".to_string()), "an ignored series must never be swept");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn name_similarity_folds_symbols_and_scores_tokens() {

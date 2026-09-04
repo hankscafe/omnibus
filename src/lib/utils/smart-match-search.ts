@@ -130,3 +130,23 @@ export function buildManualSuggestion(data: any, provider: string): ManualSugges
         ...(Object.keys(joined).length ? { credits: joined } : {}),
     }
 }
+
+/**
+ * The rows "Accept All" is allowed to act on: ones with a real provider suggestion, never a
+ * NOT_FOUND/ERROR placeholder, and never an IGNORED series.
+ *
+ * The ignore guard is the load-bearing part. Ignored rows are hidden by default but visible while
+ * the "Show ignored" toggle is on, and a bulk accept that swept them up would silently undo a
+ * decision the admin made deliberately (field report from robotshavehearts2: series ComicVine has
+ * no record of, marked ignored so they stop being offered).
+ */
+export function acceptableForBulk<T extends { id: string; isIgnored?: boolean }>(
+    items: T[],
+    suggestions: Record<string, unknown>,
+): T[] {
+    return items.filter(item => {
+        if (item.isIgnored) return false;
+        const s = suggestions[item.id];
+        return !!s && s !== 'NOT_FOUND' && s !== 'ERROR';
+    });
+}

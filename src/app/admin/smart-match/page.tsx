@@ -5,18 +5,19 @@ import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, CheckCheck, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw, Layers } from "lucide-react"
+import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIcon, ArrowLeft, FileText, Search, Square, CheckSquare, CheckCheck, ExternalLink, Pencil, FolderTree, Upload, BookOpen, ChevronLeft, ChevronRight, History, RefreshCw, Layers, Undo2, EyeOff } from "lucide-react"
 import PageManagerModal, { PageManagerTarget } from "@/components/page-manager-modal"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
+import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -87,7 +88,12 @@ function describeSweep(info: any): string {
 }
 
 export default function SmartMatchPage() {
+    // The raw store holds ignored series too (the list is fetched with includeIgnored=1), so the
+    // toggle is instant and the count is honest on first paint — an admin can see that ignored
+    // entries exist without having to go looking for them. Everything that acts on rows uses
+    // visibleUnmatched below.
     const [unmatched, setUnmatched] = useState<any[]>([]);
+    const [showIgnored, setShowIgnored] = useState(false);
     const [suggestions, setSuggestions] = useState<Record<string, any>>({});
     const [isScanning, setIsScanning] = useState(false);
     const [processingId, setProcessingId] = useState<string | null>(null);
@@ -290,7 +296,7 @@ export default function SmartMatchPage() {
     // Silent re-fetch of the unmatched list (no loading spinner) after a sweep run matches items.
     const reloadUnmatched = async () => {
         try {
-            const res = await fetch(`/api/admin/unmatched?_t=${Date.now()}`, { cache: 'no-store' });
+            const res = await fetch(`/api/admin/unmatched?includeIgnored=1&_t=${Date.now()}`, { cache: 'no-store' });
             const data = await res.json();
             if (res.ok && Array.isArray(data)) setUnmatched(data);
         } catch {}
@@ -358,7 +364,7 @@ export default function SmartMatchPage() {
     useEffect(() => {
         document.title = "Omnibus - Smart Matcher";
         
-        fetch(`/api/admin/unmatched?_t=${Date.now()}`, { cache: 'no-store' })
+        fetch(`/api/admin/unmatched?includeIgnored=1&_t=${Date.now()}`, { cache: 'no-store' })
             .then(async (res) => {
                 const data = await res.json();
                 
@@ -403,8 +409,11 @@ export default function SmartMatchPage() {
         setIsScanning(true);
         let matchCount = 0;
 
-        for (const series of unmatched) {
-            if (suggestions[series.id]) continue; 
+        for (const series of visibleUnmatched) {
+            if (suggestions[series.id]) continue;
+            // An ignored series is visible only while the toggle is on; scanning it would put a
+            // suggestion back on a row the admin has already dealt with.
+            if (series.isIgnored) continue;
 
             try {
                 let cleanName = series.name.replace(/(omnibus|tpb|compendium|vol\.|volume)\s*\d*/i, '').trim();
@@ -572,10 +581,12 @@ export default function SmartMatchPage() {
     // folder move, and one giant request would blow past reverse-proxy/tunnel response ceilings —
     // with per-chunk UI progress. Failures stay in the list with their errors; successes leave it.
     const ACCEPT_ALL_CHUNK = 5;
-    const acceptableSeries = unmatched.filter(s => {
-        const g = suggestions[s.id];
-        return g && g !== 'NOT_FOUND' && g !== 'ERROR';
-    });
+    const ignoredCount = unmatched.filter(s => s.isIgnored).length;
+    // What the page actually shows and operates on.
+    const visibleUnmatched = showIgnored ? unmatched : unmatched.filter(s => !s.isIgnored);
+    // Accept All never touches an ignored row: the point of ignoring is that a bulk action can't
+    // quietly undo it while it happens to be on screen (shared helper, unit-tested).
+    const acceptableSeries = acceptableForBulk(unmatched, suggestions);
 
     const handleAcceptAll = async () => {
         const targets = acceptableSeries;
@@ -880,8 +891,55 @@ export default function SmartMatchPage() {
         setBulkUniverse("");
     };
 
-    const handleDismiss = (id: string) => {
-        setUnmatched(prev => prev.filter(s => s.id !== id));
+    // Dismiss used to be cosmetic: it dropped the card from local state and the item came straight
+    // back on the next visit (field report from robotshavehearts2 — hand-curated TPBs ComicVine has
+    // no record of, dismissed over and over). For a real series row it now PERSISTS as the IGNORED
+    // match state, which also takes it out of the front-page banner count and the engine's auto-match
+    // sweep. A loose file in the unmatched folder has no row to mark, so it stays a local hide.
+    const handleDismiss = async (id: string) => {
+        const item = unmatched.find(s => s.id === id);
+        // A loose file in the unmatched folder has no row to mark — it stays a local hide.
+        if (item?.isRawFile) {
+            setUnmatched(prev => prev.filter(s => s.id !== id));
+            return;
+        }
+        // Flag rather than remove: the derived count and the visible list follow from the flag, so
+        // an undo is a single field flip in either direction.
+        setUnmatched(prev => prev.map(s => (s.id === id ? { ...s, isIgnored: true } : s)));
+
+        try {
+            const res = await fetch('/api/admin/unmatched', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seriesIds: [id], ignored: true }),
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save');
+            toast({
+                title: "Ignored",
+                description: `"${item?.name || 'That series'}" won't be listed as unmatched again. Use "Show ignored" to bring it back.`,
+            });
+        } catch (e: unknown) {
+            // Say plainly that it will return, rather than leaving the admin to discover it later.
+            setUnmatched(prev => prev.map(s => (s.id === id ? { ...s, isIgnored: false } : s)));
+            toast({ title: "Couldn't save that", description: `${getErrorMessage(e)} — it will still be listed as unmatched.`, variant: "destructive" });
+        }
+    };
+
+    const handleRestore = async (id: string) => {
+        try {
+            const res = await fetch('/api/admin/unmatched', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seriesIds: [id], ignored: false }),
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to restore');
+            setUnmatched(prev => prev.map(s => (s.id === id ? { ...s, isIgnored: false } : s)));
+            toast({ title: "Back in the queue", description: "This series is listed as unmatched again." });
+        } catch (e: unknown) {
+            toast({ title: "Couldn't restore", description: getErrorMessage(e), variant: "destructive" });
+        }
     };
 
     const toggleSelection = (id: string) => {
@@ -968,7 +1026,7 @@ export default function SmartMatchPage() {
                             Smart Matcher
                         </h1>
                         <p className="text-muted-foreground mt-1 leading-relaxed">
-                            You have {unmatched.length} unmatched files/folders. Let AI find the metadata for you.
+                            You have {visibleUnmatched.length} unmatched files/folders. Let AI find the metadata for you.
                         </p>
                     </div>
                 </div>
@@ -997,7 +1055,7 @@ export default function SmartMatchPage() {
                         </div>
                     )}
                     
-                    <Button onClick={startSmartScan} disabled={isScanning || unmatched.length === 0} className="h-12 w-full sm:w-auto flex-1 sm:flex-none bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-lg border-0">
+                    <Button onClick={startSmartScan} disabled={isScanning || visibleUnmatched.length === 0} className="h-12 w-full sm:w-auto flex-1 sm:flex-none bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-lg border-0">
                         {isScanning ? <><Loader2 className="w-5 h-5 mr-2 animate-spin shrink-0" /> <span className="whitespace-nowrap">Scanning...</span></> : <><FolderSearch className="w-5 h-5 mr-2 shrink-0" /> <span className="whitespace-nowrap">Start Auto-Scan</span></>}
                     </Button>
 
@@ -1011,6 +1069,21 @@ export default function SmartMatchPage() {
                             ? <><Loader2 className="w-5 h-5 mr-2 animate-spin shrink-0" /> <span className="whitespace-nowrap">Accepting {acceptAllProgress.done}/{acceptAllProgress.total}...</span></>
                             : <><CheckCheck className="w-5 h-5 mr-2 shrink-0" /> <span className="whitespace-nowrap">Accept All ({acceptableSeries.length})</span></>}
                     </Button>
+
+                    {/* Ignored series are out of sight by default — this is how they come back.
+                        Hidden entirely when there are none, so it never adds noise. */}
+                    {ignoredCount > 0 && (
+                    <Button
+                        variant={showIgnored ? "secondary" : "outline"}
+                        onClick={() => setShowIgnored(v => !v)}
+                        disabled={loading}
+                        title="Series you've marked ignored — hidden from this list and from automatic matching"
+                        className="h-12 w-full sm:w-auto flex-1 sm:flex-none font-bold px-4 border-border text-muted-foreground hover:bg-muted"
+                    >
+                        <EyeOff className="w-5 h-5 mr-2 shrink-0" />
+                        <span className="whitespace-nowrap">{showIgnored ? "Hide ignored" : `Show ignored (${ignoredCount})`}</span>
+                    </Button>
+                    )}
                 </div>
             </div>
 
@@ -1046,7 +1119,7 @@ export default function SmartMatchPage() {
                 </Card>
             )}
 
-            {unmatched.length === 0 ? (
+            {visibleUnmatched.length === 0 ? (
                 <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
                     <Check className="w-12 h-12 mx-auto text-green-500 mb-3" />
                     <h3 className="text-lg font-bold text-foreground">All Caught Up!</h3>
@@ -1054,7 +1127,7 @@ export default function SmartMatchPage() {
                 </div>
             ) : (
                 <div className="flex flex-col gap-4 pb-20 mt-6">
-                    {unmatched.map((series) => {
+                    {visibleUnmatched.map((series) => {
                         const suggestion = suggestions[series.id];
                         const isProcessing = processingId === series.id;
                         const isSelected = selectedItems.has(series.id);
@@ -1090,7 +1163,12 @@ export default function SmartMatchPage() {
                                             {series.isRawFile ? <FileText className="w-6 h-6 text-muted-foreground" /> : <FolderSearch className="w-6 h-6 text-muted-foreground" />}
                                         </div>
                                         <div className="min-w-0 flex-1">
-                                            <h3 className="font-bold text-foreground break-words whitespace-normal leading-tight">{series.name}</h3>
+                                            <h3 className="font-bold text-foreground break-words whitespace-normal leading-tight">
+                                                {series.name}
+                                                {series.isIgnored && (
+                                                    <Badge className="ml-2 align-middle bg-muted text-muted-foreground border border-border text-[9px] px-1.5 h-4 uppercase tracking-wider font-black">Ignored</Badge>
+                                                )}
+                                            </h3>
                                             <p className="text-sm text-muted-foreground break-all whitespace-normal mt-1">{series.folderPath}</p>
                                             <Button
                                                 size="sm"
@@ -1227,9 +1305,31 @@ export default function SmartMatchPage() {
                                     >
                                         <Layers className="w-4 h-4 md:mr-2" /> <span className="hidden md:inline">Pages</span>
                                     </Button>
-                                    <Button size="sm" variant="outline" disabled={isSelectionMode} className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground" onClick={(e) => { e.stopPropagation(); handleDismiss(series.id); }} title="Hide from Matcher">
-                                        <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Dismiss</span>
-                                    </Button>
+                                    {series.isIgnored ? (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={isSelectionMode}
+                                            className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground"
+                                            onClick={(e) => { e.stopPropagation(); handleRestore(series.id); }}
+                                            title="List this series as unmatched again"
+                                        >
+                                            <Undo2 className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Restore</span>
+                                        </Button>
+                                    ) : (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={isSelectionMode}
+                                            className="shrink-0 md:w-full border-border hover:bg-muted text-muted-foreground"
+                                            onClick={(e) => { e.stopPropagation(); handleDismiss(series.id); }}
+                                            title={series.isRawFile
+                                                ? "Hide from the matcher for now (this file has no library entry yet, so it returns on reload)"
+                                                : "Stop listing this series as unmatched — for the ones the provider simply doesn't have. Reversible."}
+                                        >
+                                            <X className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">{series.isRawFile ? 'Dismiss' : 'Ignore'}</span>
+                                        </Button>
+                                    )}
                                 </div>
 
                             </Card>
@@ -1242,10 +1342,10 @@ export default function SmartMatchPage() {
             {isSelectionMode && (
                 <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background text-foreground px-4 sm:px-6 py-3 rounded-full shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] flex items-center gap-3 sm:gap-4 z-50 animate-in slide-in-from-bottom-8 border border-border w-[95%] sm:w-auto overflow-x-auto">
                     <Button variant="ghost" size="sm" className="h-10 sm:h-8 shrink-0 hover:bg-muted text-muted-foreground font-medium" onClick={() => {
-                        if (selectedItems.size === unmatched.length && unmatched.length > 0) setSelectedItems(new Set());
-                        else setSelectedItems(new Set(unmatched.map(s => s.id)));
+                        if (selectedItems.size === visibleUnmatched.length && visibleUnmatched.length > 0) setSelectedItems(new Set());
+                        else setSelectedItems(new Set(visibleUnmatched.map(s => s.id)));
                     }}>
-                        {selectedItems.size === unmatched.length && unmatched.length > 0 ? "Deselect All" : "Select All"}
+                        {selectedItems.size === visibleUnmatched.length && visibleUnmatched.length > 0 ? "Deselect All" : "Select All"}
                     </Button>
                     <div className="h-5 w-px bg-border shrink-0" />
                     <span className="font-black whitespace-nowrap min-w-[60px] sm:min-w-[100px] text-center text-sm sm:text-base shrink-0">{selectedItems.size} Selected</span>

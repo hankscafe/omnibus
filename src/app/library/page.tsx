@@ -15,7 +15,7 @@ import {
   CheckSquare, Square, EyeOff, Copy, MoreHorizontal, Activity, ArrowRightLeft, FileEdit,
   Dices, Clock, X, DownloadCloud, PenTool, Paintbrush, Users, FolderSearch, Globe, BookType, CalendarDays, ArrowUp,
   Bell, BellOff
-} from "lucide-react"
+, BookCheck } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
@@ -950,6 +950,11 @@ function LibraryContent() {
             <div className="flex items-center gap-2 shrink-0">
                 <Button aria-label="Browse all individual issues by release date" variant="outline" size="sm" onClick={() => router.push('/library/issues')} className="h-10 sm:h-9 border-border">
                     <CalendarDays className="w-4 h-4 mr-2" /> All Issues
+                </Button>
+                {/* The same view, pre-filtered to what isn't on disk — the "missing issues collected
+                    somewhere" a field report asked for, which already existed behind a select. */}
+                <Button aria-label="Show issues your series are missing, across the whole library" variant="outline" size="sm" onClick={() => router.push('/library/issues?status=WANTED')} className="h-10 sm:h-9 border-border">
+                    <BookCheck className="w-4 h-4 mr-2" /> Missing
                 </Button>
                 <Button aria-label={isSelectionMode ? "Cancel series selection" : "Enter series selection mode"} variant={isSelectionMode ? "secondary" : "outline"} size="sm" onClick={() => { setIsSelectionMode(!isSelectionMode); setSelectedSeries(new Set()); }} className={cn("h-10 sm:h-9", isSelectionMode ? "bg-primary/20 text-primary border-primary/50 hover:bg-primary/30" : "border-border")}>
                     <CheckSquare className="w-4 h-4 mr-2" /> {isSelectionMode ? "Cancel Select" : "Select"}

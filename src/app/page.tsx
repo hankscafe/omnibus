@@ -23,7 +23,8 @@ import {
   Flag,
   Rocket,
   X,
-  FolderSearch
+  FolderSearch,
+  BookCheck
 } from "lucide-react" 
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
@@ -405,7 +406,15 @@ export default function Home() {
         {/* Hero / Search Section */}
         <div className="text-center space-y-6 relative">
           
-          <div className="absolute right-0 top-0 hidden md:block z-10">
+          <div className="absolute right-0 top-0 hidden md:flex items-center gap-2 z-10">
+             {/* Every issue the library is tracking but doesn't hold — one click from the front
+                 page, for everyone who can request. The view existed behind a select on the issues
+                 page; a field report never found it (robotshavehearts2). */}
+             <Button asChild variant="outline" size="sm" className="bg-muted/50 backdrop-blur-sm border-border text-muted-foreground hover:text-foreground">
+               <Link href="/library/issues?status=WANTED" aria-label="Show issues your series are missing, across the whole library">
+                 <BookCheck className="w-4 h-4 mr-2" /> Missing Issues
+               </Link>
+             </Button>
              <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="bg-muted/50 backdrop-blur-sm border-border text-muted-foreground hover:text-foreground">
                {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                Refresh Data
@@ -423,7 +432,12 @@ export default function Home() {
             <RequestSearch />
           </div>
 
-          <div className="md:hidden pt-4 flex justify-center">
+          <div className="md:hidden pt-4 flex flex-col items-center gap-2">
+             <Button asChild variant="outline" size="sm" className="w-full max-w-xs border-border text-muted-foreground hover:text-foreground">
+               <Link href="/library/issues?status=WANTED" aria-label="Show issues your series are missing, across the whole library">
+                 <BookCheck className="w-4 h-4 mr-2" /> Missing Issues
+               </Link>
+             </Button>
              <Button variant="outline" size="sm" onClick={handleRefreshData} disabled={isRefreshing} className="w-full max-w-xs border-border text-muted-foreground hover:text-foreground">
                {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                Force Refresh Data

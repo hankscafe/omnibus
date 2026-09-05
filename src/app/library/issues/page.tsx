@@ -1,8 +1,10 @@
 // src/app/library/issues/page.tsx
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, Suspense } from "react"
 import Link from "next/link"
+import { useRouter, usePathname, useSearchParams } from "next/navigation"
+import { filtersFromParams, paramsFromFilters, ISSUE_SORT_DEFAULT, type IssueFilters } from "@/lib/utils/issue-filters"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,7 +29,7 @@ interface IssueRow {
   year: number | null;
 }
 
-const DEFAULT_SORT = "release_desc";
+const DEFAULT_SORT = ISSUE_SORT_DEFAULT;
 
 function IssuesSkeleton({ count = 24 }: { count?: number }) {
   return (
@@ -43,8 +45,17 @@ function IssuesSkeleton({ count = 24 }: { count?: number }) {
   );
 }
 
-export default function LibraryIssuesPage() {
+function LibraryIssuesInner() {
   const { toast } = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  // The URL is the filter state (issue-filters.ts). Read ONCE, at mount, into the initializers
+  // below: /library/issues?status=WANTED is the "missing issues" entry point, and it has to land
+  // already filtered rather than flash the whole library and then narrow.
+  const searchParams = useSearchParams();
+  const initialRef = useRef<IssueFilters | null>(null);
+  if (initialRef.current === null) initialRef.current = filtersFromParams(searchParams);
+  const initial = initialRef.current;
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
@@ -57,18 +68,20 @@ export default function LibraryIssuesPage() {
   const cursorRef = useRef<string | null>(null);
 
   const [publishers, setPublishers] = useState<string[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [publisherFilter, setPublisherFilter] = useState("ALL");
-  const [eraFilter, setEraFilter] = useState("ALL");
-  const [libraryFilter, setLibraryFilter] = useState("ALL");
-  const [statusFilter, setStatusFilter] = useState("ALL");
-  const [sortOption, setSortOption] = useState(DEFAULT_SORT);
+  // Both search states seed from the URL so the first fetch already carries `q` — otherwise the
+  // 400ms debounce would fire a second, narrower load right after the first.
+  const [searchQuery, setSearchQuery] = useState(initial.search);
+  const [debouncedSearch, setDebouncedSearch] = useState(initial.search);
+  const [publisherFilter, setPublisherFilter] = useState(initial.publisher);
+  const [eraFilter, setEraFilter] = useState(initial.era);
+  const [libraryFilter, setLibraryFilter] = useState(initial.library);
+  const [statusFilter, setStatusFilter] = useState<string>(initial.status);
+  const [sortOption, setSortOption] = useState(initial.sort);
 
   // Mirror filters into a ref so loadIssues (a stable useCallback) reads current values without deps churn.
-  const filtersRef = useRef({ search: "", publisher: "ALL", era: "ALL", library: "ALL", status: "ALL", sort: DEFAULT_SORT });
+  const filtersRef = useRef<IssueFilters>({ ...initial });
   useEffect(() => {
-    filtersRef.current = { search: debouncedSearch, publisher: publisherFilter, era: eraFilter, library: libraryFilter, status: statusFilter, sort: sortOption };
+    filtersRef.current = { search: debouncedSearch, publisher: publisherFilter, era: eraFilter, library: libraryFilter, status: statusFilter as IssueFilters["status"], sort: sortOption };
   }, [debouncedSearch, publisherFilter, eraFilter, libraryFilter, statusFilter, sortOption]);
 
   // Debounce the search box.
@@ -129,6 +142,15 @@ export default function LibraryIssuesPage() {
     loadIssues(true);
   }, [debouncedSearch, publisherFilter, eraFilter, libraryFilter, statusFilter, sortOption, loadIssues]);
 
+  // …and writes the URL, so the view a user builds is the view a shared link opens. `replace`, not
+  // `push`: filter changes are not history entries. Skipped on the seeding render so a deep link
+  // doesn't rewrite itself, and after the debounce so typing doesn't rewrite per keystroke.
+  useEffect(() => {
+    if (isFirstRender.current) return;
+    const qs = paramsFromFilters(filtersRef.current);
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [debouncedSearch, publisherFilter, eraFilter, libraryFilter, statusFilter, sortOption, router, pathname]);
+
   const observer = useRef<IntersectionObserver | null>(null);
   const lastElementRef = useCallback((node: HTMLDivElement | null) => {
     if (loading || loadingMore) return;
@@ -154,10 +176,18 @@ export default function LibraryIssuesPage() {
         <Link href="/library" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-1">
           <ChevronLeft className="w-4 h-4" /> Library
         </Link>
+        {/* The Wanted view is its own destination — "Missing Issues" — so the entry points that
+            link here land on a page that says what it is, not on "All Issues" with a select set. */}
         <h1 className="text-3xl font-bold flex items-center gap-2 text-foreground">
-          <CalendarDays className="w-6 h-6 text-primary" /> All Issues
+          {statusFilter === 'WANTED'
+            ? <><BookCheck className="w-6 h-6 text-primary" /> Missing Issues</>
+            : <><CalendarDays className="w-6 h-6 text-primary" /> All Issues</>}
         </h1>
-        <p className="text-sm text-muted-foreground">Every individual issue across your library, ordered by release date.</p>
+        <p className="text-sm text-muted-foreground">
+          {statusFilter === 'WANTED'
+            ? "Issues your series are tracking that aren't on disk yet, across the whole library."
+            : "Every individual issue across your library, ordered by release date."}
+        </p>
       </div>
 
       {/* Filters — contained in a panel to match the library view */}
@@ -303,5 +333,15 @@ export default function LibraryIssuesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** useSearchParams needs a Suspense boundary in the app router (the series page sets the same
+ *  precedent); the fallback keeps the page's frame so nothing jumps when the filters resolve. */
+export default function LibraryIssuesPage() {
+  return (
+    <Suspense fallback={<div className="container mx-auto py-10 px-6"><IssuesSkeleton /></div>}>
+      <LibraryIssuesInner />
+    </Suspense>
   );
 }

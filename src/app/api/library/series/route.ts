@@ -101,6 +101,10 @@ export async function GET(request: Request) {
 
     const downloadedIssues: any[] = [];
     const missingIssues: any[] = [];
+    // #203 COLLECTED: attached collected editions live on their own shelf — a TPB is not issue
+    // #7.5, and counting it among the run would double-count content the reader may already own.
+    const collectedEditions: any[] = [];
+    const missingCollectedEditions: any[] = [];
     const duplicatesList: any[] = [];
 
     if (seriesRecord) {
@@ -117,10 +121,16 @@ export async function GET(request: Request) {
         // a co-located "Batman Annual 001" and the real #1 landed in one group and the ranking
         // DELETED one of the rows every visit (row churn). ':' can't appear in a number, so the
         // prefix can't collide with letter-suffixed numbers like "12a".
+        // #203 COLLECTED: an ATTACHED lane is its own numbering domain by construction — its numbers
+        // are the user's curation, so "Vol. 1" of a trade shares nothing but a digit with issue #1.
+        // Keying attached rows by their attachment keeps each lane apart from the run and from every
+        // other lane, which is what lets the same number exist in several of them at once.
         const issuesByNum = new Map<string, any[]>();
         for (const issue of existingIssues) {
             const stdNum = issue.number.replace(/^0+(?=\d)/, '');
-            const key = `${issue.isAnnual ? 'annual:' : ''}${stdNum}`;
+            const key = issue.attachedVolumeId
+                ? `att:${issue.attachedVolumeId}:${stdNum}`
+                : `${issue.isAnnual ? 'annual:' : ''}${stdNum}`;
             if (!issuesByNum.has(key)) issuesByNum.set(key, []);
             issuesByNum.get(key)!.push(issue);
         }
@@ -230,7 +240,13 @@ export async function GET(request: Request) {
             }).catch(() => {});
         }
 
-        existingIssues = await prisma.issue.findMany({ where: { seriesId: seriesRecord.id } });
+        // #203 COLLECTED: the attachment's kind rides along so collected editions can be split out
+        // of the run below. A TPB reprints issues you may already own, so counting it among them
+        // would double-count the same content and inflate every "missing" number.
+        existingIssues = await prisma.issue.findMany({
+            where: { seriesId: seriesRecord.id },
+            include: { attachedVolume: { select: { kind: true, name: true } } },
+        });
 
         // Batch the on-disk existence checks instead of a blocking fs.existsSync per issue — a
         // 1,000-issue series would otherwise stall the Node event loop with 1,000 sync stat calls.
@@ -255,6 +271,8 @@ export async function GET(request: Request) {
                 finalIssueCoverUrl = `/api/library/cover?issueId=${encodeURIComponent(issue.id)}`;
             }
 
+            const isCollected = (issue as any).attachedVolume?.kind === 'COLLECTED';
+
             const formatted = {
                 id: issue.id,
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
@@ -264,6 +282,8 @@ export async function GET(request: Request) {
                 // #203 Phase 1: which attached volume this annual belongs to (null = none yet), so
                 // the Annuals panel can tell "claimed" apart from "still on its own".
                 attachedVolumeId: (issue as any).attachedVolumeId ?? null,
+                isCollected,
+                collectionName: isCollected ? (issue as any).attachedVolume?.name ?? null : null,
                 // Issue #200: normalize vulgar fractions ("½" → 0.5) or parseFloat yields NaN,
                 // which serializes to null and turned half-issue requests into "#null" searches.
                 // The raw number rides along so the page can always fall back to a real string.
@@ -280,7 +300,13 @@ export async function GET(request: Request) {
                 readProgress: prog.readProgress
             };
 
-            if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted);
+            // A collected edition is its own shelf, never part of the run: it must not swell the
+            // issue count, and it must not read as a missing issue when it isn't owned.
+            if (isCollected) {
+                if (issue.filePath && existingPaths.has(issue.filePath)) collectedEditions.push(formatted);
+                else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingCollectedEditions.push(formatted);
+            }
+            else if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted);
             else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingIssues.push(formatted);
         }
     }
@@ -290,6 +316,10 @@ export async function GET(request: Request) {
         ((a.isAnnual ? 1 : 0) - (b.isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0));
     downloadedIssues.sort(domainThenNumber);
     missingIssues.sort(domainThenNumber);
+    // Collections read in the order the user numbered them — that curation IS the reading order.
+    const byNumber = (a: any, b: any) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0);
+    collectedEditions.sort(byNumber);
+    missingCollectedEditions.sort(byNumber);
     
     const finalSeriesCoverUrl = seriesRecord?.coverUrl && (seriesRecord.coverUrl.startsWith('http') || seriesRecord.coverUrl.match(/^[a-zA-Z]:\\/))
         ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
@@ -358,8 +388,10 @@ export async function GET(request: Request) {
         translator: safeParse((seriesRecord as any)?.translator),
         tags: safeParse((seriesRecord as any)?.tags),
       },
-      downloadedIssues, 
+      downloadedIssues,
       missingIssues,
+      collectedEditions,
+      missingCollectedEditions,
       duplicates: duplicatesList
     });
 

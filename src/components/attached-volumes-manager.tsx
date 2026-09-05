@@ -1,9 +1,13 @@
-// src/components/annuals-manager.tsx
+// src/components/attached-volumes-manager.tsx
 //
-// #203 Phase 1 Beta B (concept by anacronismo): the surface for attached volumes. ComicVine models
-// a series' annuals as separate volumes with no machine link back to the parent, so the link is
-// made here by hand — search the provider the same way Smart Match does (query pre-seeded with
-// "<series> annual"), or paste the volume id outright.
+// #203 Phase 1 (concept by anacronismo): the surface for attached volumes — ANNUALS, and since the
+// COLLECTED phase, trades and omnibuses too. Providers model both as separate volumes with no
+// machine link back to the parent, so the link is made here by hand: search the provider the same
+// way Smart Match does, or paste the volume id outright.
+//
+// One component, two kinds. The mechanism is identical (id-anchored lane, silent claim, honest
+// summary); only the words and two behaviours differ, which is why the copy lives in KIND_COPY
+// rather than in a forked component that would drift.
 //
 // Two facts this UI exists to make plain:
 //   1. Attaching CLAIMS local annual files it recognises. The result line says exactly what
@@ -49,7 +53,7 @@ interface AttachSummary {
  * can go and look at, and "left unattached" is stated even though it's the unflattering one — a
  * silent claim has to be an honest claim.
  */
-export function summaryLine(s: AttachSummary): string {
+export function summaryLine(s: AttachSummary, noun = "annual file"): string {
     const parts: string[] = []
     if (s.claimed > 0) parts.push(`claimed ${s.claimed} file${s.claimed === 1 ? "" : "s"} you already own`)
     if (s.created > 0) parts.push(`added ${s.created} missing ${s.created === 1 ? "entry" : "entries"}`)
@@ -57,27 +61,73 @@ export function summaryLine(s: AttachSummary): string {
     if (parts.length === 0) parts.push("nothing changed")
     let line = `${s.total} issue${s.total === 1 ? "" : "s"} in this volume — ${parts.join(" · ")}.`
     if (s.unclaimed > 0) {
-        line += ` ${s.unclaimed} annual file${s.unclaimed === 1 ? "" : "s"} here still belong${s.unclaimed === 1 ? "s" : ""} to no volume.`
+        line += ` ${s.unclaimed} ${noun}${s.unclaimed === 1 ? "" : "s"} here still belong${s.unclaimed === 1 ? "s" : ""} to no volume.`
     }
     return line
 }
 
 const PROVIDERS = ["COMICVINE", "METRON"] as const
 
-export function AnnualsManager({
+type AttachKind = "ANNUAL" | "COLLECTED"
+
+const KIND_COPY: Record<AttachKind, {
+    title: string
+    blurb: string
+    attachCta: string
+    dialogTitle: string
+    dialogBlurb: (series: string) => string
+    searchPlaceholder: string
+    /** What the search box starts as. Annual volumes are named "<Series> Annual"; a collection is
+     *  usually named after the series itself ("Batman Vol. 1: The Court of Owls"). */
+    seedQuery: (series: string) => string
+    unclaimedNoun: string
+    numberingNote: string
+    emptyWithFiles: (n: number) => string
+}> = {
+    ANNUAL: {
+        title: "Annuals",
+        blurb: "Annuals live in their own provider volume. Attach one and its issues join this series.",
+        attachCta: "Attach annual volume",
+        dialogTitle: "Attach an annual volume",
+        dialogBlurb: series => `Find the annual's own volume on the provider. Its issues join ${series} as annuals, and any annual files you already own that match are claimed automatically.`,
+        searchPlaceholder: "Search the provider for the annual volume",
+        seedQuery: series => `${series} annual`,
+        unclaimedNoun: "annual file",
+        numberingNote: "Numbering is yours: renumber an annual in its editor to slot it chronologically and the provider link still holds — attached issues are matched by ID, never by number.",
+        emptyWithFiles: n => `${n} annual file${n === 1 ? "" : "s"} here belong${n === 1 ? "s" : ""} to no volume yet. Attaching the annual's volume claims the ones it recognises — your files stay exactly where they are.`,
+    },
+    COLLECTED: {
+        title: "Collected editions",
+        blurb: "Trades and omnibuses are their own provider volumes. Attach them here and number them in reading order.",
+        attachCta: "Attach collected edition",
+        dialogTitle: "Attach a collected edition",
+        dialogBlurb: series => `Find the trade or omnibus on the provider. It joins ${series} as a collected edition — kept out of the issue count, because a collection reprints issues you may already own.`,
+        searchPlaceholder: "Search the provider for the collection",
+        seedQuery: series => series,
+        unclaimedNoun: "book",
+        numberingNote: "Number them in the order you want to read them — that number is yours to set, it becomes the volume number in the filename, and the provider link holds regardless.",
+        emptyWithFiles: () => "",
+    },
+}
+
+export function AttachedVolumesManager({
     seriesId,
     seriesName,
+    kind = "ANNUAL",
     defaultProvider,
     unattachedAnnuals = 0,
     onChanged,
 }: {
     seriesId: string
     seriesName: string
+    /** ANNUAL or COLLECTED — decides the copy, the search seed, and the absorb prompt. */
+    kind?: AttachKind
     defaultProvider?: string | null
     /** Annual files on this series that belong to no volume — the reason to act, when there is one. */
     unattachedAnnuals?: number
     onChanged?: () => void
 }) {
+    const copy = KIND_COPY[kind]
     const { toast } = useToast()
     const [attachments, setAttachments] = useState<Attachment[]>([])
     const [isLoading, setIsLoading] = useState(true)
@@ -92,6 +142,10 @@ export function AnnualsManager({
     const [attachingId, setAttachingId] = useState<string | null>(null)
 
     const [busyId, setBusyId] = useState<string | null>(null)
+    // #203 COLLECTED: the attached volume turned out to already live in the library as its own
+    // series. The user decides what happens to it — we never move someone's files uninvited.
+    const [absorbPrompt, setAbsorbPrompt] = useState<{ attachmentId: string; series: { id: string; name: string; issueCount: number } } | null>(null)
+    const [isAbsorbing, setIsAbsorbing] = useState(false)
     const [detachTarget, setDetachTarget] = useState<Attachment | null>(null)
     const [dropSkeletons, setDropSkeletons] = useState(false)
 
@@ -99,20 +153,20 @@ export function AnnualsManager({
         try {
             const res = await fetch(`/api/library/series/attachments?seriesId=${encodeURIComponent(seriesId)}`)
             const data = await res.json()
-            if (res.ok) setAttachments(data.attachments || [])
+            if (res.ok) setAttachments((data.attachments || []).filter((a: Attachment) => (a.kind || 'ANNUAL') === kind))
         } catch {
             /* a failed list is not worth a toast — the panel just stays empty */
         } finally {
             setIsLoading(false)
         }
-    }, [seriesId])
+    }, [seriesId, kind])
 
     useEffect(() => { load() }, [load])
 
     const openDialog = () => {
         // Pre-seed the search the way the user would type it. Mylar guesses this name too; the
         // difference is that here a wrong guess is one click away from being corrected.
-        setQuery(`${seriesName} annual`)
+        setQuery(copy.seedQuery(seriesName))
         setResults([])
         setHasSearched(false)
         setExactId("")
@@ -141,16 +195,19 @@ export function AnnualsManager({
             const res = await fetch(`/api/library/series/attachments`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ seriesId, volumeId, metadataSource: provider, kind: "ANNUAL", name, startYear }),
+                body: JSON.stringify({ seriesId, volumeId, metadataSource: provider, kind, name, startYear }),
             })
             const data = await res.json()
             if (!res.ok || !data.success) throw new Error(data.error || "The import failed")
 
             toast({
                 title: `Attached ${data.name || `volume ${volumeId}`}`,
-                description: data.summary ? summaryLine(data.summary) : "Attached.",
+                description: data.summary ? summaryLine(data.summary, copy.unclaimedNoun) : "Attached.",
             })
             setDialogOpen(false)
+            if (data.existingSeries) {
+                setAbsorbPrompt({ attachmentId: data.attachmentId, series: data.existingSeries })
+            }
             await load()
             onChanged?.()
         } catch (e: any) {
@@ -170,13 +227,43 @@ export function AnnualsManager({
             })
             const data = await res.json()
             if (!res.ok || !data.success) throw new Error(data.error || "The refresh failed")
-            toast({ title: `Refreshed ${a.name || `volume ${a.volumeId}`}`, description: data.summary ? summaryLine(data.summary) : "Up to date." })
+            toast({ title: `Refreshed ${a.name || `volume ${a.volumeId}`}`, description: data.summary ? summaryLine(data.summary, copy.unclaimedNoun) : "Up to date." })
+            // The standalone twin may have appeared since the attach (matched later, or the user
+            // declined at the time) — a refresh is a fair moment to offer the move again.
+            if (data.existingSeries) {
+                setAbsorbPrompt({ attachmentId: a.id, series: data.existingSeries })
+            }
             await load()
             onChanged?.()
         } catch (e: any) {
             toast({ title: "Refresh failed", description: e.message, variant: "destructive" })
         } finally {
             setBusyId(null)
+        }
+    }
+
+    const absorb = async () => {
+        if (!absorbPrompt) return
+        setIsAbsorbing(true)
+        try {
+            const res = await fetch(`/api/library/series/attachments`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ attachmentId: absorbPrompt.attachmentId, sourceSeriesId: absorbPrompt.series.id }),
+            })
+            const data = await res.json()
+            if (!res.ok || !data.success) throw new Error(data.error || "The move failed")
+            toast({
+                title: "Moved under this series",
+                description: `${data.moved} book${data.moved === 1 ? "" : "s"} now belong${data.moved === 1 ? "s" : ""} to ${seriesName}. Run Standardize Names to move the files into its folder.`,
+            })
+            setAbsorbPrompt(null)
+            await load()
+            onChanged?.()
+        } catch (e: any) {
+            toast({ title: "Couldn't move it", description: e.message, variant: "destructive" })
+        } finally {
+            setIsAbsorbing(false)
         }
     }
 
@@ -214,26 +301,22 @@ export function AnnualsManager({
                 <div className="flex items-center gap-3">
                     <BookMarked className="w-6 h-6 text-primary" />
                     <div>
-                        <h4 className="font-bold text-lg text-foreground">Annuals</h4>
+                        <h4 className="font-bold text-lg text-foreground">{copy.title}</h4>
                         <p className="text-xs text-muted-foreground">
-                            Annuals live in their own provider volume. Attach one and its issues join this series.
+                            {copy.blurb}
                         </p>
                     </div>
                 </div>
                 <Button size="sm" className="font-bold shrink-0" onClick={openDialog}>
-                    <Plus className="w-4 h-4 mr-1" /> Attach annual volume
+                    <Plus className="w-4 h-4 mr-1" /> {copy.attachCta}
                 </Button>
             </div>
 
             {attachments.length === 0 ? (
                 // Only speak up when there's a reason to: a series with no annuals at all doesn't
                 // need a paragraph about annuals on every visit.
-                unattachedAnnuals > 0 ? (
-                    <p className="text-sm text-muted-foreground pt-1">
-                        {unattachedAnnuals} annual file{unattachedAnnuals === 1 ? "" : "s"} here belong{unattachedAnnuals === 1 ? "s" : ""} to
-                        no volume yet. Attaching the annual&apos;s volume claims the ones it recognises — your files stay
-                        exactly where they are.
-                    </p>
+                unattachedAnnuals > 0 && copy.emptyWithFiles(unattachedAnnuals) ? (
+                    <p className="text-sm text-muted-foreground pt-1">{copy.emptyWithFiles(unattachedAnnuals)}</p>
                 ) : null
             ) : (
                 <div className="space-y-2 pt-1">
@@ -273,10 +356,7 @@ export function AnnualsManager({
                             </div>
                         </div>
                     ))}
-                    <p className="text-xs text-muted-foreground pt-1">
-                        Numbering is yours: renumber an annual in its editor to slot it chronologically and the provider
-                        link still holds — attached issues are matched by ID, never by number.
-                    </p>
+                    <p className="text-xs text-muted-foreground pt-1">{copy.numberingNote}</p>
                 </div>
             )}
 
@@ -284,10 +364,9 @@ export function AnnualsManager({
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent className="sm:max-w-[640px] bg-background border-border rounded-xl max-h-[85vh] overflow-y-auto">
                     <DialogHeader>
-                        <DialogTitle className="text-foreground">Attach an annual volume</DialogTitle>
+                        <DialogTitle className="text-foreground">{copy.dialogTitle}</DialogTitle>
                         <DialogDescription>
-                            Find the annual&apos;s own volume on the provider. Its issues join {seriesName} as annuals, and any
-                            annual files you already own that match are claimed automatically.
+                            {copy.dialogBlurb(seriesName)}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -311,7 +390,7 @@ export function AnnualsManager({
                                 value={query}
                                 onChange={e => setQuery(e.target.value)}
                                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSearch() } }}
-                                placeholder="Search the provider for the annual volume"
+                                placeholder={copy.searchPlaceholder}
                                 className="bg-background border-border"
                             />
                             <Button
@@ -386,6 +465,44 @@ export function AnnualsManager({
                                 ComicVine volume IDs are the number after <span className="font-mono">4050-</span> in the volume&apos;s URL.
                             </p>
                         </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* --- ALREADY IN THE LIBRARY: move it here, or leave it standing (#203 COLLECTED) --- */}
+            <Dialog
+                open={absorbPrompt !== null}
+                onOpenChange={open => { if (!open && !isAbsorbing) setAbsorbPrompt(null) }}
+            >
+                <DialogContent className="sm:max-w-[520px] bg-background border-border rounded-xl">
+                    <DialogHeader>
+                        <DialogTitle className="text-foreground">This volume is already in your library</DialogTitle>
+                        <DialogDescription>
+                            &quot;{absorbPrompt?.series.name}&quot; exists as its own series with{" "}
+                            {absorbPrompt?.series.issueCount} book{absorbPrompt?.series.issueCount === 1 ? "" : "s"}.
+                            You can move it under {seriesName} so everything sits in one place, or leave it where it is —
+                            the attachment works either way.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                        Moving keeps every file, along with reading progress and anything you edited. The files
+                        themselves are relocated the next time you run Standardize Names on {seriesName}.
+                    </p>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                        <Button
+                            variant="outline"
+                            className="border-border"
+                            disabled={isAbsorbing}
+                            onClick={() => setAbsorbPrompt(null)}
+                        >
+                            Leave it as its own series
+                        </Button>
+                        <Button className="font-bold" disabled={isAbsorbing} onClick={absorb}>
+                            {isAbsorbing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Link2 className="w-4 h-4 mr-2" />}
+                            Move it under {seriesName}
+                        </Button>
                     </div>
                 </DialogContent>
             </Dialog>

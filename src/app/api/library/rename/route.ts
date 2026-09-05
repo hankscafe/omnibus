@@ -1,6 +1,7 @@
 // src/app/api/library/rename/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { filePatternForIssue } from '@/lib/utils/file-pattern';
 import fs from 'fs-extra';
 import path from 'path';
 import { getToken } from 'next-auth/jwt';
@@ -16,7 +17,7 @@ export async function POST(request: NextRequest) {
     const token = await getToken({ req: request });
     if (token?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-    const { seriesIds, folderPattern, filePattern, mangaFilePattern } = await request.json();
+    const { seriesIds, folderPattern, filePattern, mangaFilePattern, collectedFilePattern } = await request.json();
 
     if (!seriesIds || !folderPattern || !filePattern) return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
 
@@ -26,6 +27,9 @@ export async function POST(request: NextRequest) {
     const earlySettings = await prisma.systemSetting.findMany();
     const earlyConfig = Object.fromEntries(earlySettings.map((s: any) => [s.key, s.value]));
     const activeMangaFilePattern = mangaFilePattern || earlyConfig.manga_file_naming_pattern || "{Series} Vol. {Issue}";
+    // #203 COLLECTED: resolved up front for the same reason — both the engine offload and the local
+    // fallback must name a trade identically. null = the engine's built-in default.
+    const activeCollectedFilePattern = collectedFilePattern || earlyConfig.collected_file_naming_pattern || null;
 
     // --- ENGINE OFFLOAD ---
     // The engine runs the identical standardize pipeline (per-file relocation, conflict guard,
@@ -37,7 +41,7 @@ export async function POST(request: NextRequest) {
         const engineRes = await engineFetchLong(ENGINE_URL + '/api/library/rename', {
             method: 'POST',
             headers: engineHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ series_ids: seriesIds, folder_pattern: folderPattern, file_pattern: filePattern, manga_file_pattern: activeMangaFilePattern }),
+            body: JSON.stringify({ series_ids: seriesIds, folder_pattern: folderPattern, file_pattern: filePattern, manga_file_pattern: activeMangaFilePattern, collected_file_pattern: activeCollectedFilePattern }),
         });
         if (engineRes.ok) {
             const data = await engineRes.json();
@@ -125,7 +129,11 @@ export async function POST(request: NextRequest) {
 
         Logger.log(`[Rename Debug] Folder Evaluation: Current=[${currentFolder}] | Target=[${targetFolder}]`, 'debug');
 
-        const issues = await prisma.issue.findMany({ where: { seriesId: s.id } });
+        const issues = await prisma.issue.findMany({
+            where: { seriesId: s.id },
+            // #203 COLLECTED: the attachment's kind decides the naming template.
+            include: { attachedVolume: { select: { kind: true } } },
+        });
 
         // Only act if at least one real file exists (the recorded folder, or any issue file wherever it
         // lives). This handles series whose files are split across {SeriesGroup} subfolders, and avoids
@@ -179,13 +187,16 @@ export async function POST(request: NextRequest) {
             }
             if (isNegative) paddedNum = '-' + paddedNum;
 
-            // #203 Phase 1: annuals get the Mylar-shaped name they exist to interoperate with —
-            // "Batman Annual #001 (2012)", the year being the annual's own. Fixed in v1 (engine
-            // parity: renamer.rs), because the point is matching what Mylar/Komga expect beside the
-            // main run; the tokens still flow through the same substitution + sanitize chain.
-            const patternToUse = (issue as any).isAnnual
-                ? "{Series} Annual #{Issue} ({IssueYear})"
-                : (s.isManga ? activeMangaFilePattern : activeFilePattern);
+            // Annual, collected, manga or plain — one shared resolver, twinned with the engine's
+            // renamer.rs, so the preview and both renamers can never disagree about the result.
+            const patternToUse = filePatternForIssue({
+                isAnnual: (issue as any).isAnnual,
+                isCollected: (issue as any).attachedVolume?.kind === 'COLLECTED',
+                isManga: s.isManga,
+                filePattern: activeFilePattern,
+                mangaFilePattern: activeMangaFilePattern,
+                collectedFilePattern: activeCollectedFilePattern,
+            });
             const issueYear = issue.releaseDate ? issue.releaseDate.split('-')[0] : (s.year?.toString() || '0000');
 
             let cleanIssueName = issue.name || "";

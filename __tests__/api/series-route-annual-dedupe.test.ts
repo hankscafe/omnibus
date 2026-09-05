@@ -46,12 +46,15 @@ describe('#203: series reconciler vs. attached-volume rows', () => {
         (prisma.issue.deleteMany as any).mockResolvedValue({ count: 0 });
     });
 
-    it('keeps both attached "#1" rows and still prunes an unattached duplicate', async () => {
+    it('keeps every attached "#1" row and still prunes a genuine unattached duplicate', async () => {
         const rows = [
-            // Two one-off annual volumes, each freshly imported as its volume's issue #1.
+            // Two one-off annual volumes, each freshly imported as its volume's issue #1. Each
+            // attached lane is its own numbering domain, so these are not duplicates of anything.
             { id: 'a96', number: '1', isAnnual: true, metadataId: '60436', filePath: null, attachedVolumeId: 'att_96' },
             { id: 'a97', number: '1', isAnnual: true, metadataId: '60437', filePath: null, attachedVolumeId: 'att_97' },
-            // A stray unattached annual row from the old churn — still fair game.
+            // Two UNATTACHED annual rows sharing a number — a real duplicate pair from the old
+            // churn. The better record survives; the placeholder is pruned.
+            { id: 'keep', number: '1', isAnnual: true, metadataId: '999', filePath: '/comics/ASM/annual.cbz', attachedVolumeId: null },
             { id: 'stray', number: '1', isAnnual: true, metadataId: 'unmatched_x', filePath: null, attachedVolumeId: null },
             // The main run's #1 lives in its own domain and is untouched either way.
             { id: 'main1', number: '1', isAnnual: false, metadataId: '300001', filePath: null, attachedVolumeId: null },
@@ -66,6 +69,7 @@ describe('#203: series reconciler vs. attached-volume rows', () => {
         expect(deleted).toEqual(['stray']);
         expect(deleted).not.toContain('a96');
         expect(deleted).not.toContain('a97');
+        expect(deleted).not.toContain('keep');
     });
 
     it('composes attached annuals as "Series Annual #N" and sorts them after the main run', async () => {
@@ -84,5 +88,51 @@ describe('#203: series reconciler vs. attached-volume rows', () => {
             isAnnual: true,
             name: 'The Amazing Spider-Man Annual #1',
         });
+    });
+});
+
+describe('#203 COLLECTED: collections are their own shelf, not part of the run', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        (prisma.library.findMany as any).mockResolvedValue([{ id: 'lib1', path: '/comics' }]);
+        (prisma.series.findFirst as any).mockResolvedValue({
+            id: 's1', name: 'Batman', year: 2011, folderPath: '/comics/Batman',
+            metadataId: '42821', metadataSource: 'COMICVINE',
+        });
+        (prisma.issue.deleteMany as any).mockResolvedValue({ count: 0 });
+    });
+
+    it('keeps trades out of the issue lists and returns them separately', async () => {
+        (prisma.issue.findMany as any).mockResolvedValue([
+            { id: 'i1', number: '1', isAnnual: false, metadataId: '300001', filePath: null, attachedVolumeId: null },
+            { id: 'ann', number: '1', isAnnual: true, metadataId: '400001', filePath: null, attachedVolumeId: 'att_a',
+              attachedVolume: { kind: 'ANNUAL', name: 'Batman Annual' } },
+            { id: 'tpb1', number: '1', isAnnual: false, metadataId: '500001', filePath: null, attachedVolumeId: 'att_c',
+              attachedVolume: { kind: 'COLLECTED', name: 'The Court of Owls' } },
+        ]);
+
+        const data = await (await GET(getReq('http://localhost/api/library/series?path=/comics/Batman'))).json();
+
+        // The run and its annuals are unchanged; the trade is nowhere among them.
+        expect(data.missingIssues.map((i: any) => i.id)).toEqual(['i1', 'ann']);
+        // It reads as a collection instead — with the collection's name for the shelf.
+        expect(data.missingCollectedEditions.map((i: any) => i.id)).toEqual(['tpb1']);
+        expect(data.missingCollectedEditions[0]).toMatchObject({ isCollected: true, collectionName: 'The Court of Owls' });
+        // An annual is still part of the run: it's a distinct comic, not a reprint.
+        expect(data.missingIssues.find((i: any) => i.id === 'ann').isCollected).toBe(false);
+    });
+
+    it('sorts owned collections by the number the user curated — that IS the reading order', async () => {
+        const owned = (id: string, number: string) => ({
+            id, number, isAnnual: false, metadataId: `5000${number}`, filePath: `/comics/Batman/${id}.cbz`,
+            attachedVolumeId: 'att_c', attachedVolume: { kind: 'COLLECTED', name: 'Court of Owls' },
+        });
+        (prisma.issue.findMany as any).mockResolvedValue([owned('v3', '3'), owned('v1', '1'), owned('v2', '2')]);
+
+        const data = await (await GET(getReq('http://localhost/api/library/series?path=/comics/Batman'))).json();
+
+        // No files exist on disk in this test, so they land in the "missing" collection list.
+        expect(data.missingCollectedEditions.map((i: any) => i.number)).toEqual(['1', '2', '3']);
+        expect(data.downloadedIssues).toHaveLength(0);
     });
 });

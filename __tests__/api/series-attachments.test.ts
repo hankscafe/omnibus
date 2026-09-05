@@ -1,7 +1,7 @@
 // /api/library/series/attachments (#203 Phase 1): attaching an annual volume to a series, the
 // honest result summary the attach dialog reports, and a detach that keeps every file the user owns.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { GET, POST, DELETE } from '@/app/api/library/series/attachments/route';
+import { GET, POST, PUT, DELETE } from '@/app/api/library/series/attachments/route';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { engineFetchLong } from '@/lib/engine';
@@ -12,9 +12,9 @@ vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn(a
 
 vi.mock('@/lib/db', () => ({
     prisma: {
-        series: { findUnique: vi.fn() },
+        series: { findUnique: vi.fn(), findFirst: vi.fn(), delete: vi.fn() },
         attachedVolume: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), delete: vi.fn() },
-        issue: { groupBy: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
+        issue: { groupBy: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
     }
 }));
 
@@ -42,6 +42,7 @@ describe('API: /api/library/series/attachments', () => {
             id: 's1', name: 'Batman', metadataSource: 'COMICVINE', metadataId: '42821',
         });
         (prisma.attachedVolume.upsert as any).mockResolvedValue({ id: 'att1', name: null });
+        (prisma.series.findFirst as any).mockResolvedValue(null); // no standalone twin by default
         (engineFetchLong as any).mockResolvedValue(engineOk({
             attachment_id: 'att1', name: 'Batman Annual', total: 4, claimed: 2, created: 2, updated: 0, unclaimed: 1,
         }));
@@ -135,5 +136,78 @@ describe('API: /api/library/series/attachments', () => {
 
         expect(data.attachments).toHaveLength(1);
         expect(data.attachments[0]).toMatchObject({ volumeId: '49197', issueCount: 4, ownedCount: 2 });
+    });
+});
+
+// #203 COLLECTED: a trade is usually already in the library as its own series. The attach REPORTS
+// that; the move is a separate, explicit action — and the rule throughout is "keep the row that
+// owns the file", because that row carries the reader's progress and any curation.
+describe('API: attachments — absorbing a standalone series (PUT)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        (getServerSession as any).mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
+        (prisma.attachedVolume.findUnique as any).mockResolvedValue({ id: 'att2', seriesId: 's_parent', volumeId: '77', metadataSource: 'COMICVINE', kind: 'COLLECTED' });
+        (prisma.series.findUnique as any).mockResolvedValue({ id: 's_tpb', name: 'Court of Owls' });
+        (prisma.issue.count as any).mockResolvedValue(0);
+        // The route chains .catch() on these — a bare vi.fn() returns undefined and would throw.
+        (prisma.issue.delete as any).mockResolvedValue({});
+        (prisma.issue.update as any).mockResolvedValue({});
+        (prisma.series.delete as any).mockResolvedValue({});
+    });
+
+    const putReq = (body: any) => new Request('http://localhost/api/library/series/attachments', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    it('moves the owning row and drops the redundant skeleton, not the other way round', async () => {
+        (prisma.issue.findMany as any).mockImplementation(async ({ where }: any) =>
+            where.seriesId === 's_tpb'
+                ? [{ id: 'owned', metadataId: '900', filePath: '/comics/TPB/court.cbz' }]
+                : [{ id: 'skeleton', metadataId: '900', filePath: null }]);
+
+        const data = await (await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_tpb' }))).json();
+
+        expect(data).toEqual({ success: true, moved: 1, skeletonsReplaced: 1, removedSeries: true });
+        // The file-less skeleton is the disposable one.
+        expect(prisma.issue.delete).toHaveBeenCalledWith({ where: { id: 'skeleton' } });
+        // The row that owns the file survives and joins the lane — progress and curation intact.
+        expect(prisma.issue.update).toHaveBeenCalledWith({
+            where: { id: 'owned' },
+            data: { seriesId: 's_parent', attachedVolumeId: 'att2' },
+        });
+    });
+
+    it('never deletes a source series that still holds issues', async () => {
+        (prisma.issue.findMany as any).mockResolvedValue([]);
+        (prisma.issue.count as any).mockResolvedValue(2); // something else still lives there
+
+        const data = await (await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_tpb' }))).json();
+
+        expect(data.removedSeries).toBe(false);
+        expect(prisma.series.delete).not.toHaveBeenCalled();
+    });
+
+    it('refuses non-admins, missing ids, and absorbing a series into itself', async () => {
+        (getServerSession as any).mockResolvedValue({ user: { id: 'u2', role: 'USER' } });
+        expect((await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_tpb' }))).status).toBe(403);
+
+        (getServerSession as any).mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
+        expect((await PUT(putReq({ attachmentId: 'att2' }))).status).toBe(400);
+        expect((await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_parent' }))).status).toBe(400);
+        expect(prisma.issue.update).not.toHaveBeenCalled();
+    });
+
+    it('reports an existing standalone series on attach without touching it', async () => {
+        (prisma.series.findUnique as any).mockResolvedValue({ id: 's1', name: 'Batman', metadataSource: 'COMICVINE', metadataId: '42821' });
+        (prisma.attachedVolume.upsert as any).mockResolvedValue({ id: 'att2', name: null });
+        (prisma.series.findFirst as any).mockResolvedValue({ id: 's_tpb', name: 'Court of Owls', folderPath: '/comics/TPB', _count: { issues: 1 } });
+        (engineFetchLong as any).mockResolvedValue(engineOk({ attachment_id: 'att2', total: 1, claimed: 0, created: 1, updated: 0, unclaimed: 0 }));
+
+        const data = await (await POST(createReq({ seriesId: 's1', volumeId: '77', kind: 'COLLECTED' }))).json();
+
+        expect(data.existingSeries).toEqual({ id: 's_tpb', name: 'Court of Owls', folderPath: '/comics/TPB', issueCount: 1 });
+        // Reporting only — nothing has been moved or deleted.
+        expect(prisma.issue.update).not.toHaveBeenCalled();
+        expect(prisma.series.delete).not.toHaveBeenCalled();
     });
 });

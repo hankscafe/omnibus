@@ -135,6 +135,12 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
     let series_id: String = row.get("seriesId");
     let source: String = row.try_get("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string());
     let volume_id: String = row.get("volumeId");
+    let kind: String = row.try_get("kind").unwrap_or_else(|_| "ANNUAL".to_string());
+    // #203 COLLECTED: the lane serves both kinds now, so isAnnual follows the ATTACHMENT's kind —
+    // a trade is not an annual, and flagging it as one would put it in the annual numbering domain,
+    // label it "Annual #N" in every view, and sort it among comics it merely reprints. Written as a
+    // SQL literal, not a bind: the Any driver has no portable boolean bind (the 5H lesson).
+    let annual_lit = if kind == "ANNUAL" { "true" } else { "false" };
 
     // file_metadata_priority (discussion #177) applies to an attached lane exactly as it does to the
     // parent volume: a provider sync only fills blanks that the files didn't already answer.
@@ -181,7 +187,10 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         //      provider issue's id — the shape a wipe→rescan leaves behind when the file's own
         //      ComicInfo named its issue but the link hadn't been rebuilt yet. Adopting by id keeps
         //      a renumbered one-off correct where a number match would not.
-        let adopted_row = if existing.is_none() {
+        // Claiming and id-adoption look for LOCAL annual rows; a collected lane has no equivalent
+        // (nothing on disk is flagged "collected" until it belongs to an attachment), so those
+        // passes only run for annual attachments.
+        let adopted_row = if existing.is_none() && kind == "ANNUAL" {
             find_unbound_by_id(db, &series_id, &issue.source_id, &source).await?
         } else {
             None
@@ -190,7 +199,7 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         // ---- The claim: a file-backed annual row nobody has bound yet, whose NUMBER matches this
         //      provider issue. Silent by decision (2026-08-26) — the summary is the honesty, and
         //      detach / the editor's exact-id field are the undo.
-        let claimed_row = if existing.is_none() && adopted_row.is_none() && claim {
+        let claimed_row = if existing.is_none() && adopted_row.is_none() && claim && kind == "ANNUAL" {
             find_claim_candidate(db, &series_id, &issue.number).await?
         } else {
             None
@@ -233,13 +242,14 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
             let row_id: String = t.get("id");
             // `number` is ABSENT from this UPDATE on purpose: inside an attached lane the number is
             // the user's curation, and the id is the anchor. A claim additionally stamps the link.
-            sqlx::query(
-                r#"UPDATE "Issue" SET "attachedVolumeId"=$1, "metadataId"=$2, "metadataSource"=$3, "isAnnual"=true,
+            sqlx::query(&format!(
+                r#"UPDATE "Issue" SET "attachedVolumeId"=$1, "metadataId"=$2, "metadataSource"=$3, "isAnnual"={annual},
                    name=$4, description=$5, "releaseDate"=$6, "coverUrl"=$7, "matchState"=$8,
                    writers=$9, artists=$10, "coverArtists"=$11, colorists=$12, letterers=$13,
                    characters=$14, teams=$15, locations=$16, inker=$17, editor=$18, translator=$19
                    WHERE id=$20"#,
-            )
+                annual = annual_lit
+            ))
             .bind(attachment_id)
             .bind(&issue.source_id)
             .bind(&source)
@@ -273,7 +283,8 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
                     name, description, "releaseDate", "coverUrl", "matchState",
                     writers, artists, "coverArtists", colorists, letterers, characters, teams, locations,
                     inker, editor, translator, "createdAt", "updatedAt")
-                   VALUES ($1,$2,$3,$4,$5,$6,true,'WANTED',$7,$8,$9,$10,'MATCHED',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,{now},{now})"#,
+                   VALUES ($1,$2,$3,$4,$5,$6,{annual},'WANTED',$7,$8,$9,$10,'MATCHED',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,{now},{now})"#,
+                annual = annual_lit,
                 now = db.now_expr()
             ))
             .bind(&new_id)

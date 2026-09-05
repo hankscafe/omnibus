@@ -135,7 +135,7 @@ export default function SettingsPage() {
     convert_to_webp: "false", webp_quality: "80", cbr_conversion_enabled: "true",
     oidc_enabled: "false", oidc_issuer: "", oidc_client_id: "", oidc_client_secret: "",
     oidc_force_sso: "false", oidc_auto_approve: "false", oidc_admin_group: "", oidc_user_group: "",
-    folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "",
+    folder_naming_pattern: "", file_naming_pattern: "", manga_file_naming_pattern: "", collected_file_naming_pattern: "",
     smtp_enabled: "false", smtp_host: "", smtp_port: "", smtp_user: "", smtp_pass: "", smtp_from: "",
     discord_enabled: "true",
     pushover_enabled: "false", pushover_token: "", pushover_user: "", pushover_events: "[]",
@@ -533,7 +533,8 @@ export default function SettingsPage() {
         ...prev,
         folder_naming_pattern: "{Publisher}/{Series} ({Year})",
         file_naming_pattern: "{Series} #{Issue}",
-        manga_file_naming_pattern: "{Series} Vol. {Issue}"
+        manga_file_naming_pattern: "{Series} Vol. {Issue}",
+        collected_file_naming_pattern: "{Series} Vol. {Issue} ({IssueYear})"
     }));
     toast({ 
         title: "Defaults Restored", 

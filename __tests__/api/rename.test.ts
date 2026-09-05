@@ -89,7 +89,10 @@ describe('API Route: Bulk Library Renamer', () => {
             series_ids: ['series_1'],
             folder_pattern: '{Publisher}/{Series} ({Year})',
             file_pattern: '{Series} #{Issue}',
-            manga_file_pattern: '{Series} Vol. {Issue}'
+            manga_file_pattern: '{Series} Vol. {Issue}',
+            // #203 COLLECTED: resolved alongside the others so the engine and the local fallback
+            // name a trade identically. null = the engine's built-in default.
+            collected_file_pattern: null
         });
         expect(mocks.seriesFindMany).not.toHaveBeenCalled();
         expect(mocks.fsMove).not.toHaveBeenCalled();

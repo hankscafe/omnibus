@@ -205,12 +205,29 @@ fn effective_file_pattern<'a>(is_manga: bool, file_pattern: &'a str, manga_file_
 /// (a manga annual is still an annual). Twins: the Node standardize loop, importer, watched_sync.
 pub(crate) const ANNUAL_FILE_PATTERN: &str = "{Series} Annual #{Issue} ({IssueYear})";
 
+/// #203 COLLECTED: the default shape for a trade or omnibus attached to a series. Unlike the
+/// annual pattern this one is CONFIGURABLE (collected_file_naming_pattern) — TPB conventions vary
+/// far more (v01 / Vol. 1 / the collection's own title), so a fixed pattern would rename against
+/// the grain of half the libraries that use this. The number is the user's curation, which makes
+/// the filename carry reading order for free.
+pub(crate) const COLLECTED_FILE_PATTERN: &str = "{Series} Vol. {Issue} ({IssueYear})";
+
 fn file_pattern_for_issue<'a>(
     is_annual: bool,
+    is_collected: bool,
     is_manga: bool,
     file_pattern: &'a str,
     manga_file_pattern: Option<&'a str>,
+    collected_file_pattern: Option<&'a str>,
 ) -> &'a str {
+    // Collected first: a collected edition of a manga series is still a collected edition, and an
+    // attachment's kind is an explicit human decision that outranks the series-level template.
+    if is_collected {
+        return match collected_file_pattern {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => COLLECTED_FILE_PATTERN,
+        };
+    }
     if is_annual {
         ANNUAL_FILE_PATTERN
     } else {
@@ -224,6 +241,7 @@ pub async fn run_bulk_rename(
     folder_pattern: &str,
     file_pattern: &str,
     manga_file_pattern: Option<&str>,
+    collected_file_pattern: Option<&str>,
 ) -> Result<RenameSummary> {
     // Empty id list → nothing to rename (`IN ()` is invalid SQL; matches the old ANY('{}')).
     let series_rows = if series_ids.is_empty() {
@@ -329,7 +347,10 @@ pub async fn run_bulk_rename(
         let folder_changed = current_folder.is_empty() || norm_ci(&current_folder) != norm_ci(&target_folder_str);
 
         let issues = sqlx::query(
-            r#"SELECT id, name, number, "filePath", "releaseDate", CAST("isAnnual" AS INTEGER) AS is_annual FROM "Issue" WHERE "seriesId" = $1"#,
+            r#"SELECT i.id, i.name, i.number, i."filePath", i."releaseDate", CAST(i."isAnnual" AS INTEGER) AS is_annual,
+                      CASE WHEN av.kind = 'COLLECTED' THEN 1 ELSE 0 END AS is_collected
+               FROM "Issue" i LEFT JOIN "AttachedVolume" av ON av.id = i."attachedVolumeId"
+               WHERE i."seriesId" = $1"#,
         )
         .bind(&s.id)
         .fetch_all(&db.pool)
@@ -366,6 +387,7 @@ pub async fn run_bulk_rename(
             let issue_file_path: Option<String> = issue.get("filePath");
             let release_date: Option<String> = issue.get("releaseDate");
             let is_annual: bool = issue.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
+            let is_collected: bool = issue.try_get::<i64, _>("is_collected").map(|v| v != 0).unwrap_or(false);
 
             // Resolve the REAL source file: the issue's recorded path first (so files scattered across
             // {SeriesGroup} subfolders are found + consolidated), else the series folder by basename.
@@ -424,7 +446,7 @@ pub async fn run_bulk_rename(
 
             // #203 Phase 1: an annual takes the Mylar-shaped name (see ANNUAL_FILE_PATTERN). The
             // tokens still flow through the same substitution + sanitize chain as every other name.
-            let mut file_name = file_pattern_for_issue(is_annual, s.is_manga, file_pattern, manga_file_pattern).to_string();
+            let mut file_name = file_pattern_for_issue(is_annual, is_collected, s.is_manga, file_pattern, manga_file_pattern, collected_file_pattern).to_string();
             for (token, value) in [
                 ("{Publisher}", raw_publisher),
                 ("{Series}", raw_series),
@@ -594,27 +616,67 @@ mod tests {
     // blank manga pattern falls back to the comic one rather than producing empty file names.
     #[test]
     fn annual_issues_take_the_mylar_annual_name_over_every_other_pattern() {
+        let comic = "{Series} #{Issue}";
+        let manga = Some("{Series} Vol. {Issue}");
         // The annual name outranks both the comic and the manga template — a manga annual is still
         // an annual, and Mylar/Komga expect "<Series> Annual #NNN (YYYY)" beside the main run.
         assert_eq!(
-            file_pattern_for_issue(true, false, "{Series} #{Issue}", Some("{Series} Vol. {Issue}")),
+            file_pattern_for_issue(true, false, false, comic, manga, None),
             "{Series} Annual #{Issue} ({IssueYear})"
         );
         assert_eq!(
-            file_pattern_for_issue(true, true, "{Series} #{Issue}", Some("{Series} Vol. {Issue}")),
+            file_pattern_for_issue(true, false, true, comic, manga, None),
             "{Series} Annual #{Issue} ({IssueYear})"
         );
         // Non-annual rows are untouched by any of this.
-        assert_eq!(file_pattern_for_issue(false, true, "{Series} #{Issue}", Some("{Series} Vol. {Issue}")), "{Series} Vol. {Issue}");
-        assert_eq!(file_pattern_for_issue(false, false, "{Series} #{Issue}", Some("{Series} Vol. {Issue}")), "{Series} #{Issue}");
+        assert_eq!(file_pattern_for_issue(false, false, true, comic, manga, None), "{Series} Vol. {Issue}");
+        assert_eq!(file_pattern_for_issue(false, false, false, comic, manga, None), "{Series} #{Issue}");
 
         // End to end through the same substitution chain the rename loop uses: zero-padded number,
         // the annual's own year, sanitized result.
-        let mut name = file_pattern_for_issue(true, false, "{Series} #{Issue}", None).to_string();
+        let mut name = file_pattern_for_issue(true, false, false, comic, None, None).to_string();
         for (token, value) in [("{Series}", "Batman"), ("{Issue}", pad_issue_number("1").as_str()), ("{IssueYear}", "2012")] {
             name = replace_token_ci(&name, token, value);
         }
         assert_eq!(sanitize_component(&clean_pattern_result(&name, true)), "Batman Annual #001 (2012)");
+    }
+
+    // #203 COLLECTED: a trade attached to a series is named by its own (configurable) template,
+    // and that template outranks every other one — including the annual pattern, since an
+    // attachment's kind is an explicit human decision about what the file IS.
+    #[test]
+    fn collected_editions_take_their_own_configurable_pattern() {
+        let comic = "{Series} #{Issue}";
+        let manga = Some("{Series} Vol. {Issue}");
+
+        // No setting configured → the built-in default.
+        assert_eq!(
+            file_pattern_for_issue(false, true, false, comic, manga, None),
+            "{Series} Vol. {Issue} ({IssueYear})"
+        );
+        // A configured pattern wins, for manga series too.
+        assert_eq!(
+            file_pattern_for_issue(false, true, true, comic, manga, Some("{Series} v{Issue}")),
+            "{Series} v{Issue}"
+        );
+        // A blank setting is not a pattern — fall back rather than emit empty file names.
+        assert_eq!(
+            file_pattern_for_issue(false, true, false, comic, manga, Some("   ")),
+            "{Series} Vol. {Issue} ({IssueYear})"
+        );
+        // Collected outranks annual when a row is somehow both.
+        assert_eq!(
+            file_pattern_for_issue(true, true, false, comic, manga, None),
+            "{Series} Vol. {Issue} ({IssueYear})"
+        );
+
+        // End to end: the user's number becomes the volume number, so the filename carries the
+        // reading order they curated.
+        let mut name = file_pattern_for_issue(false, true, false, comic, None, None).to_string();
+        for (token, value) in [("{Series}", "Batman"), ("{Issue}", pad_issue_number("2").as_str()), ("{IssueYear}", "2012")] {
+            name = replace_token_ci(&name, token, value);
+        }
+        assert_eq!(sanitize_component(&clean_pattern_result(&name, true)), "Batman Vol. 002 (2012)");
     }
 
     #[test]

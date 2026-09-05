@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
 import PageManagerModal from "@/components/page-manager-modal"
-import { AnnualsManager } from "@/components/annuals-manager"
+import { AttachedVolumesManager } from "@/components/attached-volumes-manager"
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -74,6 +74,9 @@ function SeriesContent() {
   const [missingIssues, setMissingIssues] = useState<any[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
   const [duplicates, setDuplicates] = useState<any[]>([]);
+  // #203 COLLECTED: trades/omnibuses attached to this series — their own shelf, out of the run.
+  const [collectedEditions, setCollectedEditions] = useState<any[]>([]);
+  const [missingCollectedEditions, setMissingCollectedEditions] = useState<any[]>([]);
   
   const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, isFollowing: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
     name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, isFollowing: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false, genres: []
@@ -282,6 +285,8 @@ function SeriesContent() {
             setDownloadedIssues(data.downloadedIssues || []);
             setMissingIssues(data.missingIssues || []);
             setDuplicates(data.duplicates || []);
+          setCollectedEditions(data.collectedEditions || []);
+          setMissingCollectedEditions(data.missingCollectedEditions || []);
             
             setSeriesInfo({
                 name: data.seriesName || data.name || "Unknown Series",
@@ -403,6 +408,8 @@ function SeriesContent() {
           setDownloadedIssues(data.downloadedIssues || []);
           setMissingIssues(data.missingIssues || []);
           setDuplicates(data.duplicates || []);
+          setCollectedEditions(data.collectedEditions || []);
+          setMissingCollectedEditions(data.missingCollectedEditions || []);
       } catch (e) {
           Logger.log(`[Series] Couldn't refresh the issue lists after an attachment change: ${getErrorMessage(e)}`, 'debug');
       }
@@ -544,11 +551,19 @@ function SeriesContent() {
         // their domain in the composite ("Series Annual #N"), which also flips the downloader's
         // annual-aware search guards for such a request.
         const reqNum = (issue.parsedNum ?? issue.number ?? '').toString();
-        let compositeName = `${seriesInfo.name}${issue.isAnnual ? ' Annual' : ''} #${reqNum}`;
-        if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${reqNum}`)) {
-            compositeName += `: ${issue.name}`;
-        } else if (issue.name && issue.name.includes(`#${reqNum}`)) {
-            compositeName = issue.name;
+        // #203 COLLECTED: a trade is searched for by its OWN title ("X-Men: From the Ashes Vol. 1"),
+        // never as "{Series} #1" — that composite would hunt for a single issue that isn't the book.
+        let compositeName = issue.isCollected
+            ? ((issue.name && issue.name !== seriesInfo.name) ? issue.name : (issue.collectionName || `${seriesInfo.name} Vol. ${reqNum}`))
+            : `${seriesInfo.name}${issue.isAnnual ? ' Annual' : ''} #${reqNum}`;
+        // The title-appending below is for single issues; a collection's name is already the whole
+        // search term, and appending to it would only make the query harder to match.
+        if (!issue.isCollected) {
+            if (issue.name && issue.name !== seriesInfo.name && !issue.name.includes(`#${reqNum}`)) {
+                compositeName += `: ${issue.name}`;
+            } else if (issue.name && issue.name.includes(`#${reqNum}`)) {
+                compositeName = issue.name;
+            }
         }
 
         setRequestingIds(prev => new Set(prev).add(issue.id));
@@ -1697,15 +1712,79 @@ function SeriesContent() {
                   </div>
               )}
 
-              {/* --- ANNUALS: ATTACHED VOLUMES (#203 Phase 1) --- */}
+              {/* --- ATTACHED VOLUMES (#203 Phase 1): annuals, and collected editions --- */}
               {isAdmin && seriesInfo.id && (
-                  <AnnualsManager
-                      seriesId={seriesInfo.id}
-                      seriesName={seriesInfo.name}
-                      defaultProvider={seriesInfo.metadataSource}
-                      unattachedAnnuals={downloadedIssues.filter(i => i.isAnnual && !i.attachedVolumeId).length}
-                      onChanged={reloadIssues}
-                  />
+                  <>
+                      <AttachedVolumesManager
+                          seriesId={seriesInfo.id}
+                          seriesName={seriesInfo.name}
+                          kind="ANNUAL"
+                          defaultProvider={seriesInfo.metadataSource}
+                          unattachedAnnuals={downloadedIssues.filter(i => i.isAnnual && !i.attachedVolumeId).length}
+                          onChanged={reloadIssues}
+                      />
+                      <AttachedVolumesManager
+                          seriesId={seriesInfo.id}
+                          seriesName={seriesInfo.name}
+                          kind="COLLECTED"
+                          defaultProvider={seriesInfo.metadataSource}
+                          onChanged={reloadIssues}
+                      />
+                  </>
+              )}
+
+              {/* Collected editions read as their own shelf — never mixed into the run, and never
+                  counted among it (a trade reprints issues you may already own). */}
+              {(collectedEditions.length > 0 || missingCollectedEditions.length > 0) && (
+                  <div className="space-y-4 mb-8">
+                      <div className="flex items-center justify-between border-b-2 border-border pb-4">
+                          <h4 className="font-black flex items-center gap-2 text-xl text-foreground tracking-tight">
+                              <BookMarked className="w-6 h-6 text-primary" /> Collected Editions ({collectedEditions.length}{missingCollectedEditions.length > 0 ? ` of ${collectedEditions.length + missingCollectedEditions.length}` : ''})
+                          </h4>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
+                          {[...collectedEditions, ...missingCollectedEditions].map(book => {
+                              const owned = !!book.fullPath;
+                              const isRequesting = requestingIds.has(book.id);
+                              const isRequested = requestedIds.has(book.id);
+                              return (
+                                  <div
+                                      key={book.id}
+                                      onClick={() => owned && setActiveIssue(book)}
+                                      className={cn(
+                                          "flex items-center gap-3 p-3 rounded-xl border bg-background shadow-sm transition-all",
+                                          owned ? "cursor-pointer hover:border-primary/50" : "opacity-80",
+                                          activeIssue?.id === book.id ? "border-primary ring-2 ring-primary/30" : "border-border"
+                                      )}
+                                  >
+                                      <div className="w-12 h-[68px] shrink-0 rounded overflow-hidden bg-muted border border-border">
+                                          {book.coverUrl
+                                              ? <img src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
+                                              : null}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                          <p className="text-sm font-bold text-foreground truncate" title={book.name}>{book.name}</p>
+                                          <p className="text-xs text-muted-foreground">Vol. {book.number}</p>
+                                      </div>
+                                      {/* Collections sit outside the run's missing-issue math, so they
+                                          need their own way to be asked for — searched by the book's
+                                          own title, never as "{Series} #N". */}
+                                      {!owned && canRequest && (
+                                          <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-8 px-2 text-[10px] font-black uppercase tracking-wider shrink-0 border-primary/30 text-primary hover:bg-primary/10"
+                                              disabled={isRequesting || isRequested}
+                                              onClick={(e) => { e.stopPropagation(); handleRequestMissing(book); }}
+                                          >
+                                              {isRequesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : (isRequested ? 'Requested' : 'Request')}
+                                          </Button>
+                                      )}
+                                  </div>
+                              );
+                          })}
+                      </div>
+                  </div>
               )}
 
               {/* --- DOWNLOADED ISSUES SECTION --- */}

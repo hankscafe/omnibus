@@ -157,10 +157,22 @@ export async function POST(request: Request) {
             seriesId, seriesName: series.name, metadataSource, volumeId, kind, summary,
         }, (session.user as any).id);
 
+        // #203 COLLECTED: this volume may ALREADY be in the library as its own series — the common
+        // shape for trades, which ComicVine publishes as one volume per collection. We don't decide
+        // for the admin: report it, and let them choose to pull its files under the parent (one
+        // folder, the thing the field report asked for) or leave it standing.
+        const standalone = await prisma.series.findFirst({
+            where: { metadataSource, metadataId: volumeId, id: { not: seriesId } },
+            select: { id: true, name: true, folderPath: true, _count: { select: { issues: true } } },
+        });
+
         return NextResponse.json({
             success: true,
             attachmentId: attachment.id,
             name: summary?.name ?? attachment.name,
+            existingSeries: standalone
+                ? { id: standalone.id, name: standalone.name, folderPath: standalone.folderPath, issueCount: standalone._count.issues }
+                : null,
             summary: summary
                 ? {
                     total: summary.total,
@@ -173,6 +185,82 @@ export async function POST(request: Request) {
         });
     } catch (error: unknown) {
         Logger.log(`[Attachments API] Attach failed: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    }
+}
+
+/**
+ * ABSORB (#203 COLLECTED): pull a standalone series' books under the parent it was just attached to.
+ *
+ * The rule throughout is "keep the row that owns the file". Where the attach already created a
+ * provider skeleton for the same issue, the skeleton is the disposable one — the source row holds
+ * the file AND the reader's progress, bookmarks and any curation, so it is the row that survives
+ * and moves. Files are not moved by hand here: re-parenting and then running the standardize job
+ * puts them in the parent's folder through the same conflict-guarded path everything else uses
+ * (the "Standardize names ate my comics" incident is why nothing invents its own file moving).
+ */
+export async function PUT(request: Request) {
+    try {
+        const session = await requireAdmin();
+        if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+
+        const body = await request.json().catch(() => ({}));
+        const attachmentId: string = body?.attachmentId;
+        const sourceSeriesId: string = body?.sourceSeriesId;
+        if (!attachmentId || !sourceSeriesId) {
+            return NextResponse.json({ error: 'Missing attachmentId or sourceSeriesId' }, { status: 400 });
+        }
+
+        const attachment = await prisma.attachedVolume.findUnique({ where: { id: attachmentId } });
+        if (!attachment) return NextResponse.json({ error: 'Attachment not found' }, { status: 404 });
+        if (attachment.seriesId === sourceSeriesId) {
+            return NextResponse.json({ error: "That series is the attachment's own parent." }, { status: 400 });
+        }
+
+        const source = await prisma.series.findUnique({ where: { id: sourceSeriesId } });
+        if (!source) return NextResponse.json({ error: 'Series not found' }, { status: 404 });
+
+        const sourceIssues = await prisma.issue.findMany({ where: { seriesId: sourceSeriesId } });
+        const laneRows = await prisma.issue.findMany({ where: { attachedVolumeId: attachmentId } });
+
+        let moved = 0;
+        let skeletonsReplaced = 0;
+        for (const issue of sourceIssues) {
+            // A file-less skeleton for the same provider issue is redundant once the real book
+            // arrives — drop it and let the owning row take its place in the lane.
+            const twin = issue.metadataId
+                ? laneRows.find(r => r.metadataId === issue.metadataId && !r.filePath)
+                : undefined;
+            if (twin) {
+                await prisma.issue.delete({ where: { id: twin.id } }).catch(() => {});
+                skeletonsReplaced++;
+            }
+            await prisma.issue.update({
+                where: { id: issue.id },
+                data: { seriesId: attachment.seriesId, attachedVolumeId: attachmentId },
+            });
+            moved++;
+        }
+
+        // Only remove the source series once nothing is left pointing at it — never a blind delete.
+        const remaining = await prisma.issue.count({ where: { seriesId: sourceSeriesId } });
+        let removedSeries = false;
+        if (remaining === 0) {
+            await prisma.series.delete({ where: { id: sourceSeriesId } }).catch(() => {});
+            removedSeries = true;
+        }
+
+        queueSeriesJsonExport(attachment.seriesId, `ABSORB_${attachmentId}`);
+
+        await AuditLogger.log('ABSORB_SERIES_INTO_ATTACHMENT', {
+            attachmentId, sourceSeriesId, sourceName: source.name, parentSeriesId: attachment.seriesId,
+            moved, skeletonsReplaced, removedSeries,
+        }, (session.user as any).id);
+
+        Logger.log(`[Attachments API] Absorbed "${source.name}" into its parent series: ${moved} book(s) moved, ${skeletonsReplaced} skeleton(s) replaced.`, 'info');
+        return NextResponse.json({ success: true, moved, skeletonsReplaced, removedSeries });
+    } catch (error: unknown) {
+        Logger.log(`[Attachments API] Absorb failed: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

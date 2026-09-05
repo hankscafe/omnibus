@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { filePatternForIssue } from '@/lib/utils/file-pattern';
 import path from 'path';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
@@ -9,7 +10,7 @@ export async function POST(request: NextRequest) {
         const token = await getToken({ req: request });
         if (token?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
-        const { seriesIds, folderPattern, filePattern, mangaFilePattern } = await request.json();
+        const { seriesIds, folderPattern, filePattern, mangaFilePattern, collectedFilePattern } = await request.json();
         Logger.log(`[Rename Preview Debug] Incoming Request - Series Count: ${seriesIds?.length}, FolderPattern: "${folderPattern}", FilePattern: "${filePattern}", MangaFilePattern: "${mangaFilePattern || ''}"`, 'debug');
 
         if (!seriesIds || seriesIds.length === 0) {
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest) {
         const settings = await prisma.systemSetting.findMany();
         const config = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
         const activeMangaFilePattern = mangaFilePattern || config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
+        const activeCollectedFilePattern = collectedFilePattern || config.collected_file_naming_pattern || null;
 
         // Loop through each selected series individually to prevent massive DB joins
         for (const seriesId of seriesIds) {
@@ -40,7 +42,9 @@ export async function POST(request: NextRequest) {
 
             // Fetch ALL issues for this series, then strictly filter for downloaded ones in memory
             const allIssues = await prisma.issue.findMany({
-                where: { seriesId: series.id }
+                where: { seriesId: series.id },
+                // #203 COLLECTED: the preview must know the kind, or it promises the wrong name.
+                include: { attachedVolume: { select: { kind: true } } },
             });
 
             const downloadedIssues = allIssues
@@ -104,12 +108,16 @@ export async function POST(request: NextRequest) {
                     cleanIssueName = "";
                 }
 
-                // #203 Phase 1: the preview has to promise what the renamer will actually do — an
-                // annual takes the Mylar-shaped name (engine parity: renamer.rs ANNUAL_FILE_PATTERN),
-                // outranking the manga template.
-                const patternForIssue = (issue as any).isAnnual
-                    ? "{Series} Annual #{Issue} ({IssueYear})"
-                    : (series.isManga ? activeMangaFilePattern : filePattern);
+                // The preview has to promise what the renamer will actually do, so it resolves
+                // the template through the same shared helper both renamers use.
+                const patternForIssue = filePatternForIssue({
+                    isAnnual: (issue as any).isAnnual,
+                    isCollected: (issue as any).attachedVolume?.kind === 'COLLECTED',
+                    isManga: series.isManga,
+                    filePattern,
+                    mangaFilePattern: activeMangaFilePattern,
+                    collectedFilePattern: activeCollectedFilePattern,
+                });
 
                 const newFileName = patternForIssue
                     .replace(/{Publisher}/gi, safePublisher)

@@ -557,7 +557,17 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
         .filter(|d| !d.is_empty())
         .collect();
     release_dates.sort();
-    let total_issues = sqlx::query_scalar::<_, i64>(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = $1"#)
+    // #203 COLLECTED: annuals count (each is a distinct comic — Mylar counts them too), but a
+    // collected edition reprints issues already in this count, so including it would report a
+    // 31-issue run as 35 and poison every consumer's missing-issue math.
+    let total_issues = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*) FROM "Issue" i
+           WHERE i."seriesId" = $1
+             AND NOT EXISTS (
+                 SELECT 1 FROM "AttachedVolume" av
+                 WHERE av.id = i."attachedVolumeId" AND av.kind = 'COLLECTED'
+             )"#,
+    )
         .bind(series_id)
         .fetch_one(&db.pool)
         .await
@@ -1057,6 +1067,33 @@ mod tests {
         let main_xml = read_comicinfo_from_zip(&main_cbz).unwrap().expect("main ComicInfo");
         assert!(main_xml.contains("<ComicVineVolumeId>42821</ComicVineVolumeId>"), "a main-run file keeps the series volume:\n{main_xml}");
 
+        // #203 COLLECTED: a trade attached to the same series must NOT join the run's count — it
+        // reprints issues already counted, so including it would report this 2-issue series as 3
+        // and hand every consumer a wrong missing-issue calculation. Annuals DO count: an annual
+        // is a distinct comic, and Mylar counts them too.
+        sqlx::query(
+            r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear")
+               VALUES ('att_tpb', 's203', 'COMICVINE', '77', 'COLLECTED', 'The Court of Owls', 2012)"#,
+        ).execute(&db.pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, "isAnnual", "attachedVolumeId", "metadataId", "metadataSource")
+               VALUES ('i_tpb', 's203', NULL, '1', 0, 'att_tpb', '500001', 'COMICVINE')"#,
+        ).execute(&db.pool).await.unwrap();
+
+        let (ok_c, _, sj_c) = process_embed_job(
+            db.clone(),
+            EmbedRequest { series_id: Some("s203".to_string()), issue_ids: None },
+        ).await.expect("embed job with a collection attached");
+        assert_eq!((ok_c, sj_c), (2, 1), "the file-less trade adds no embed, and series.json rewrites");
+
+        let raw_c = std::fs::read_to_string(folder.join("series.json")).expect("series.json");
+        let parsed_c: serde_json::Value = serde_json::from_str(&raw_c).expect("valid json");
+        assert_eq!(parsed_c["metadata"]["total_issues"], 2, "a collected edition must not swell the run count");
+        // It IS recorded as an attachment, so the zero-API restore rebuilds the link.
+        let kinds: Vec<&str> = parsed_c["omnibus"]["attached_volumes"].as_array().unwrap()
+            .iter().map(|a| a["kind"].as_str().unwrap()).collect();
+        assert!(kinds.contains(&"COLLECTED") && kinds.contains(&"ANNUAL"), "both kinds recorded: {kinds:?}");
+
         // series.json carries the attachment list under OUR namespace, leaving the Mylar spec intact.
         let raw = std::fs::read_to_string(folder.join("series.json")).expect("series.json written");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
@@ -1064,11 +1101,13 @@ mod tests {
         assert_eq!(parsed["metadata"]["name"], "Batman");
         // Mylar counts annuals in total_issues, and so do we — observable behavior, not internals.
         assert_eq!(parsed["metadata"]["total_issues"], 2);
-        let attached = &parsed["omnibus"]["attached_volumes"];
-        assert_eq!(attached[0]["volume_id"], "49197");
-        assert_eq!(attached[0]["source"], "COMICVINE");
-        assert_eq!(attached[0]["kind"], "ANNUAL");
-        assert_eq!(attached[0]["start_year"], 2012);
+        // Found by id rather than by index: the series carries more than one attachment by now,
+        // and their order is the writer's business, not this assertion's.
+        let attached = parsed["omnibus"]["attached_volumes"].as_array().expect("attachment list");
+        let annual = attached.iter().find(|a| a["volume_id"] == "49197").expect("the annual volume");
+        assert_eq!(annual["source"], "COMICVINE");
+        assert_eq!(annual["kind"], "ANNUAL");
+        assert_eq!(annual["start_year"], 2012);
 
         let _ = std::fs::remove_dir_all(&base);
     }

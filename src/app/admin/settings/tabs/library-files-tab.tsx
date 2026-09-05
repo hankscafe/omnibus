@@ -136,6 +136,20 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                 />
                                 <p className="text-[10px] text-muted-foreground">Applied to items flagged as Manga.</p>
                             </div>
+
+                            {/* #203 COLLECTED: TPB naming conventions vary far more than annuals
+                                (v01 / Vol. 1 / the collection's own title), so this one is a real
+                                setting rather than the fixed pattern annuals use. */}
+                            <div className="space-y-2 md:col-span-2 lg:col-span-1">
+                                <Label className="text-foreground font-semibold">Collected Edition Format</Label>
+                                <Input
+                                    value={config.collected_file_naming_pattern || "{Series} Vol. {Issue} ({IssueYear})"}
+                                    onChange={e => setConfig({...config, collected_file_naming_pattern: e.target.value})}
+                                    placeholder="{Series} Vol. {Issue} ({IssueYear})"
+                                    className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Applied to trades and omnibuses attached to a series as collected editions. Their number is whatever you set, so it doubles as reading order.</p>
+                            </div>
                         </div>
 
                         {/* --- LIVE PREVIEW BOX --- */}

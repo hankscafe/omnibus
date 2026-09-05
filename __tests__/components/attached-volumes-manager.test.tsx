@@ -4,7 +4,7 @@
 // pre-seeded the way a user would type it, and detach never reaches a file unless asked.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { AnnualsManager, summaryLine } from '@/components/annuals-manager';
+import { AttachedVolumesManager, summaryLine } from '@/components/attached-volumes-manager';
 import { ok, stubFetchRouter } from '../helpers/fetch';
 
 const toast = vi.fn();
@@ -31,14 +31,14 @@ describe('summaryLine (#203 Beta B)', () => {
     });
 });
 
-describe('AnnualsManager', () => {
+describe('AttachedVolumesManager (ANNUAL)', () => {
     beforeEach(() => { vi.clearAllMocks(); });
     afterEach(() => { vi.unstubAllGlobals(); });
 
     it('lists an attachment with how much of it is actually owned', async () => {
         stubFetchRouter([['/api/library/series/attachments', () => ok({ attachments: [attachment] })]]);
 
-        render(<AnnualsManager {...baseProps} />);
+        render(<AttachedVolumesManager {...baseProps} />);
 
         expect(await screen.findByText('Batman Annual')).toBeTruthy();
         expect(screen.getByText(/COMICVINE 49197 · 2 of 4 owned/)).toBeTruthy();
@@ -49,11 +49,11 @@ describe('AnnualsManager', () => {
     it('stays quiet on a series with no annuals, and speaks up when files are unattached', async () => {
         stubFetchRouter([['/api/library/series/attachments', () => ok({ attachments: [] })]]);
 
-        const { rerender } = render(<AnnualsManager {...baseProps} />);
+        const { rerender } = render(<AttachedVolumesManager {...baseProps} />);
         await waitFor(() => expect(screen.getByText('Annuals')).toBeTruthy());
         expect(screen.queryByText(/belongs? to\s+no volume yet/)).toBeNull();
 
-        rerender(<AnnualsManager {...baseProps} unattachedAnnuals={3} />);
+        rerender(<AttachedVolumesManager {...baseProps} unattachedAnnuals={3} />);
         expect(await screen.findByText(/3 annual files here belong to\s+no volume yet/)).toBeTruthy();
     });
 
@@ -68,7 +68,7 @@ describe('AnnualsManager', () => {
         ]);
         const onChanged = vi.fn();
 
-        render(<AnnualsManager {...baseProps} onChanged={onChanged} />);
+        render(<AttachedVolumesManager {...baseProps} onChanged={onChanged} />);
         fireEvent.click(await screen.findByText('Attach annual volume'));
 
         const input = await screen.findByPlaceholderText('Search the provider for the annual volume');
@@ -97,7 +97,7 @@ describe('AnnualsManager', () => {
             ['/api/library/series/attachments', () => ok({ success: true, keptIssues: 3, skeletonsDeleted: 0 })],
         ]);
 
-        render(<AnnualsManager {...baseProps} />);
+        render(<AttachedVolumesManager {...baseProps} />);
         fireEvent.click(await screen.findByText('Detach'));
 
         // Default is the non-destructive one: unlink only.
@@ -110,6 +110,91 @@ describe('AnnualsManager', () => {
         });
         await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
             description: expect.stringContaining('Your files were not touched.'),
+        })));
+    });
+});
+
+describe('AttachedVolumesManager (COLLECTED)', () => {
+    beforeEach(() => { vi.clearAllMocks(); });
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    const collected = { ...attachment, id: 'att2', kind: 'COLLECTED', name: 'Batman Vol. 1: The Court of Owls' };
+
+    it('speaks about collections, and seeds the search with the series name alone', async () => {
+        // An annual volume is named "<Series> Annual"; a collection is usually named after the
+        // series itself ("Batman Vol. 1: The Court of Owls"), so the seeds differ.
+        stubFetchRouter([['/api/library/series/attachments', () => ok({ attachments: [] })]]);
+
+        render(<AttachedVolumesManager {...baseProps} kind="COLLECTED" />);
+        fireEvent.click(await screen.findByText('Attach collected edition'));
+
+        expect(screen.getByText('Collected editions')).toBeTruthy();
+        const input = await screen.findByPlaceholderText('Search the provider for the collection');
+        expect((input as HTMLInputElement).value).toBe('Batman');
+    });
+
+    it('shows only its own kind — annuals and collections never mix', async () => {
+        stubFetchRouter([['/api/library/series/attachments', () => ok({ attachments: [attachment, collected] })]]);
+
+        render(<AttachedVolumesManager {...baseProps} kind="COLLECTED" />);
+
+        expect(await screen.findByText('Batman Vol. 1: The Court of Owls')).toBeTruthy();
+        expect(screen.queryByText('Batman Annual')).toBeNull();
+    });
+
+    it('offers to move a volume that already exists as its own series, and never moves it uninvited', async () => {
+        const fetchMock = stubFetchRouter([
+            [/\/api\/library\/series\/attachments\?/, () => ok({ attachments: [] })],
+            ['/api/search', () => ok({ results: [{ id: 77, name: 'Batman Vol. 1: The Court of Owls', year: 2012, publisher: 'DC Comics' }] })],
+            ['/api/library/series/attachments', () => ok({
+                success: true, attachmentId: 'att2', name: 'Batman Vol. 1: The Court of Owls',
+                summary: { total: 1, claimed: 0, created: 1, updated: 0, unclaimed: 0 },
+                existingSeries: { id: 's_tpb', name: 'Batman Vol. 1: The Court of Owls', issueCount: 1 },
+            })],
+        ]);
+
+        render(<AttachedVolumesManager {...baseProps} kind="COLLECTED" />);
+        fireEvent.click(await screen.findByText('Attach collected edition'));
+        fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Attach Batman Vol. 1: The Court of Owls' }));
+
+        // The prompt appears; nothing has been moved yet.
+        expect(await screen.findByText('This volume is already in your library')).toBeTruthy();
+        expect(fetchMock.mock.calls.some(c => c[1]?.method === 'PUT')).toBe(false);
+
+        // Declining leaves the standalone series exactly where it is.
+        fireEvent.click(screen.getByRole('button', { name: /Leave it as its own series/ }));
+        await waitFor(() => expect(screen.queryByText('This volume is already in your library')).toBeNull());
+        expect(fetchMock.mock.calls.some(c => c[1]?.method === 'PUT')).toBe(false);
+    });
+
+    it('absorbs on request, and says the files still need Standardize to move', async () => {
+        const fetchMock = stubFetchRouter([
+            [/\/api\/library\/series\/attachments\?/, () => ok({ attachments: [] })],
+            ['/api/search', () => ok({ results: [{ id: 77, name: 'Court of Owls', year: 2012 }] })],
+            ['/api/library/series/attachments', (_u: string, init?: any) => init?.method === 'PUT'
+                ? ok({ success: true, moved: 1, skeletonsReplaced: 1, removedSeries: true })
+                : ok({
+                    success: true, attachmentId: 'att2', name: 'Court of Owls',
+                    summary: { total: 1, claimed: 0, created: 1, updated: 0, unclaimed: 0 },
+                    existingSeries: { id: 's_tpb', name: 'Court of Owls', issueCount: 1 },
+                })],
+        ]);
+
+        render(<AttachedVolumesManager {...baseProps} kind="COLLECTED" />);
+        fireEvent.click(await screen.findByText('Attach collected edition'));
+        fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Attach Court of Owls' }));
+        fireEvent.click(await screen.findByRole('button', { name: /Move it under Batman/ }));
+
+        await waitFor(() => {
+            const put = fetchMock.mock.calls.find(c => c[1]?.method === 'PUT');
+            expect(JSON.parse(put![1].body)).toEqual({ attachmentId: 'att2', sourceSeriesId: 's_tpb' });
+        });
+        // Honest about what did and didn't happen: rows moved now, files at Standardize time.
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+            title: 'Moved under this series',
+            description: expect.stringContaining('Standardize'),
         })));
     });
 });

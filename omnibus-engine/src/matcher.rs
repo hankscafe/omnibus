@@ -215,7 +215,7 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
             continue;
         }
         searches_this_run += 1;
-        match cv_search_best(&db, &client, cv_key.as_deref().unwrap_or(""), &name).await {
+        match cv_search_best(&db, &client, cv_key.as_deref().unwrap_or(""), &name, year).await {
             Ok(Some((vol_id, vol_name, start_year))) => {
                 let sim = name_similarity(&name, &vol_name);
                 let year_matches = year > 0 && start_year.map(|sy| (sy - year).abs() <= 1).unwrap_or(false);
@@ -319,8 +319,8 @@ async fn apply_match(db: &Db, series_id: &str, series_name: &str, source: &str, 
 }
 
 /// Best ComicVine volume candidate for a series name: one /search/ call, results ranked by
-/// name_similarity. Returns (volume_id, volume_name, start_year).
-async fn cv_search_best(db: &Db, client: &reqwest::Client, api_key: &str, name: &str) -> anyhow::Result<Option<(i32, String, Option<i32>)>> {
+/// name_similarity plus the year term (see pick_best). Returns (volume_id, volume_name, start_year).
+async fn cv_search_best(db: &Db, client: &reqwest::Client, api_key: &str, name: &str, year: i32) -> anyhow::Result<Option<(i32, String, Option<i32>)>> {
     let req = client
         .get("https://comicvine.gamespot.com/api/search/")
         .query(&[
@@ -352,22 +352,48 @@ async fn cv_search_best(db: &Db, client: &reqwest::Client, api_key: &str, name: 
         }
     };
     let results = json["results"].as_array().cloned().unwrap_or_default();
-
-    let mut best: Option<(i32, String, Option<i32>, f64)> = None;
-    for r in &results {
-        let Some(id) = r["id"].as_i64().map(|v| v as i32) else { continue };
+    let candidates: Vec<(i32, String, Option<i32>)> = results.iter().filter_map(|r| {
+        let id = r["id"].as_i64().map(|v| v as i32)?;
         let vol_name = r["name"].as_str().unwrap_or("").to_string();
-        if vol_name.is_empty() {
-            continue;
-        }
+        if vol_name.is_empty() { return None; }
         let start_year = r["start_year"].as_str().and_then(|s| s.trim().parse::<i32>().ok())
             .or_else(|| r["start_year"].as_i64().map(|v| v as i32));
-        let sim = name_similarity(name, &vol_name);
-        if best.as_ref().map(|(_, _, _, b)| sim > *b).unwrap_or(true) {
-            best = Some((id, vol_name, start_year, sim));
+        Some((id, vol_name, start_year))
+    }).collect();
+    Ok(pick_best(name, year, candidates))
+}
+
+/// The year's contribution to a candidate's score — a tiebreaker-plus, deliberately small next to
+/// a full-name match: exact +0.10, off by one +0.05 (ComicVine's start_year and a folder's year
+/// disagree by one all the time), further off −0.05, either side unknown 0. EXACT twin of
+/// smart-match-search.ts yearTerm: the sweep and the Smart Matcher must rank identically, or the
+/// sweep would auto-match what the UI would reject.
+///
+/// The magnitudes keep the year's whole reach (0.15) under a one-token name difference on a
+/// two-token name (0.2), so a folder whose year is wrong by three still resolves to the exact name
+/// rather than a same-year near-miss such as its own annual.
+pub(crate) fn year_term(candidate_year: Option<i32>, wanted_year: i32) -> f64 {
+    let Some(cy) = candidate_year.filter(|y| *y > 0) else { return 0.0 };
+    if wanted_year <= 0 { return 0.0; }
+    match (cy - wanted_year).abs() {
+        0 => 0.10,
+        1 => 0.05,
+        _ => -0.05,
+    }
+}
+
+/// Pure ranking over already-parsed candidates (id, name, start_year): the name dominates unless
+/// names tie, and then the year decides. Extracted from cv_search_best so it can be tested without
+/// HTTP. Ties keep the provider's order (stable: only a strictly better score replaces the best).
+pub(crate) fn pick_best(name: &str, year: i32, candidates: Vec<(i32, String, Option<i32>)>) -> Option<(i32, String, Option<i32>)> {
+    let mut best: Option<(i32, String, Option<i32>, f64)> = None;
+    for (id, vol_name, start_year) in candidates {
+        let score = name_similarity(name, &vol_name) + year_term(start_year, year);
+        if best.as_ref().map(|(_, _, _, b)| score > *b).unwrap_or(true) {
+            best = Some((id, vol_name, start_year, score));
         }
     }
-    Ok(best.map(|(id, n, y, _)| (id, n, y)))
+    best.map(|(id, n, y, _)| (id, n, y))
 }
 
 /// Name similarity in [0, 1]: case-insensitive token Dice coefficient over alphanumeric words.
@@ -450,6 +476,40 @@ mod tests {
         assert!(!ids.contains(&"s_ignored".to_string()), "an ignored series must never be swept");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // Suggestion ranking (robotshavehearts2's "way off" auto-matches): the year is a
+    // tiebreaker-plus, never a sort key. Twin cases live in smart-match-prefill-helpers.test.ts.
+    #[test]
+    fn year_term_rewards_agreement_modestly_and_ignores_unknowns() {
+        assert_eq!(year_term(Some(2024), 2024), 0.10);
+        assert_eq!(year_term(Some(2023), 2024), 0.05);
+        assert_eq!(year_term(Some(2016), 2011), -0.05);
+        assert_eq!(year_term(None, 2024), 0.0);
+        assert_eq!(year_term(Some(2024), 0), 0.0);
+        assert_eq!(year_term(Some(0), 2024), 0.0);
+    }
+
+    #[test]
+    fn pick_best_lets_the_name_dominate_and_the_year_break_ties() {
+        let c = |id: i32, n: &str, y: Option<i32>| (id, n.to_string(), y);
+        // The field report's shape: every 2024 volume used to be pulled ahead of the exact name.
+        let cands = vec![
+            c(1, "X-Men: From the Ashes Infinity Comic", Some(2024)),
+            c(2, "X-Men Annual", Some(2024)),
+            c(3, "X-Men", Some(2024)),
+            c(4, "X-Men", Some(1991)),
+        ];
+        assert_eq!(pick_best("X-Men", 2024, cands.clone()).map(|b| b.0), Some(3));
+        // A wrong folder year must not hand the win to a same-year wrong name.
+        let cands2 = vec![c(1, "Batman Eternal", Some(2014)), c(2, "Batman", Some(2011)), c(3, "Batman", Some(2016))];
+        assert_eq!(pick_best("Batman", 2014, cands2.clone()).map(|b| b.0), Some(2));
+        // Among equal names, off-by-one beats far-off.
+        assert_eq!(pick_best("Batman", 2012, cands2).map(|b| b.0), Some(2));
+        // Plain series over its annual when both share the year.
+        assert_eq!(pick_best("Batman", 2012, vec![c(1, "Batman Annual", Some(2012)), c(2, "Batman", Some(2012))]).map(|b| b.0), Some(2));
+        // Nothing to rank → nothing.
+        assert!(pick_best("Batman", 2012, vec![]).is_none());
     }
 
     #[test]

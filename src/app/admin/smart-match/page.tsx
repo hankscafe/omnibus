@@ -17,7 +17,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk } from "@/lib/utils/smart-match-search"
+import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
@@ -419,14 +419,14 @@ export default function SmartMatchPage() {
             if (series.isIgnored) continue;
 
             try {
-                let cleanName = series.name.replace(/(omnibus|tpb|compendium|vol\.|volume)\s*\d*/i, '').trim();
-                
-                if (cleanName.length < 2) {
-                    cleanName = series.name.trim();
-                }
+                // The search term is the SERIES, not the file: a loose file arrives as its filename
+                // ("X-Men 001 (2024)"), and the issue number pollutes the provider query. The year is
+                // kept aside for ranking and never sent — the search route would only turn it into a
+                // boolean sort that pulls every same-year volume ahead of the exact name.
+                const { query: cleanName, year: nameYear } = seriesQueryFromName(series.name);
+                const wantedYear = series.year > 0 ? series.year : nameYear;
+                const query = `${cleanName} ${wantedYear ?? ''}`.trim();
 
-                const query = `${cleanName} ${series.year > 0 ? series.year : ''}`.trim();
-                
                 Logger.log(`[Smart Match Debug] Auto-scanning for "${query}" using provider: ${searchProvider}`, 'debug');
 
                 const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&provider=${searchProvider}`);
@@ -437,8 +437,13 @@ export default function SmartMatchPage() {
 
                 const data = await res.json();
 
-                if (data.results && data.results.length > 0) {
-                    setSuggestions(prev => ({ ...prev, [series.id]: data.results[0] }));
+                // Score every candidate — name similarity first, the year as a tiebreaker — instead of
+                // trusting results[0]. A best candidate that barely resembles the name becomes
+                // NOT_FOUND on purpose: Accept All takes any row with a suggestion, and a confident-
+                // looking wrong answer there costs a folder move to undo.
+                const picked = pickSuggestion(cleanName, wantedYear, data.results || []);
+                if (picked) {
+                    setSuggestions(prev => ({ ...prev, [series.id]: picked }));
                     matchCount++;
                 } else {
                     setSuggestions(prev => ({ ...prev, [series.id]: 'NOT_FOUND' }));

@@ -150,3 +150,104 @@ export function acceptableForBulk<T extends { id: string; isIgnored?: boolean }>
         return !!s && s !== 'NOT_FOUND' && s !== 'ERROR';
     });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Suggestion ranking (field report by robotshavehearts2: "some odd ones were way off, but if I
+// manually searched the keywords it found it at the top").
+//
+// The auto-scan used to take results[0] from /api/search, whose only ranking signal is a boolean
+// sort on exact start-year — so a folder "X-Men (2024)" pulled EVERY 2024 volume to the front
+// ("X-Men: From the Ashes Infinity Comic", "X-Men Annual"…) and [0] was whichever ComicVine listed
+// first. Name relevance was never scored at all. These helpers score it, with the year as a
+// tiebreaker-plus rather than a sort key, so the name dominates unless names tie.
+//
+// nameSimilarity is an EXACT twin of the engine's renamer-side scorer (matcher.rs name_similarity)
+// and the year term twins matcher.rs year_term — the background sweep and the Smart Matcher must
+// rank the same candidates the same way, or the sweep would auto-match what the UI would reject.
+// ---------------------------------------------------------------------------------------------
+
+/** Case-insensitive token Dice coefficient over alphanumeric words. Symbols fold to spaces, so
+ *  "Hack/Slash" == "Hack Slash" == "hack slash". Token-based, order-insensitive. Twin of Rust. */
+export function nameSimilarity(a: string, b: string): number {
+    const tokens = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(Boolean);
+    const ta = tokens(a);
+    const tb = tokens(b);
+    if (ta.length === 0 || tb.length === 0) return 0;
+    const common = ta.filter(t => tb.includes(t)).length;
+    return (2 * common) / (ta.length + tb.length);
+}
+
+/** The year's contribution to a candidate's score. A tiebreaker-plus, deliberately small next to a
+ *  full-name match: exact year +0.10, off by one +0.05 (ComicVine's start_year and a folder's year
+ *  disagree by one all the time), further off −0.05, either side unknown 0. Twin of Rust.
+ *
+ *  The magnitudes are chosen so the year's whole reach (+0.10 to −0.05 = 0.15) stays UNDER a
+ *  one-token name difference on a two-token name (1.0 vs 0.8 = 0.2): a folder whose year is wrong
+ *  by three still resolves to the exact name, not to a same-year near-miss like its own annual. The
+ *  year only decides between names within 0.15 of each other — which is what "tiebreaker" means. */
+export function yearTerm(candidateYear: number | null | undefined, wantedYear: number | null | undefined): number {
+    if (!candidateYear || !wantedYear) return 0;
+    const diff = Math.abs(candidateYear - wantedYear);
+    if (diff === 0) return 0.10;
+    if (diff <= 1) return 0.05;
+    return -0.05;
+}
+
+/** What the auto-scan should search for, from an unmatched item's display name. A raw file arrives
+ *  as its filename minus extension ("X-Men 001 (2024)"), so the issue number and year must come
+ *  off or they pollute the provider query; a folder arrives as "Batman Omnibus Vol. 2". The year is
+ *  returned separately so the ranker can use it — it never goes into the query itself. */
+export function seriesQueryFromName(name: string): { query: string; year: number | null } {
+    let s = name.trim();
+    const yearMatch = s.match(/[(\[]?\b(19\d{2}|20\d{2})\b[)\]]?/);
+    const year = yearMatch ? parseInt(yearMatch[1], 10) : null;
+    if (yearMatch) s = s.replace(yearMatch[0], ' ');
+    // Edition / volume words, anywhere, whole words only (the old regex matched once, unbounded).
+    s = s.replace(/\b(omnibus|tpb|compendium|hardcover|hc|vol\.?|volume)\b\.?\s*\d*/gi, ' ');
+    // A trailing issue token: "#12", "001", "12.5", "v01". Trailing only — "Kaiju No. 8" keeps its 8.
+    s = s.replace(/\s+(?:#\s*)?(?:v\d+|\d{1,4}(?:\.\d+)?)\s*$/i, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+    // Never search for nothing: a name that was ALL edition words falls back to itself.
+    return { query: s.length >= 2 ? s : name.trim(), year };
+}
+
+export interface RankedCandidate<T> {
+    result: T;
+    sim: number;
+    yearTerm: number;
+    score: number;
+}
+
+/** Every candidate scored and sorted, best first. Exported so the reasoning is inspectable. */
+export function rankSearchResults<T extends { name?: string; year?: string | number | null }>(
+    seriesName: string,
+    year: number | null | undefined,
+    results: T[],
+): RankedCandidate<T>[] {
+    return results
+        .map(result => {
+            const sim = nameSimilarity(seriesName, result.name || '');
+            const candYear = result.year != null && result.year !== '' ? parseInt(String(result.year), 10) : null;
+            const yt = yearTerm(Number.isFinite(candYear as number) ? candYear : null, year);
+            return { result, sim, yearTerm: yt, score: sim + yt };
+        })
+        .sort((a, b) => b.score - a.score || b.sim - a.sim);
+}
+
+/** The floor below which a "suggestion" is a wild guess. Half the tokens must overlap: this is what
+ *  keeps Accept All — which takes every row that has ANY suggestion — from sweeping up nonsense. */
+export const SUGGESTION_MIN_SIMILARITY = 0.4;
+
+/** The auto-scan's pick: the best-scored candidate, or null when even the best barely resembles the
+ *  name — a NOT_FOUND is more honest than a confident-looking wrong answer. */
+export function pickSuggestion<T extends { name?: string; year?: string | number | null }>(
+    seriesName: string,
+    year: number | null | undefined,
+    results: T[],
+    minSimilarity: number = SUGGESTION_MIN_SIMILARITY,
+): T | null {
+    const ranked = rankSearchResults(seriesName, year, results);
+    const best = ranked[0];
+    if (!best || best.sim < minSimilarity) return null;
+    return best.result;
+}

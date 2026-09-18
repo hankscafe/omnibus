@@ -37,7 +37,7 @@ RUN cd .next/standalone && node -e "const fs=require('fs');const p=JSON.parse(fs
 
 # nodemailer pinned to match package-lock (was @latest, which is how the image drifted from the
 # lockfile and carried untested versions — the CVE-2026-39244 scan surfaced that gap).
-RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.8 nodemailer@9.0.3 uuid@11.1.1 --no-save --omit=dev --legacy-peer-deps --force
+RUN cd .next/standalone && npm install picomatch@4.0.4 brace-expansion@5.0.12 nodemailer@9.1.1 uuid@11.1.1 --no-save --omit=dev --legacy-peer-deps --force
 
 # --- Stage 2: Final Production Image ---
 FROM node:26-slim AS runner

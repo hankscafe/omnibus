@@ -20,7 +20,7 @@ rayon = "1.8"
 
 # Image processing and WebP conversion (replaces Sharp)
 image = "0.24"
-webp = "0.2"
+webp = "0.3"
 
 # Archive handling (replaces adm-zip). RAR/7z extraction uses the native `unrar`/`unar` CLIs
 # (parity with Node beta.028-030: the library decoders corrupt vintage RAR 2.0 archives).
@@ -39,7 +39,7 @@ serde_json = "1.0"
 # default-features=false drops reqwest's default-tls (native-tls → openssl-sys), which would
 # otherwise require system OpenSSL (libssl-dev) and break the Linux Docker build. rustls-tls keeps
 # HTTPS working with a pure-Rust TLS stack (matches sqlx's runtime-tokio-rustls).
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 urlencoding = "2.1"
 url = "2"
 # Stream combinators (StreamExt::next) for the chunked DDL download in download.rs.
@@ -48,7 +48,7 @@ futures-util = "0.3"
 scraper = "0.19"
 base64 = "0.22"
 
-quick-xml = { version = "0.31", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 
 # Cryptography and Time for AES-256-CBC Database Backups
 aes = "0.8"

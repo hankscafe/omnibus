@@ -288,7 +288,7 @@ A completely custom, zero-friction reading experience built natively into the br
 Omnibus features a native OPDS 1.2 server with the **Page Streaming Extension (PSE)**, allowing you to read your server's library directly in your favorite mobile and tablet apps without downloading the entire file first. Streaming covers `.cbz` and `.cbr`/`.rar` alike — RAR pages are served through the Rust engine, so Panels and friends can read your unconverted archives too.
 
 **Supported OPDS Apps:**
-* **iOS / iPadOS:** Panels, Paperback, Chunky
+* **iOS / iPadOS:** Panels, Chunky
 * **Android:** Mihon, Tachiyomi, Moon+ Reader
 
 **How to Connect:**
@@ -300,6 +300,13 @@ For security, external apps do not use your main account password.
    * **URL:** `http://<your-omnibus-ip>:3000/api/opds`
    * **Username:** Your Omnibus username
    * **Password:** The API Key you just generated
+
+**Paperback (iOS / iPadOS):** Paperback doesn't read OPDS — its built-in "Paperback" source is a Komga client — so Omnibus answers it with a Komga-compatible endpoint instead. In Paperback, open the pre-installed **Paperback** source → **Server Settings** and enter:
+   * **Server URL:** `http://<your-omnibus-ip>:3000/komga`
+   * **Email:** Your Omnibus username
+   * **Password:** An API Key (generated the same way as above — never your account password)
+
+Tap **Try settings** to confirm the connection. Series, covers, page streaming (CBZ and CBR alike), search, the Recently added / Recently updated shelves, and marking issues read all work; an issue you finish in Paperback counts on your Omnibus profile like one finished in the web reader.
 
 ### Native e-Ink Sync (KOReader)
 Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kindle, Pocketbook). Using our custom KOReader sync endpoints, your eReader will automatically ping Omnibus every time you turn a page, and you can view your real-time progress right on your Omnibus Profile!

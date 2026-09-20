@@ -86,6 +86,29 @@ describe('Security: Next.js Front-Door Middleware', () => {
         }
     });
 
+    // #206: Paperback's built-in Komga source appends /api/v1 to the Server URL and sends Basic
+    // auth with no session cookie. The facade lives at /komga/api/v1 (Server URL = <origin>/komga),
+    // which is NOT under /api — so without this exception the middleware treated it as a page and
+    // redirected to /login, whose HTML the source then failed to parse as JSON ("unrecognized
+    // token '<'"). Each facade handler validates the key itself, like /api/opds.
+    it('should pass /komga/api requests through to their self-authenticating handlers', async () => {
+        for (const pathname of ['/komga/api/v1/libraries', '/komga/api/v1/series/abc/books', '/komga/api/v1/books/x/pages/1']) {
+            mocks.getToken.mockResolvedValueOnce(null); // Paperback has no session cookie
+            const res = await middleware(createReq(pathname)) as Response;
+
+            expect(res?.status, `${pathname} must not be blocked by the middleware`).not.toBe(401);
+            expect(res?.headers.get('Location'), `${pathname} must not redirect`).toBeNull();
+            expect(res.headers.get('x-middleware-request-x-pathname')).toBe(pathname);
+        }
+    });
+
+    it('still guards the rest of /komga (a page path) like any other UI route', async () => {
+        mocks.getToken.mockResolvedValueOnce(null);
+        const res = await middleware(createReq('/komga')) as Response;
+        expect([302, 307]).toContain(res?.status);
+        expect(res?.headers.get('Location')).toMatch(/\/login/);
+    });
+
     // Admin auto-logout: once the jwt callback flags a session as expired the cookie holds a
     // truthy { error: "SessionExpired" } token. `isAuth = !!token` treated that as logged-in,
     // leaving enforcement entirely to a client-side effect. The middleware must reject it.

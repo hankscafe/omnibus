@@ -16,7 +16,10 @@ export async function middleware(req: NextRequest) {
   const isAuthPage = pathname.startsWith('/login')
   const isAdminPage = pathname.startsWith('/admin')
   const isSetupPage = pathname.startsWith('/setup')
-  const isApiRoute = pathname.startsWith('/api')
+  // #206: the Komga-compatible facade lives at /komga/api/v1 (Paperback's built-in source appends
+  // /api/v1 to a Server URL of <origin>/komga). It is an API surface, not a page — without this a
+  // Basic-only client was redirected to /login and parsed the HTML as JSON.
+  const isApiRoute = pathname.startsWith('/api') || pathname.startsWith('/komga/api')
 
   // --- 1. API ROUTE PROTECTION (Returns 401 JSON) ---
   if (isApiRoute) {
@@ -34,6 +37,7 @@ export async function middleware(req: NextRequest) {
         '/api/uploads',       // Serves public avatars and banners
         '/api/opds',          // Serves uploaded files but checks for valid keys in the route handler
         '/api/koreader',      // KOReader devices auth via x-auth-user/x-auth-key (no NextAuth cookie); each handler self-validates
+        '/komga/api',         // Komga-compatible facade for Paperback (#206): Basic auth = API key, each handler self-validates
         '/api/internal'       // Rust engine callbacks (notify/log) auth via X-Internal-Secret (no NextAuth cookie); each handler self-validates (issue #178)
     ];
     

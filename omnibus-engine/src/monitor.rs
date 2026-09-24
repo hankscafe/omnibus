@@ -43,6 +43,7 @@ pub struct MonitorOutput {
     pub candidates: Vec<MonitorCandidate>,
 }
 
+#[derive(Clone)]
 struct SeriesRec {
     id: String,
     name: String,
@@ -80,6 +81,8 @@ type StrayMap = HashMap<String, StraySkeleton>;
 enum StrayAction {
     Relocated,
     Deleted,
+    /// Its volume isn't in the library and the host provably isn't it — the row is removed.
+    Evicted,
 }
 
 /// Which local series a Metron upcoming issue belongs to (#208).
@@ -98,7 +101,9 @@ enum MetronMatch {
 /// it is within a year (or when either side has no year), and refused when it is clearly another
 /// era's volume. Two or more same-name series that the year cannot tell apart are AMBIGUOUS and the
 /// issue is skipped: before #208 this took the first row in table order, which filed every upcoming
-/// "X-Men" under whichever of seven X-Men volumes was inserted first.
+/// "X-Men" under whichever of seven X-Men volumes was inserted first. A family whose every volume
+/// has a recorded year and none is within a year of Metron's is NO MATCH — the volume isn't in the
+/// library (his Uncanny X-Men 2013/2016/2019 against the 2024 run's upcoming issues).
 fn match_series_for_metron_issue(
     series: &[SeriesRec],
     m_series_id: Option<&str>,
@@ -141,8 +146,58 @@ fn match_series_for_metron_issue(
             let near: Vec<usize> = candidates.iter().copied()
                 .filter(|&i| series[i].year != 0 && (series[i].year - y).abs() <= 1)
                 .collect();
-            if near.len() == 1 { MetronMatch::Matched(near[0]) } else { MetronMatch::Ambiguous { candidates: n } }
+            match near.len() {
+                1 => MetronMatch::Matched(near[0]),
+                0 if candidates.iter().all(|&i| series[i].year != 0) => MetronMatch::NoMatch,
+                _ => MetronMatch::Ambiguous { candidates: n },
+            }
         }
+    }
+}
+
+/// The Metron series id a local series is known by: its own id when it came from Metron, else the
+/// cross-provider metronId the matcher stored.
+fn metron_identity(s: &SeriesRec) -> Option<&str> {
+    if s.metadata_source == "METRON" { s.metadata_id.as_deref() } else { s.metron_id.as_deref() }
+}
+
+/// Is a stray's host series provably NOT the volume the Metron issue belongs to? A Metron identity
+/// on both sides decides; otherwise both start years must be known and more than a year apart.
+/// Anything short of proof is false — a doubt never deletes a row.
+fn stray_host_is_misfiled(host: &SeriesRec, m_series_id: Option<&str>, year_began: Option<i32>) -> bool {
+    if let (Some(own), Some(msid)) = (metron_identity(host), m_series_id.filter(|s| !s.is_empty())) {
+        return own != msid;
+    }
+    matches!(year_began, Some(y) if host.year != 0 && (host.year - y).abs() > 1)
+}
+
+/// #208 round 2: a Metron issue with no single local home (its volume isn't in the library, or the
+/// family can't be settled) whose file-less METRON skeleton sits under a series that provably isn't
+/// its volume — the pre-#208 first-in-table guess — is removed. Nothing is re-created in its place:
+/// the matcher no longer files the issue anywhere, and if the right volume is added later the
+/// monitor fills it there. None = no stray for this issue, or the host can't be proven wrong.
+async fn evict_misfiled_stray(
+    db: &Db,
+    series: &[SeriesRec],
+    issues: &mut HashMap<String, Vec<IssueRec>>,
+    strays: &mut StrayMap,
+    m_id: &str,
+    m_series_id: Option<&str>,
+    year_began: Option<i32>,
+) -> Option<StrayAction> {
+    let stray = strays.get(m_id)?.clone();
+    let host = series.iter().find(|s| s.id == stray.series_id)?;
+    if !stray_host_is_misfiled(host, m_series_id, year_began) {
+        return None;
+    }
+    match sqlx::query(r#"DELETE FROM "Issue" WHERE id = $1"#).bind(&stray.issue_id).execute(&db.pool).await {
+        Ok(_) => {
+            if let Some(b) = issues.get_mut(&stray.series_id) { b.retain(|i| i.id != stray.issue_id); }
+            strays.remove(m_id);
+            log::info!("[Series Monitor] Removed stray skeleton #{} (Metron issue {}) from series {}: it belongs to a volume that isn't in the library (#208).", stray.number, m_id, stray.series_id);
+            Some(StrayAction::Evicted)
+        }
+        Err(e) => { log::warn!("[Series Monitor] Could not remove stray skeleton {}: {:?}", stray.issue_id, e); None }
     }
 }
 
@@ -228,7 +283,7 @@ async fn family_audit(
         return;
     }
     let total = targets.len();
-    let (mut fetched, mut relocated, mut deleted, mut left) = (0usize, 0usize, 0usize, 0usize);
+    let (mut fetched, mut relocated, mut deleted, mut evicted, mut left) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for (m_id, host_idx) in targets.into_iter().take(FAMILY_AUDIT_BUDGET) {
         let url = format!("https://metron.cloud/api/issue/{}/", m_id);
         let (status, data) = match crate::metadata::metron_fetch(db, client, auth, &url, 15, 2, None).await {
@@ -249,17 +304,22 @@ async fn family_audit(
                 match heal_stray_skeleton(db, issues, strays, &m_id, &series[idx].id).await {
                     Some(StrayAction::Relocated) => relocated += 1,
                     Some(StrayAction::Deleted) => deleted += 1,
-                    None => left += 1,
+                    Some(StrayAction::Evicted) | None => left += 1,
                 }
             }
             MetronMatch::Matched(_) => {}
-            MetronMatch::NoMatch | MetronMatch::Ambiguous { .. } => left += 1,
+            MetronMatch::NoMatch | MetronMatch::Ambiguous { .. } => {
+                match evict_misfiled_stray(db, series, issues, strays, &m_id, m_series_id.as_deref(), year_began).await {
+                    Some(_) => evicted += 1,
+                    None => left += 1,
+                }
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
     notes.push(format!(
-        "[Phase 1] #208 audit: checked {} of {} Metron skeleton(s) in same-name families; relocated {}, dropped {}, left {} as they were.",
-        fetched, total, relocated, deleted, left
+        "[Phase 1] #208 audit: checked {} of {} Metron skeleton(s) in same-name families; relocated {}, dropped {}, removed {} (volume not in the library), left {} as they were.",
+        fetched, total, relocated, deleted, evicted, left
     ));
 }
 
@@ -463,7 +523,7 @@ async fn phase1_metron(
     // and what the in-window heal did.
     let mut seen: HashSet<String> = HashSet::new();
     let mut skipped: std::collections::BTreeMap<(String, Option<i32>), (usize, usize)> = std::collections::BTreeMap::new();
-    let (mut relocated, mut deleted) = (0usize, 0usize);
+    let (mut relocated, mut deleted, mut evicted) = (0usize, 0usize, 0usize);
 
     for m in &metron_issues {
         let m_id = jstr(m.get("id")).unwrap_or_default();
@@ -487,9 +547,17 @@ async fn phase1_metron(
 
         let idx = match match_series_for_metron_issue(series, m_series_id.as_deref(), &m_series_name, &m_pub_name, year_began) {
             MetronMatch::Matched(idx) => idx,
-            MetronMatch::NoMatch => continue,
-            MetronMatch::Ambiguous { candidates: n } => {
-                skipped.entry((m_series_raw.to_string(), year_began)).or_insert((0, n)).0 += 1;
+            unhoused => {
+                // No single home: a skeleton the old first-in-table guess filed for it under a volume
+                // that provably isn't its own goes (a hash miss for nearly every issue in the list).
+                if !m_id.is_empty()
+                    && evict_misfiled_stray(db, series, issues, strays, &m_id, m_series_id.as_deref(), year_began).await.is_some()
+                {
+                    evicted += 1;
+                }
+                if let MetronMatch::Ambiguous { candidates: n } = unhoused {
+                    skipped.entry((m_series_raw.to_string(), year_began)).or_insert((0, n)).0 += 1;
+                }
                 continue;
             }
         };
@@ -501,7 +569,7 @@ async fn phase1_metron(
             match heal_stray_skeleton(db, issues, strays, &m_id, &s.id).await {
                 Some(StrayAction::Relocated) => relocated += 1,
                 Some(StrayAction::Deleted) => deleted += 1,
-                None => {}
+                Some(StrayAction::Evicted) | None => {}
             }
         }
 
@@ -560,8 +628,11 @@ async fn phase1_metron(
             count, name, year.map(|y| format!(" (began {})", y)).unwrap_or_default(), n
         ));
     }
-    if relocated + deleted > 0 {
-        notes.push(format!("[Phase 1] #208 heal: relocated {} mis-filed skeleton(s) to the volume Metron names, dropped {} duplicate(s).", relocated, deleted));
+    if relocated + deleted + evicted > 0 {
+        notes.push(format!(
+            "[Phase 1] #208 heal: relocated {} mis-filed skeleton(s) to the volume Metron names, dropped {} duplicate(s), removed {} belonging to a volume not in the library.",
+            relocated, deleted, evicted
+        ));
     }
     family_audit(db, client, &(user.to_string(), pass.to_string()), series, issues, strays, &seen, notes).await;
 }
@@ -900,8 +971,25 @@ mod tests {
     fn metron_match_never_guesses_between_same_name_volumes_without_a_year() {
         let series = xmen_family();
         assert_eq!(match_series_for_metron_issue(&series, Some("7914"), "xmen", "marvel", None), MetronMatch::Ambiguous { candidates: 3 });
-        // A year none of them began in, and more than one neighbour within a year → still no guess.
-        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "marvel", Some(2016)), MetronMatch::Ambiguous { candidates: 3 });
+    }
+
+    #[test]
+    fn metron_match_finds_no_home_when_no_same_name_volume_is_within_a_year() {
+        // #208 round 2: his Uncanny X-Men family is 2013 / 2016 / 2019 and Metron's upcoming issues
+        // are the 2024 run he doesn't own. The year rules every local volume out — that is "not in
+        // the library", not a family the year can't settle.
+        let uncanny = vec![
+            rec("u2013", "Uncanny X-Men", "Marvel", 2013, "COMICVINE", Some("65678"), None),
+            rec("u2016", "Uncanny X-Men", "Marvel", 2016, "COMICVINE", Some("90001"), None),
+            rec("u2019", "Uncanny X-Men", "Marvel", 2019, "COMICVINE", Some("120001"), None),
+        ];
+        assert_eq!(match_series_for_metron_issue(&uncanny, Some("8106"), "uncannyxmen", "marvel", Some(2024)), MetronMatch::NoMatch);
+        // A year between the volumes that none of them is within a year of: no home either.
+        assert_eq!(match_series_for_metron_issue(&xmen_family(), None, "xmen", "marvel", Some(2016)), MetronMatch::NoMatch);
+        // A same-name volume with no recorded year could be the one — that stays ambiguous.
+        let mut with_unknown = uncanny.clone();
+        with_unknown.push(rec("u0", "Uncanny X-Men", "Marvel", 0, "COMICVINE", None, None));
+        assert_eq!(match_series_for_metron_issue(&with_unknown, None, "uncannyxmen", "marvel", Some(2024)), MetronMatch::Ambiguous { candidates: 4 });
     }
 
     #[test]
@@ -1025,6 +1113,54 @@ mod tests {
         let targets = family_audit_targets(&series, &strays, &seen);
 
         assert_eq!(targets, vec![("172602".to_string(), 0usize), ("172650".to_string(), 1usize)]);
+    }
+
+    // ==== #208 round 2 (anacronismo): X-Men (2013) healed, Uncanny X-Men (2013) did not — the heal
+    // only moved a stray TO a matched local volume, and he doesn't own Uncanny X-Men (2024), so its
+    // upcoming #36-38 had no home to move to and stayed on the 2013 run. A stray whose host is
+    // provably another volume, for an issue with no single local home, is now evicted.
+
+    #[test]
+    fn a_host_is_misfiled_only_when_the_year_or_the_metron_id_proves_it() {
+        let host = |year: i32, source: &str, meta: Option<&str>, metron: Option<&str>| rec("h", "Uncanny X-Men", "Marvel", year, source, meta, metron);
+        // Began 2013, Metron says the issue's volume began 2024 → not this volume.
+        assert!(stray_host_is_misfiled(&host(2013, "COMICVINE", Some("65678"), None), Some("8106"), Some(2024)));
+        // Within a year (cover-date drift) → could be it; never evicted on a doubt.
+        assert!(!stray_host_is_misfiled(&host(2023, "COMICVINE", None, None), None, Some(2024)));
+        // No recorded year on the host, or no year from Metron, and no ids → nothing proves it.
+        assert!(!stray_host_is_misfiled(&host(0, "COMICVINE", None, None), Some("8106"), Some(2024)));
+        assert!(!stray_host_is_misfiled(&host(2013, "COMICVINE", None, None), Some("8106"), None));
+        // A Metron identity decides before the year: another Metron series is another volume even in
+        // the same year; the Metron series itself is home.
+        assert!(stray_host_is_misfiled(&host(2024, "COMICVINE", None, Some("9000")), Some("8106"), Some(2024)));
+        assert!(stray_host_is_misfiled(&host(2024, "METRON", Some("9000"), None), Some("8106"), Some(2024)));
+        assert!(!stray_host_is_misfiled(&host(2013, "COMICVINE", None, Some("8106")), Some("8106"), Some(2024)));
+    }
+
+    #[tokio::test]
+    async fn evict_drops_a_stray_whose_volume_is_not_in_the_library() {
+        let db = fixture("evict").await;
+        insert_series(&db, "u2013", "Uncanny X-Men", "Marvel", 2013, "65678", "COMICVINE", 0, None).await;
+        insert_series(&db, "u2016", "Uncanny X-Men", "Marvel", 2016, "90001", "COMICVINE", 0, None).await;
+        insert_series(&db, "u0", "Uncanny X-Men", "Marvel", 0, "70000", "COMICVINE", 0, None).await;
+        insert_issue(&db, "own35", "u2013", "35", Some("/lib/UXM 035.cbz"), 0, None, None, Some("65678-35"), Some("COMICVINE")).await;
+        insert_issue(&db, "stray36", "u2013", "36", None, 0, None, None, Some("174666"), Some("METRON")).await;
+        insert_issue(&db, "stray37", "u0", "37", None, 0, None, None, Some("174667"), Some("METRON")).await;
+        let (series, mut issues, _coverage, mut strays) = load_state(&db).await.unwrap();
+
+        let action = evict_misfiled_stray(&db, &series, &mut issues, &mut strays, "174666", Some("8106"), Some(2024)).await;
+
+        assert_eq!(action, Some(StrayAction::Evicted));
+        let left: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE id = 'stray36'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(left, 0, "Uncanny X-Men (2024) #36 no longer shows missing from the 2013 run");
+        assert_eq!(issues["u2013"].iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec!["own35"], "the run's own issues are untouched");
+        assert!(!strays.contains_key("174666"));
+        // A host with no recorded year can't be proven wrong → left as it is.
+        assert_eq!(evict_misfiled_stray(&db, &series, &mut issues, &mut strays, "174667", Some("8106"), Some(2024)).await, None);
+        let kept: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE id = 'stray37'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(kept, 1);
+        // No stray for this Metron issue (the common case for the industry-wide list) → nothing.
+        assert_eq!(evict_misfiled_stray(&db, &series, &mut issues, &mut strays, "999999", Some("8106"), Some(2024)).await, None);
     }
 
     #[test]

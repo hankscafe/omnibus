@@ -66,6 +66,7 @@ model ApiKey {
   id          String    @id @default(cuid())
   name        String
   keyHash     String    @unique
+  syncKeyHash String?   @unique
   prefix      String
   
   userId      String
@@ -624,10 +625,11 @@ model ReadingListItem {
 }
 
 model OpdsKey {
-  id         String    @id @default(cuid())
-  name       String
-  keyHash    String    @unique
-  prefix     String
+  id          String    @id @default(cuid())
+  name        String
+  keyHash     String    @unique
+  syncKeyHash String?   @unique
+  prefix      String
   
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)

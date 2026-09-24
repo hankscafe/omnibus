@@ -9,7 +9,7 @@ use sqlx::Row;
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::discover::is_released_yet;
 use crate::metadata::is_same_issue;
@@ -53,6 +53,9 @@ struct SeriesRec {
     monitored: bool,
     is_manga: bool,
     cover_url: Option<String>,
+    /// The cross-provider Metron series id the matcher stores on a ComicVine-sourced series
+    /// (Series.metronId). Lets the Oracle anchor on an id instead of a name for such series (#208).
+    metron_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -61,6 +64,203 @@ struct IssueRec {
     number: String,
     file_path: Option<String>,
     release_date: Option<String>,
+}
+
+/// A file-less, non-lane Issue row the Metron pass created (metadataSource METRON), keyed by its
+/// Metron issue id — the rows #208's heal may relocate or drop. A row with a file is never in here.
+#[derive(Clone, Debug, PartialEq)]
+struct StraySkeleton {
+    issue_id: String,
+    series_id: String,
+    number: String,
+}
+type StrayMap = HashMap<String, StraySkeleton>;
+
+#[derive(Debug, PartialEq)]
+enum StrayAction {
+    Relocated,
+    Deleted,
+}
+
+/// Which local series a Metron upcoming issue belongs to (#208).
+#[derive(Debug, PartialEq)]
+enum MetronMatch {
+    Matched(usize),
+    NoMatch,
+    /// A same-name family the year can't settle — skipped, never guessed.
+    Ambiguous { candidates: usize },
+}
+
+/// Match one Metron issue's series to a local series. Anchors, in order: the Metron id of a
+/// Metron-sourced series; the cross-provider metronId the matcher stored on a ComicVine series;
+/// then normalized name + publisher (when Metron names one) settled by Metron's `year_began` — an
+/// exact start year, else the single sibling within a year. A lone same-name series is accepted when
+/// it is within a year (or when either side has no year), and refused when it is clearly another
+/// era's volume. Two or more same-name series that the year cannot tell apart are AMBIGUOUS and the
+/// issue is skipped: before #208 this took the first row in table order, which filed every upcoming
+/// "X-Men" under whichever of seven X-Men volumes was inserted first.
+fn match_series_for_metron_issue(
+    series: &[SeriesRec],
+    m_series_id: Option<&str>,
+    m_series_name: &str,
+    m_pub_name: &str,
+    year_began: Option<i32>,
+) -> MetronMatch {
+    if let Some(msid) = m_series_id.filter(|s| !s.is_empty()) {
+        if let Some(idx) = series.iter().position(|s| s.metadata_source == "METRON" && s.metadata_id.as_deref() == Some(msid)) {
+            return MetronMatch::Matched(idx);
+        }
+        if let Some(idx) = series.iter().position(|s| s.metron_id.as_deref() == Some(msid)) {
+            return MetronMatch::Matched(idx);
+        }
+    }
+    if m_series_name.is_empty() {
+        return MetronMatch::NoMatch;
+    }
+    let candidates: Vec<usize> = series.iter().enumerate()
+        .filter(|(_, s)| normalize(&s.name) == m_series_name
+            && (m_pub_name.is_empty() || normalize(s.publisher.as_deref().unwrap_or("")) == m_pub_name))
+        .map(|(i, _)| i)
+        .collect();
+    match (candidates.len(), year_began) {
+        (0, _) => MetronMatch::NoMatch,
+        (1, None) => MetronMatch::Matched(candidates[0]),
+        (1, Some(y)) => {
+            let local = series[candidates[0]].year;
+            if local == 0 || (local - y).abs() <= 1 { MetronMatch::Matched(candidates[0]) } else { MetronMatch::NoMatch }
+        }
+        (n, None) => MetronMatch::Ambiguous { candidates: n },
+        (n, Some(y)) => {
+            let exact: Vec<usize> = candidates.iter().copied().filter(|&i| series[i].year == y).collect();
+            if exact.len() == 1 {
+                return MetronMatch::Matched(exact[0]);
+            }
+            if exact.len() > 1 {
+                return MetronMatch::Ambiguous { candidates: n };
+            }
+            let near: Vec<usize> = candidates.iter().copied()
+                .filter(|&i| series[i].year != 0 && (series[i].year - y).abs() <= 1)
+                .collect();
+            if near.len() == 1 { MetronMatch::Matched(near[0]) } else { MetronMatch::Ambiguous { candidates: n } }
+        }
+    }
+}
+
+/// #208 heal: a file-less METRON skeleton for Metron issue `m_id` that sits under a series other
+/// than the one Metron names moves there (the row keeps its id, number, date and cover), or is
+/// dropped when the right series already has that number. In-memory buckets follow the row so the
+/// upsert and candidate logic that run next see the corrected state. None = nothing to do.
+async fn heal_stray_skeleton(
+    db: &Db,
+    issues: &mut HashMap<String, Vec<IssueRec>>,
+    strays: &mut StrayMap,
+    m_id: &str,
+    target_series_id: &str,
+) -> Option<StrayAction> {
+    let stray = strays.get(m_id)?.clone();
+    if stray.series_id == target_series_id {
+        return None;
+    }
+    let target_has_it = issues.get(target_series_id)
+        .map(|b| b.iter().any(|i| is_same_issue(&i.number, &stray.number)))
+        .unwrap_or(false);
+    if target_has_it {
+        match sqlx::query(r#"DELETE FROM "Issue" WHERE id = $1"#).bind(&stray.issue_id).execute(&db.pool).await {
+            Ok(_) => {
+                if let Some(b) = issues.get_mut(&stray.series_id) { b.retain(|i| i.id != stray.issue_id); }
+                strays.remove(m_id);
+                log::info!("[Series Monitor] Dropped stray skeleton #{} (Metron issue {}) from series {}: the volume it belongs to already has it (#208).", stray.number, m_id, stray.series_id);
+                Some(StrayAction::Deleted)
+            }
+            Err(e) => { log::warn!("[Series Monitor] Could not drop stray skeleton {}: {:?}", stray.issue_id, e); None }
+        }
+    } else {
+        match sqlx::query(r#"UPDATE "Issue" SET "seriesId" = $1 WHERE id = $2"#).bind(target_series_id).bind(&stray.issue_id).execute(&db.pool).await {
+            Ok(_) => {
+                let moved = issues.get_mut(&stray.series_id).and_then(|b| {
+                    let pos = b.iter().position(|i| i.id == stray.issue_id)?;
+                    Some(b.remove(pos))
+                });
+                let rec = moved.unwrap_or(IssueRec { id: stray.issue_id.clone(), number: stray.number.clone(), file_path: None, release_date: None });
+                issues.entry(target_series_id.to_string()).or_default().push(rec);
+                if let Some(s) = strays.get_mut(m_id) { s.series_id = target_series_id.to_string(); }
+                log::info!("[Series Monitor] Relocated stray skeleton #{} (Metron issue {}) from series {} to {} (#208).", stray.number, m_id, stray.series_id, target_series_id);
+                Some(StrayAction::Relocated)
+            }
+            Err(e) => { log::warn!("[Series Monitor] Could not relocate stray skeleton {}: {:?}", stray.issue_id, e); None }
+        }
+    }
+}
+
+/// The strays the Oracle window did not cover this run and that live under a series whose
+/// normalized name is shared by at least one other local series — the only shape the pre-#208 match
+/// could misfile. Sorted by Metron issue id so a run is deterministic and the budget cuts predictably.
+fn family_audit_targets(series: &[SeriesRec], strays: &StrayMap, seen: &HashSet<String>) -> Vec<(String, usize)> {
+    let mut families: HashMap<String, usize> = HashMap::new();
+    for s in series { *families.entry(normalize(&s.name)).or_insert(0) += 1; }
+    let idx_by_id: HashMap<&str, usize> = series.iter().enumerate().map(|(i, s)| (s.id.as_str(), i)).collect();
+    let mut out: Vec<(String, usize)> = strays.iter()
+        .filter(|(m_id, _)| !seen.contains(*m_id))
+        .filter_map(|(m_id, st)| {
+            let idx = *idx_by_id.get(st.series_id.as_str())?;
+            (families.get(&normalize(&series[idx].name)).copied().unwrap_or(0) >= 2).then(|| (m_id.clone(), idx))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Out-of-window strays (a mis-filed issue that already shipped, say) get one Metron detail fetch
+/// each — bounded per run, through the shared metron_fetch (cache, burst pacing, quota log) — and
+/// are relocated/dropped by the same rule as the in-window heal. A row the fetch leaves ambiguous
+/// or unmatched is left alone: with no file it costs nothing, and deleting on a doubt is how the
+/// original defect looked from the other side.
+const FAMILY_AUDIT_BUDGET: usize = 40;
+
+#[allow(clippy::too_many_arguments)]
+async fn family_audit(
+    db: &Db, client: &Client, auth: &(String, String),
+    series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap,
+    seen: &HashSet<String>, notes: &mut Vec<String>,
+) {
+    let targets = family_audit_targets(series, strays, seen);
+    if targets.is_empty() {
+        return;
+    }
+    let total = targets.len();
+    let (mut fetched, mut relocated, mut deleted, mut left) = (0usize, 0usize, 0usize, 0usize);
+    for (m_id, host_idx) in targets.into_iter().take(FAMILY_AUDIT_BUDGET) {
+        let url = format!("https://metron.cloud/api/issue/{}/", m_id);
+        let (status, data) = match crate::metadata::metron_fetch(db, client, auth, &url, 15, 2, None).await {
+            Ok(r) => r,
+            Err(e) => { notes.push(format!("[Phase 1] #208 audit stopped early: {}", e)); break; }
+        };
+        fetched += 1;
+        if status != 200 {
+            left += 1;
+            continue;
+        }
+        let m_series_id = jstr(data.pointer("/series/id"));
+        let m_name = normalize(data.pointer("/series/name").and_then(|v| v.as_str()).unwrap_or(""));
+        let m_pub = normalize(data.pointer("/publisher/name").and_then(|v| v.as_str()).unwrap_or(""));
+        let year_began = data.pointer("/series/year_began").and_then(|v| v.as_i64()).map(|y| y as i32).filter(|y| *y != 0);
+        match match_series_for_metron_issue(series, m_series_id.as_deref(), &m_name, &m_pub, year_began) {
+            MetronMatch::Matched(idx) if idx != host_idx => {
+                match heal_stray_skeleton(db, issues, strays, &m_id, &series[idx].id).await {
+                    Some(StrayAction::Relocated) => relocated += 1,
+                    Some(StrayAction::Deleted) => deleted += 1,
+                    None => left += 1,
+                }
+            }
+            MetronMatch::Matched(_) => {}
+            MetronMatch::NoMatch | MetronMatch::Ambiguous { .. } => left += 1,
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    notes.push(format!(
+        "[Phase 1] #208 audit: checked {} of {} Metron skeleton(s) in same-name families; relocated {}, dropped {}, left {} as they were.",
+        fetched, total, relocated, deleted, left
+    ));
 }
 
 /// `str.toLowerCase().replace(/[^a-z0-9]/g, '')` (queue.ts `normalize`).
@@ -105,11 +305,12 @@ async fn update_skeleton_release_date(db: &Db, issue_id: &str, release_date: &st
 
 /// Loads every Series + its issues into memory (parity with `findMany({ include: { issues } })`),
 /// plus, per series, the run numbers its OWNED collected editions cover (#203 COLLECTED coverage).
-async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<IssueRec>>, HashMap<String, Vec<String>>)> {
+async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<IssueRec>>, HashMap<String, Vec<String>>, StrayMap)> {
     let series_rows = sqlx::query(
         // Bool columns are CAST for the Any driver (no SQLite BOOLEAN mapping); nullable monitored
-        // is COALESCEd in SQL — the code always treated NULL as false.
-        r#"SELECT id, name, publisher, year, "metadataId", "metadataSource", COALESCE(CAST(monitored AS INTEGER), 0) AS monitored, CAST("isManga" AS INTEGER) AS "isManga", "coverUrl" FROM "Series""#,
+        // is COALESCEd in SQL — the code always treated NULL as false. metronId is an integer column
+        // on both dialects; CAST to TEXT reads it uniformly (NULL stays NULL).
+        r#"SELECT id, name, publisher, year, "metadataId", "metadataSource", COALESCE(CAST(monitored AS INTEGER), 0) AS monitored, CAST("isManga" AS INTEGER) AS "isManga", "coverUrl", CAST("metronId" AS TEXT) AS "metronId" FROM "Series""#,
     ).fetch_all(&db.pool).await?;
     let series: Vec<SeriesRec> = series_rows.iter().map(|r| SeriesRec {
         id: r.get("id"),
@@ -121,7 +322,19 @@ async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<Issu
         monitored: r.get::<i64, _>("monitored") != 0,
         is_manga: r.get::<i64, _>("isManga") != 0,
         cover_url: r.get("coverUrl"),
+        metron_id: r.get::<Option<String>, _>("metronId").filter(|s| !s.is_empty()),
     }).collect();
+
+    // #208: the Metron pass's own file-less rows, by Metron issue id — what the heal may move or drop.
+    let stray_rows = sqlx::query(
+        r#"SELECT id, "seriesId", "metadataId", number FROM "Issue"
+           WHERE "metadataSource" = 'METRON' AND "isAnnual" = false AND "attachedVolumeId" IS NULL
+             AND ("filePath" IS NULL OR "filePath" = '') AND "metadataId" IS NOT NULL AND "metadataId" <> ''"#,
+    ).fetch_all(&db.pool).await?;
+    let mut strays: StrayMap = HashMap::new();
+    for r in &stray_rows {
+        strays.insert(r.get("metadataId"), StraySkeleton { issue_id: r.get("id"), series_id: r.get("seriesId"), number: r.get("number") });
+    }
 
     // #203: annual rows are invisible to the monitor — its candidates come from the PARENT
     // provider volume, so an owned "Annual #1" must never satisfy an is_already_in_library
@@ -158,7 +371,7 @@ async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<Issu
         }
     }
     coverage.retain(|_, v| !v.is_empty());
-    Ok((series, issues, coverage))
+    Ok((series, issues, coverage, strays))
 }
 
 fn is_already_in_library(issues: &[IssueRec], num: &str) -> bool {
@@ -177,6 +390,7 @@ fn in_library_or_covered(issues: &[IssueRec], covered: Option<&Vec<String>>, num
 async fn phase1_metron(
     db: &Db, client: &Client, user: &str, pass: &str,
     series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>, coverage: &HashMap<String, Vec<String>>,
+    strays: &mut StrayMap,
     skeletons_created: &mut i32, candidates: &mut Vec<MonitorCandidate>, notes: &mut Vec<String>,
 ) {
     use chrono::{Duration, Utc};
@@ -244,33 +458,53 @@ async fn phase1_metron(
 
     notes.push(format!("[Phase 1] Metron Oracle fetched {} global upcoming releases.", metron_issues.len()));
 
+    // #208 bookkeeping: every Metron issue id this window covered (the family audit skips them),
+    // the same-name families the year couldn't settle (one note per name+year, not per issue),
+    // and what the in-window heal did.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut skipped: std::collections::BTreeMap<(String, Option<i32>), (usize, usize)> = std::collections::BTreeMap::new();
+    let (mut relocated, mut deleted) = (0usize, 0usize);
+
     for m in &metron_issues {
+        let m_id = jstr(m.get("id")).unwrap_or_default();
+        if !m_id.is_empty() { seen.insert(m_id.clone()); }
         let m_series_id = jstr(m.pointer("/series/id"));
-        let m_series_name = normalize(m.pointer("/series/name").and_then(|v| v.as_str()).unwrap_or(""));
+        let m_series_raw = m.pointer("/series/name").and_then(|v| v.as_str()).unwrap_or("");
+        let m_series_name = normalize(m_series_raw);
         let m_pub_name = normalize(
             m.pointer("/publisher/name").and_then(|v| v.as_str())
                 .or_else(|| m.pointer("/series/publisher/name").and_then(|v| v.as_str()))
                 .unwrap_or(""),
         );
+        // Metron's issue list nests series {id, name, volume, year_began} — the start year is what
+        // tells seven same-name volumes apart.
+        let year_began = m.pointer("/series/year_began").and_then(|v| v.as_i64()).map(|y| y as i32).filter(|y| *y != 0);
         let m_num_str = match jstr(m.get("number")).or_else(|| jstr(m.get("issue"))) {
             Some(s) => s,
             None => continue,
         };
         let m_num: f64 = match m_num_str.parse() { Ok(n) => n, Err(_) => continue };
 
-        // Match by Metron id, else by normalized name (+ publisher when present).
-        let matched_idx = m_series_id.as_ref()
-            .and_then(|msid| series.iter().position(|s| s.metadata_source == "METRON" && s.metadata_id.as_deref() == Some(msid.as_str())))
-            .or_else(|| {
-                if m_series_name.is_empty() { return None; }
-                series.iter().position(|s| {
-                    normalize(&s.name) == m_series_name
-                        && (m_pub_name.is_empty() || normalize(s.publisher.as_deref().unwrap_or("")) == m_pub_name)
-                })
-            });
-
-        let Some(idx) = matched_idx else { continue };
+        let idx = match match_series_for_metron_issue(series, m_series_id.as_deref(), &m_series_name, &m_pub_name, year_began) {
+            MetronMatch::Matched(idx) => idx,
+            MetronMatch::NoMatch => continue,
+            MetronMatch::Ambiguous { candidates: n } => {
+                skipped.entry((m_series_raw.to_string(), year_began)).or_insert((0, n)).0 += 1;
+                continue;
+            }
+        };
         let s = &series[idx];
+
+        // #208 heal: a skeleton for this very Metron issue filed under another series moves here
+        // (or goes, if this series already has the number) before the upsert looks at the bucket.
+        if !m_id.is_empty() {
+            match heal_stray_skeleton(db, issues, strays, &m_id, &s.id).await {
+                Some(StrayAction::Relocated) => relocated += 1,
+                Some(StrayAction::Deleted) => deleted += 1,
+                None => {}
+            }
+        }
+
         let issue_date = m.get("store_date").and_then(|v| v.as_str()).filter(|x| !x.is_empty())
             .or_else(|| m.get("cover_date").and_then(|v| v.as_str()).filter(|x| !x.is_empty()))
             .map(|x| x.to_string());
@@ -281,7 +515,6 @@ async fn phase1_metron(
         let existing_pos = bucket.iter().position(|i| i.number.parse::<f64>().ok() == Some(m_num));
         match existing_pos {
             None => {
-                let m_id = jstr(m.get("id")).unwrap_or_default();
                 let name = m.get("name").and_then(|v| v.as_str()).or_else(|| m.get("issue_name").and_then(|v| v.as_str()));
                 let desc = m.get("desc").and_then(|v| v.as_str()).or_else(|| m.get("description").and_then(|v| v.as_str()));
                 let cover = m.get("image").and_then(|v| v.as_str());
@@ -320,6 +553,17 @@ async fn phase1_metron(
             });
         }
     }
+
+    for ((name, year), (count, n)) in &skipped {
+        notes.push(format!(
+            "[Phase 1] Skipped {} upcoming issue(s) of \"{}\"{}: {} local series share the name and the start year can't tell them apart (#208).",
+            count, name, year.map(|y| format!(" (began {})", y)).unwrap_or_default(), n
+        ));
+    }
+    if relocated + deleted > 0 {
+        notes.push(format!("[Phase 1] #208 heal: relocated {} mis-filed skeleton(s) to the volume Metron names, dropped {} duplicate(s).", relocated, deleted));
+    }
+    family_audit(db, client, &(user.to_string(), pass.to_string()), series, issues, strays, &seen, notes).await;
 }
 
 /// Phase 2 — ComicVine: for the 25 oldest monitored CV series, fetch their latest 30 issues, upsert
@@ -455,7 +699,7 @@ async fn phase2_comicvine(
 }
 
 pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
-    let (series, mut issues, coverage) = load_state(&db).await?;
+    let (series, mut issues, coverage, mut strays) = load_state(&db).await?;
     let client = Client::builder().build()?;
 
     let mut skeletons_created = 0;
@@ -473,7 +717,7 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
     }
     let metron_pass = crate::secret_crypto::decrypt_setting(&db.pool, Some(metron_pass)).await.unwrap_or_default();
     if !metron_user.is_empty() && !metron_pass.is_empty() {
-        phase1_metron(&db, &client, &metron_user, &metron_pass, &series, &mut issues, &coverage, &mut skeletons_created, &mut candidates, &mut notes).await;
+        phase1_metron(&db, &client, &metron_user, &metron_pass, &series, &mut issues, &coverage, &mut strays, &mut skeletons_created, &mut candidates, &mut notes).await;
     }
 
     // Phase 2 — ComicVine (only when a key is present).
@@ -549,9 +793,9 @@ mod tests {
         let db = Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
         for ddl in [
             r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER, "metadataId" TEXT,
-                "metadataSource" TEXT, monitored INTEGER, "isManga" INTEGER DEFAULT 0, "coverUrl" TEXT)"#,
+                "metadataSource" TEXT, monitored INTEGER, "isManga" INTEGER DEFAULT 0, "coverUrl" TEXT, "metronId" INTEGER)"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, number TEXT, "filePath" TEXT, "releaseDate" TEXT,
-                "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT)"#,
+                "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT, "metadataId" TEXT, "metadataSource" TEXT)"#,
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, kind TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
@@ -559,10 +803,26 @@ mod tests {
         db
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_series(db: &Db, id: &str, name: &str, publisher: &str, year: i32, meta_id: &str, source: &str, monitored: i32, metron_id: Option<i64>) {
+        sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, "metadataId", "metadataSource", monitored, "isManga", "coverUrl", "metronId")
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,0,NULL,$8)"#)
+            .bind(id).bind(name).bind(publisher).bind(year).bind(meta_id).bind(source).bind(monitored).bind(metron_id)
+            .execute(&db.pool).await.unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_issue(db: &Db, id: &str, series_id: &str, num: &str, path: Option<&str>, annual: i32, lane: Option<&str>, covers: Option<&str>, meta_id: Option<&str>, source: Option<&str>) {
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "filePath", "releaseDate", "isAnnual", "attachedVolumeId", "coversIssues", "metadataId", "metadataSource")
+                       VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9)"#)
+            .bind(id).bind(series_id).bind(num).bind(path).bind(annual).bind(lane).bind(covers).bind(meta_id).bind(source)
+            .execute(&db.pool).await.unwrap();
+    }
+
     #[tokio::test]
     async fn load_state_keeps_lane_rows_out_of_the_run_and_reads_only_owned_coverage() {
         let db = fixture("coverage").await;
-        sqlx::query(r#"INSERT INTO "Series" VALUES ('s1','Absolute Batman','DC',2024,'160294','COMICVINE',1,0,NULL)"#).execute(&db.pool).await.unwrap();
+        insert_series(&db, "s1", "Absolute Batman", "DC", 2024, "160294", "COMICVINE", 1, None).await;
         sqlx::query(r#"INSERT INTO "AttachedVolume" VALUES ('att1','s1','COLLECTED')"#).execute(&db.pool).await.unwrap();
         for (id, num, path, annual, lane, covers) in [
             ("run3", "3", Some("/lib/AB 003.cbz"), 0, None, None),             // the run, on disk
@@ -571,12 +831,10 @@ mod tests {
             ("vol3", "3", Some("/lib/AB Vol 3.cbz"), 0, Some("att1"), Some("15-23")), // an OWNED trade, numbered "3"
             ("vol1", "1", None, 0, Some("att1"), Some("1-6")),                 // a trade NOT owned — covers nothing
         ] {
-            sqlx::query(r#"INSERT INTO "Issue" VALUES ($1,'s1',$2,$3,NULL,$4,$5,$6)"#)
-                .bind(id).bind(num).bind(path).bind(annual).bind(lane).bind(covers)
-                .execute(&db.pool).await.unwrap();
+            insert_issue(&db, id, "s1", num, path, annual, lane, covers, None, None).await;
         }
 
-        let (series, issues, coverage) = load_state(&db).await.unwrap();
+        let (series, issues, coverage, _strays) = load_state(&db).await.unwrap();
 
         assert_eq!(series.len(), 1);
         let mut run: Vec<&str> = issues["s1"].iter().map(|i| i.number.as_str()).collect();
@@ -587,6 +845,186 @@ mod tests {
         assert!(!is_already_in_library(&issues["s1"], "21"));
         assert!(in_library_or_covered(&issues["s1"], coverage.get("s1"), "21"));
         assert!(!in_library_or_covered(&issues["s1"], coverage.get("s1"), "5"));
+    }
+
+    // ==== #208 (anacronismo): Phase 1 matched Metron's upcoming issues to a local series by
+    // normalized name + publisher only and took the first row in table order — every upcoming
+    // "X-Men" issue landed on whichever of his seven X-Men volumes was inserted first (the 2013
+    // run), as METRON skeletons with the 2024 covers. The match is now anchored on the Metron id
+    // (the series' own, or the cross-provider metronId the matcher stores on a ComicVine series),
+    // then on name + publisher + Metron's year_began — and a same-name family that the year can't
+    // settle is skipped, never guessed.
+
+    fn rec(id: &str, name: &str, publisher: &str, year: i32, source: &str, meta_id: Option<&str>, metron_id: Option<&str>) -> SeriesRec {
+        SeriesRec {
+            id: id.into(), name: name.into(), publisher: Some(publisher.into()), year,
+            metadata_id: meta_id.map(|s| s.into()), metadata_source: source.into(),
+            monitored: true, is_manga: false, cover_url: None, metron_id: metron_id.map(|s| s.into()),
+        }
+    }
+
+    fn xmen_family() -> Vec<SeriesRec> {
+        vec![
+            rec("s2013", "X-Men", "Marvel", 2013, "COMICVINE", Some("65678"), None),
+            rec("s2019", "X-Men", "Marvel", 2019, "COMICVINE", Some("122333"), None),
+            rec("s2024", "X-Men", "Marvel", 2024, "COMICVINE", Some("160511"), None),
+        ]
+    }
+
+    #[test]
+    fn metron_match_prefers_the_metron_sourced_series_id() {
+        let mut series = xmen_family();
+        series.push(rec("m2024", "X-Men", "Marvel", 2024, "METRON", Some("7914"), None));
+        // Even with a same-name ComicVine 2024 row earlier in the table, the Metron-sourced id wins.
+        assert_eq!(match_series_for_metron_issue(&series, Some("7914"), "xmen", "marvel", Some(2024)), MetronMatch::Matched(3));
+    }
+
+    #[test]
+    fn metron_match_uses_the_cross_provider_metron_id_on_a_comicvine_series() {
+        let mut series = xmen_family();
+        series[2].metron_id = Some("7914".into());
+        // The matcher stored metronId on the ComicVine row; the id decides before any name is compared.
+        assert_eq!(match_series_for_metron_issue(&series, Some("7914"), "xmen", "marvel", None), MetronMatch::Matched(2));
+    }
+
+    #[test]
+    fn metron_match_picks_the_same_name_volume_whose_year_began_agrees() {
+        let series = xmen_family();
+        // 2013 sits first in table order — the exact bug; the year picks 2024.
+        assert_eq!(match_series_for_metron_issue(&series, Some("7914"), "xmen", "marvel", Some(2024)), MetronMatch::Matched(2));
+        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "marvel", Some(2019)), MetronMatch::Matched(1));
+        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "marvel", Some(2013)), MetronMatch::Matched(0));
+    }
+
+    #[test]
+    fn metron_match_never_guesses_between_same_name_volumes_without_a_year() {
+        let series = xmen_family();
+        assert_eq!(match_series_for_metron_issue(&series, Some("7914"), "xmen", "marvel", None), MetronMatch::Ambiguous { candidates: 3 });
+        // A year none of them began in, and more than one neighbour within a year → still no guess.
+        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "marvel", Some(2016)), MetronMatch::Ambiguous { candidates: 3 });
+    }
+
+    #[test]
+    fn metron_match_falls_back_to_the_only_neighbour_within_a_year() {
+        let series = xmen_family();
+        // Metron says 2025 (cover-date vs store-date drift): only the 2024 run is within a year.
+        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "marvel", Some(2025)), MetronMatch::Matched(2));
+        let close = vec![
+            rec("a", "Batman", "DC", 2023, "COMICVINE", None, None),
+            rec("b", "Batman", "DC", 2025, "COMICVINE", None, None),
+        ];
+        // Two volumes each a year away → ambiguous, skipped.
+        assert_eq!(match_series_for_metron_issue(&close, None, "batman", "dc", Some(2024)), MetronMatch::Ambiguous { candidates: 2 });
+    }
+
+    #[test]
+    fn metron_match_rejects_a_lone_same_name_volume_from_a_different_era() {
+        let only_2013 = vec![rec("s2013", "X-Men", "Marvel", 2013, "COMICVINE", Some("65678"), None)];
+        // The library has only the 2013 run: a 2024 upcoming issue is a volume it doesn't own.
+        assert_eq!(match_series_for_metron_issue(&only_2013, Some("7914"), "xmen", "marvel", Some(2024)), MetronMatch::NoMatch);
+        // Within a year of it, or with no year from Metron at all (the pre-#208 behaviour), it matches.
+        assert_eq!(match_series_for_metron_issue(&only_2013, None, "xmen", "marvel", Some(2014)), MetronMatch::Matched(0));
+        assert_eq!(match_series_for_metron_issue(&only_2013, None, "xmen", "marvel", None), MetronMatch::Matched(0));
+        // A local series with no year recorded can't be told apart by year — accept it as before.
+        let unknown_year = vec![rec("s0", "X-Men", "Marvel", 0, "COMICVINE", None, None)];
+        assert_eq!(match_series_for_metron_issue(&unknown_year, None, "xmen", "marvel", Some(2024)), MetronMatch::Matched(0));
+    }
+
+    #[test]
+    fn metron_match_requires_the_publisher_when_metron_names_one() {
+        let series = vec![
+            rec("img", "X-Men", "Image", 2024, "COMICVINE", None, None),
+            rec("mvl", "X-Men", "Marvel", 2024, "COMICVINE", None, None),
+        ];
+        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "marvel", Some(2024)), MetronMatch::Matched(1));
+        // Two exact-year rows and no publisher to split them → skipped, not the first one.
+        assert_eq!(match_series_for_metron_issue(&series, None, "xmen", "", Some(2024)), MetronMatch::Ambiguous { candidates: 2 });
+        assert_eq!(match_series_for_metron_issue(&series, None, "wolverine", "marvel", Some(2024)), MetronMatch::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn load_state_reads_metron_ids_and_the_file_less_metron_skeletons() {
+        let db = fixture("strays").await;
+        insert_series(&db, "s2013", "X-Men", "Marvel", 2013, "65678", "COMICVINE", 0, None).await;
+        insert_series(&db, "s2024", "X-Men", "Marvel", 2024, "160511", "COMICVINE", 1, Some(7914)).await;
+        insert_issue(&db, "stray34", "s2013", "34", None, 0, None, None, Some("172602"), Some("METRON")).await;      // file-less METRON → a stray candidate
+        insert_issue(&db, "owned35", "s2013", "35", Some("/lib/x35.cbz"), 0, None, None, Some("172603"), Some("METRON")).await; // has a file → never touched
+        insert_issue(&db, "cv36", "s2013", "36", None, 0, None, None, Some("99"), Some("COMICVINE")).await;           // ComicVine skeleton → not Metron's
+        insert_issue(&db, "lane1", "s2013", "1", None, 0, Some("att1"), None, Some("172700"), Some("METRON")).await;   // a lane row → invisible
+
+        let (series, _issues, _coverage, strays) = load_state(&db).await.unwrap();
+
+        let by_id: HashMap<&str, &SeriesRec> = series.iter().map(|s| (s.id.as_str(), s)).collect();
+        assert_eq!(by_id["s2024"].metron_id.as_deref(), Some("7914"), "metronId is read as text on every dialect");
+        assert_eq!(by_id["s2013"].metron_id, None);
+        assert_eq!(strays.len(), 1);
+        let stray = &strays["172602"];
+        assert_eq!((stray.issue_id.as_str(), stray.series_id.as_str(), stray.number.as_str()), ("stray34", "s2013", "34"));
+    }
+
+    #[tokio::test]
+    async fn heal_relocates_a_stray_skeleton_to_the_volume_metron_names() {
+        let db = fixture("relocate").await;
+        insert_series(&db, "s2013", "X-Men", "Marvel", 2013, "65678", "COMICVINE", 0, None).await;
+        insert_series(&db, "s2024", "X-Men", "Marvel", 2024, "160511", "COMICVINE", 1, None).await;
+        insert_issue(&db, "stray34", "s2013", "34", None, 0, None, None, Some("172602"), Some("METRON")).await;
+        let (_series, mut issues, _coverage, mut strays) = load_state(&db).await.unwrap();
+
+        let action = heal_stray_skeleton(&db, &mut issues, &mut strays, "172602", "s2024").await;
+
+        assert_eq!(action, Some(StrayAction::Relocated));
+        let owner: String = sqlx::query_scalar(r#"SELECT "seriesId" FROM "Issue" WHERE id = 'stray34'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(owner, "s2024", "the row moved; its id, number and cover survive");
+        // The in-memory buckets follow the row, so the upsert that follows sees #34 under 2024 and
+        // the 2013 run no longer reports it missing.
+        assert!(issues.get("s2013").map(|b| b.is_empty()).unwrap_or(true));
+        assert_eq!(issues["s2024"].iter().map(|i| i.number.as_str()).collect::<Vec<_>>(), vec!["34"]);
+        assert_eq!(strays["172602"].series_id, "s2024");
+        // Already where it belongs → nothing to do.
+        assert_eq!(heal_stray_skeleton(&db, &mut issues, &mut strays, "172602", "s2024").await, None);
+        assert_eq!(heal_stray_skeleton(&db, &mut issues, &mut strays, "no-such-id", "s2024").await, None);
+    }
+
+    #[tokio::test]
+    async fn heal_deletes_a_stray_when_the_right_volume_already_has_the_number() {
+        let db = fixture("delete").await;
+        insert_series(&db, "s2013", "X-Men", "Marvel", 2013, "65678", "COMICVINE", 0, None).await;
+        insert_series(&db, "s2024", "X-Men", "Marvel", 2024, "160511", "COMICVINE", 1, None).await;
+        insert_issue(&db, "stray34", "s2013", "34", None, 0, None, None, Some("172602"), Some("METRON")).await;
+        insert_issue(&db, "own34", "s2024", "034", Some("/lib/X-Men 034.cbz"), 0, None, None, Some("160511-34"), Some("COMICVINE")).await;
+        let (_series, mut issues, _coverage, mut strays) = load_state(&db).await.unwrap();
+
+        let action = heal_stray_skeleton(&db, &mut issues, &mut strays, "172602", "s2024").await;
+
+        assert_eq!(action, Some(StrayAction::Deleted));
+        let left: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE id = 'stray34'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(left, 0, "the 2024 run already has #34 (as \"034\") — the twin is dropped, not duplicated");
+        assert!(issues.get("s2013").map(|b| b.is_empty()).unwrap_or(true));
+        assert_eq!(issues["s2024"].len(), 1);
+        assert!(!strays.contains_key("172602"));
+    }
+
+    #[test]
+    fn family_audit_targets_only_same_name_families_and_ids_the_oracle_did_not_see() {
+        let series = vec![
+            rec("s2013", "X-Men", "Marvel", 2013, "COMICVINE", None, None),
+            rec("s2024", "X-Men", "Marvel", 2024, "COMICVINE", None, None),
+            rec("saga", "Saga", "Image", 2012, "COMICVINE", None, None), // no same-name sibling
+        ];
+        let mut strays: StrayMap = HashMap::new();
+        for (m_id, issue_id, series_id, num) in [
+            ("172602", "x34", "s2013", "34"),   // out-of-window stray in a family → audited
+            ("172640", "x40", "s2013", "40"),   // seen by the Oracle this run → already handled
+            ("172650", "x27", "s2024", "27"),   // in a family, unseen → audited (may well be correct; the fetch decides)
+            ("500", "saga60", "saga", "60"),    // no family → never fetched
+        ] {
+            strays.insert(m_id.into(), StraySkeleton { issue_id: issue_id.into(), series_id: series_id.into(), number: num.into() });
+        }
+        let seen: std::collections::HashSet<String> = ["172640".to_string()].into_iter().collect();
+
+        let targets = family_audit_targets(&series, &strays, &seen);
+
+        assert_eq!(targets, vec![("172602".to_string(), 0usize), ("172650".to_string(), 1usize)]);
     }
 
     #[test]

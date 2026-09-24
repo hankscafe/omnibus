@@ -1,6 +1,7 @@
 import { validateApiKey } from '@/lib/api-auth';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getPublicBaseUrl } from '@/lib/opds-base-url';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,7 @@ export async function GET(req: Request) {
             });
         }
 
-        const baseUrl = new URL(req.url).origin;
+        const baseUrl = getPublicBaseUrl(req);
 
         const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">

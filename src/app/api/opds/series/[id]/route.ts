@@ -6,6 +6,7 @@ import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
 import { countArchivePages, isPageCountable, countArchivePagesViaEngine, isEngineCountable } from '@/lib/utils/archive-pages';
+import { getPublicBaseUrl } from '@/lib/opds-base-url';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         }
 
     const url = new URL(req.url);
-    const baseUrl = url.origin;
+    const baseUrl = getPublicBaseUrl(req);
     
     const resolvedParams = await params;
     const seriesId = resolvedParams.id;

@@ -156,9 +156,11 @@ fn match_series_for_metron_issue(
 }
 
 /// The Metron series id a local series is known by: its own id when it came from Metron, else the
-/// cross-provider metronId the matcher stored.
+/// cross-provider metronId the matcher stored. Numeric only — a Metron-sourced series can carry a
+/// name slug as its metadataId (the sync resolves it by search), which identifies nothing here.
 fn metron_identity(s: &SeriesRec) -> Option<&str> {
-    if s.metadata_source == "METRON" { s.metadata_id.as_deref() } else { s.metron_id.as_deref() }
+    let id = if s.metadata_source == "METRON" { s.metadata_id.as_deref() } else { s.metron_id.as_deref() };
+    id.filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Is a stray's host series provably NOT the volume the Metron issue belongs to? A Metron identity
@@ -247,79 +249,238 @@ async fn heal_stray_skeleton(
     }
 }
 
-/// The strays the Oracle window did not cover this run and that live under a series whose
-/// normalized name is shared by at least one other local series — the only shape the pre-#208 match
-/// could misfile. Sorted by Metron issue id so a run is deterministic and the budget cuts predictably.
-fn family_audit_targets(series: &[SeriesRec], strays: &StrayMap, seen: &HashSet<String>) -> Vec<(String, usize)> {
-    let mut families: HashMap<String, usize> = HashMap::new();
-    for s in series { *families.entry(normalize(&s.name)).or_insert(0) += 1; }
-    let idx_by_id: HashMap<&str, usize> = series.iter().enumerate().map(|(i, s)| (s.id.as_str(), i)).collect();
-    let mut out: Vec<(String, usize)> = strays.iter()
-        .filter(|(m_id, _)| !seen.contains(*m_id))
-        .filter_map(|(m_id, st)| {
-            let idx = *idx_by_id.get(st.series_id.as_str())?;
-            (families.get(&normalize(&series[idx].name)).copied().unwrap_or(0) >= 2).then(|| (m_id.clone(), idx))
-        })
-        .collect();
-    out.sort();
-    out
+/// The out-of-window stray audit (#208). The pre-#208 name guess could file an upcoming issue under
+/// ANY same-name volume — a lone one included (a library with only X-Men 2013 got X-Men 2024's
+/// issues) — so every stray the Oracle window didn't cover is audited once. A stray proven at home
+/// (or one the fetch can't do better on) is remembered under this key, so the Metron cost is paid
+/// once per row instead of every run; the set is pruned to rows that are still strays.
+const AUDIT_CHECKED_KEY: &str = "monitor_stray_audit_checked";
+/// Metron calls the audit may spend per run (detail fetches and issue_list pages alike).
+const AUDIT_BUDGET: usize = 40;
+/// A Metron-sourced volume longer than this many issue_list pages is audited stray by stray instead.
+const WALK_PAGE_CAP: usize = 10;
+
+/// This run's audit work. `singles`: (Metron issue id, host index) — one detail fetch each;
+/// same-name families first (the likeliest mis-files), then by id. `walks`: (host index, the
+/// host's Metron series id, its unchecked stray ids) — a Metron-sourced volume's rows come mostly
+/// from its own id-anchored sync, so one walk of its issue_list settles them all at once.
+#[derive(Debug, Default, PartialEq)]
+struct AuditPlan {
+    singles: Vec<(String, usize)>,
+    walks: Vec<(usize, String, Vec<String>)>,
 }
 
-/// Out-of-window strays (a mis-filed issue that already shipped, say) get one Metron detail fetch
-/// each — bounded per run, through the shared metron_fetch (cache, burst pacing, quota log) — and
-/// are relocated/dropped by the same rule as the in-window heal. A row the fetch leaves ambiguous
-/// or unmatched is left alone: with no file it costs nothing, and deleting on a doubt is how the
-/// original defect looked from the other side.
-const FAMILY_AUDIT_BUDGET: usize = 40;
+fn plan_stray_audit(series: &[SeriesRec], strays: &StrayMap, seen: &HashSet<String>, checked: &HashSet<String>) -> AuditPlan {
+    let mut families: HashMap<String, usize> = HashMap::new();
+    for s in series { *families.entry(normalize(&s.name)).or_insert(0) += 1; }
+    let in_family = |idx: usize| families.get(&normalize(&series[idx].name)).copied().unwrap_or(0) >= 2;
+    let idx_by_id: HashMap<&str, usize> = series.iter().enumerate().map(|(i, s)| (s.id.as_str(), i)).collect();
 
-#[allow(clippy::too_many_arguments)]
-async fn family_audit(
-    db: &Db, client: &Client, auth: &(String, String),
-    series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap,
-    seen: &HashSet<String>, notes: &mut Vec<String>,
-) {
-    let targets = family_audit_targets(series, strays, seen);
-    if targets.is_empty() {
-        return;
-    }
-    let total = targets.len();
-    let (mut fetched, mut relocated, mut deleted, mut evicted, mut left) = (0usize, 0usize, 0usize, 0usize, 0usize);
-    for (m_id, host_idx) in targets.into_iter().take(FAMILY_AUDIT_BUDGET) {
-        let url = format!("https://metron.cloud/api/issue/{}/", m_id);
-        let (status, data) = match crate::metadata::metron_fetch(db, client, auth, &url, 15, 2, None).await {
-            Ok(r) => r,
-            Err(e) => { notes.push(format!("[Phase 1] #208 audit stopped early: {}", e)); break; }
-        };
-        fetched += 1;
-        if status != 200 {
-            left += 1;
-            continue;
+    let mut singles: Vec<(bool, String, usize)> = Vec::new();
+    let mut walks: HashMap<usize, Vec<String>> = HashMap::new();
+    for (m_id, st) in strays {
+        if seen.contains(m_id) || checked.contains(m_id) { continue; }
+        let Some(&idx) = idx_by_id.get(st.series_id.as_str()) else { continue };
+        let host = &series[idx];
+        if host.metadata_source == "METRON" && metron_identity(host).is_some() {
+            walks.entry(idx).or_default().push(m_id.clone());
+        } else {
+            singles.push((!in_family(idx), m_id.clone(), idx));
         }
-        let m_series_id = jstr(data.pointer("/series/id"));
-        let m_name = normalize(data.pointer("/series/name").and_then(|v| v.as_str()).unwrap_or(""));
-        let m_pub = normalize(data.pointer("/publisher/name").and_then(|v| v.as_str()).unwrap_or(""));
-        let year_began = data.pointer("/series/year_began").and_then(|v| v.as_i64()).map(|y| y as i32).filter(|y| *y != 0);
-        match match_series_for_metron_issue(series, m_series_id.as_deref(), &m_name, &m_pub, year_began) {
-            MetronMatch::Matched(idx) if idx != host_idx => {
-                match heal_stray_skeleton(db, issues, strays, &m_id, &series[idx].id).await {
-                    Some(StrayAction::Relocated) => relocated += 1,
-                    Some(StrayAction::Deleted) => deleted += 1,
-                    Some(StrayAction::Evicted) | None => left += 1,
-                }
+    }
+    singles.sort();
+    let mut walks: Vec<(bool, usize, String, Vec<String>)> = walks.into_iter().map(|(idx, mut ids)| {
+        ids.sort();
+        (!in_family(idx), idx, series[idx].metadata_id.clone().unwrap_or_default(), ids)
+    }).collect();
+    walks.sort();
+    AuditPlan {
+        singles: singles.into_iter().map(|(_, m_id, idx)| (m_id, idx)).collect(),
+        walks: walks.into_iter().map(|(_, idx, msid, ids)| (idx, msid, ids)).collect(),
+    }
+}
+
+/// A walked volume's strays, split by whether its own issue_list contains them (input order kept):
+/// the first are at home; the rest are fetched and matched like any other stray.
+fn split_walked(m_ids: &[String], own: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+    m_ids.iter().cloned().partition(|id| own.contains(id))
+}
+
+/// Does an issue_list of `count` issues at `per_page` per page fit under the walk cap?
+fn walk_fits(count: i64, per_page: usize) -> bool {
+    if per_page == 0 { return true; }
+    let pages = (count.max(0) as usize).div_ceil(per_page).max(1);
+    pages <= WALK_PAGE_CAP
+}
+
+async fn load_audit_checked(db: &Db) -> HashSet<String> {
+    let raw: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = $1"#)
+        .bind(AUDIT_CHECKED_KEY).fetch_optional(&db.pool).await.ok().flatten();
+    raw.and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok()).map(|v| v.into_iter().collect()).unwrap_or_default()
+}
+
+/// Persist the checked set, pruned to the ids that are still strays (a downloaded, moved or removed
+/// row needs no memory), sorted so the stored value is stable.
+async fn save_audit_checked(db: &Db, checked: &HashSet<String>, strays: &StrayMap) {
+    let mut ids: Vec<&String> = checked.iter().filter(|id| strays.contains_key(*id)).collect();
+    ids.sort();
+    let value = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
+    if let Err(e) = sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#)
+        .bind(AUDIT_CHECKED_KEY).bind(value).execute(&db.pool).await
+    {
+        log::warn!("[Series Monitor] Could not save the stray audit's checked set: {:?}", e);
+    }
+}
+
+#[derive(Default)]
+struct AuditTally {
+    calls: usize,
+    walked: usize,
+    home: usize,
+    relocated: usize,
+    deleted: usize,
+    evicted: usize,
+    left: usize,
+}
+
+impl AuditTally {
+    fn processed(&self) -> usize { self.home + self.relocated + self.deleted + self.evicted + self.left }
+}
+
+enum WalkOutcome {
+    Own(HashSet<String>),
+    /// Over WALK_PAGE_CAP pages, or Metron wouldn't list it (a non-200) — its strays go single.
+    Unwalkable,
+    OutOfBudget,
+}
+
+/// Walk a Metron series' issue_list within `budget` calls. OutOfBudget = stopped before the end
+/// (retried next run). Err = the request itself failed; the audit stops for this run.
+async fn walk_volume(db: &Db, client: &Client, auth: &(String, String), msid: &str, budget: usize, tally: &mut AuditTally) -> anyhow::Result<WalkOutcome> {
+    let mut url = Some(format!("https://metron.cloud/api/series/{}/issue_list/", msid));
+    let mut own: HashSet<String> = HashSet::new();
+    let (mut used, mut first) = (0usize, true);
+    while let Some(u) = url {
+        if used >= budget { return Ok(WalkOutcome::OutOfBudget); }
+        let (status, data) = crate::metadata::metron_fetch(db, client, auth, &u, 15, 2, None).await?;
+        used += 1;
+        tally.calls += 1;
+        if status != 200 {
+            log::warn!("[Series Monitor] issue_list for Metron series {} answered HTTP {}; checking its skeletons one by one.", msid, status);
+            return Ok(WalkOutcome::Unwalkable);
+        }
+        let results = data.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if first {
+            first = false;
+            let count = data.get("count").and_then(|v| v.as_i64()).unwrap_or(results.len() as i64);
+            if !walk_fits(count, results.len()) { return Ok(WalkOutcome::Unwalkable); }
+            let pages = (count.max(0) as usize).div_ceil(results.len().max(1)).max(1);
+            if pages > budget { return Ok(WalkOutcome::OutOfBudget); }
+        }
+        own.extend(results.iter().filter_map(|r| jstr(r.get("id"))));
+        url = data.get("next").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+        if url.is_some() { tokio::time::sleep(std::time::Duration::from_millis(300)).await; }
+    }
+    Ok(WalkOutcome::Own(own))
+}
+
+/// One stray, one detail fetch: relocated or dropped when another local volume is its home, removed
+/// when it has none and its host provably isn't it, confirmed when the host is its home. Returns
+/// whether to remember it as checked. A row the fetch leaves in doubt stays (deleting on a doubt is
+/// how the original defect looked from the other side) and is remembered too — asking again gives
+/// the same answer until the library changes.
+#[allow(clippy::too_many_arguments)]
+async fn audit_single(
+    db: &Db, client: &Client, auth: &(String, String), series: &[SeriesRec],
+    issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap, m_id: &str, host_idx: usize, tally: &mut AuditTally,
+) -> anyhow::Result<bool> {
+    let url = format!("https://metron.cloud/api/issue/{}/", m_id);
+    let (status, data) = crate::metadata::metron_fetch(db, client, auth, &url, 15, 2, None).await?;
+    tally.calls += 1;
+    if status != 200 {
+        tally.left += 1;
+        return Ok(status == 404); // gone from Metron: asking again won't help; anything else: retry next run
+    }
+    let m_series_id = jstr(data.pointer("/series/id"));
+    let m_name = normalize(data.pointer("/series/name").and_then(|v| v.as_str()).unwrap_or(""));
+    let m_pub = normalize(data.pointer("/publisher/name").and_then(|v| v.as_str()).unwrap_or(""));
+    let year_began = data.pointer("/series/year_began").and_then(|v| v.as_i64()).map(|y| y as i32).filter(|y| *y != 0);
+    Ok(match match_series_for_metron_issue(series, m_series_id.as_deref(), &m_name, &m_pub, year_began) {
+        MetronMatch::Matched(idx) if idx != host_idx => match heal_stray_skeleton(db, issues, strays, m_id, &series[idx].id).await {
+            Some(StrayAction::Relocated) => { tally.relocated += 1; true }
+            Some(StrayAction::Deleted) => { tally.deleted += 1; false }
+            Some(StrayAction::Evicted) | None => { tally.left += 1; false }
+        },
+        MetronMatch::Matched(_) => { tally.home += 1; true }
+        MetronMatch::NoMatch | MetronMatch::Ambiguous { .. } => {
+            match evict_misfiled_stray(db, series, issues, strays, m_id, m_series_id.as_deref(), year_began).await {
+                Some(_) => { tally.evicted += 1; false }
+                None => { tally.left += 1; true }
             }
-            MetronMatch::Matched(_) => {}
-            MetronMatch::NoMatch | MetronMatch::Ambiguous { .. } => {
-                match evict_misfiled_stray(db, series, issues, strays, &m_id, m_series_id.as_deref(), year_began).await {
-                    Some(_) => evicted += 1,
-                    None => left += 1,
-                }
-            }
+        }
+    })
+}
+
+/// Drain queued single checks within the budget. Err = Metron failed; the audit stops for this run.
+#[allow(clippy::too_many_arguments)]
+async fn drain_singles(
+    db: &Db, client: &Client, auth: &(String, String), series: &[SeriesRec],
+    issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap, checked: &mut HashSet<String>,
+    queue: &mut std::collections::VecDeque<(String, usize)>, tally: &mut AuditTally,
+) -> anyhow::Result<()> {
+    while tally.calls < AUDIT_BUDGET {
+        let Some((m_id, host_idx)) = queue.pop_front() else { break };
+        if audit_single(db, client, auth, series, issues, strays, &m_id, host_idx, tally).await? {
+            checked.insert(m_id);
         }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
+    Ok(())
+}
+
+/// Out-of-window strays (a mis-filed issue that already shipped, say), bounded to AUDIT_BUDGET
+/// Metron calls per run through the shared metron_fetch (cache, burst pacing, quota log): single
+/// checks first, then Metron-sourced volumes' issue_list walks and the suspects they turn up.
+#[allow(clippy::too_many_arguments)]
+async fn stray_audit(
+    db: &Db, client: &Client, auth: &(String, String),
+    series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap,
+    seen: &HashSet<String>, checked: &mut HashSet<String>, notes: &mut Vec<String>,
+) {
+    let plan = plan_stray_audit(series, strays, seen, checked);
+    let total = plan.singles.len() + plan.walks.iter().map(|w| w.2.len()).sum::<usize>();
+    if total == 0 {
+        return;
+    }
+    let mut tally = AuditTally::default();
+    let mut queue: std::collections::VecDeque<(String, usize)> = plan.singles.into_iter().collect();
+    let mut result = drain_singles(db, client, auth, series, issues, strays, checked, &mut queue, &mut tally).await;
+    if result.is_ok() {
+        for (host_idx, msid, m_ids) in plan.walks {
+            if tally.calls >= AUDIT_BUDGET { break; }
+            match walk_volume(db, client, auth, &msid, AUDIT_BUDGET - tally.calls, &mut tally).await {
+                Ok(WalkOutcome::Own(own)) => {
+                    tally.walked += 1;
+                    let (home, suspects) = split_walked(&m_ids, &own);
+                    tally.home += home.len();
+                    checked.extend(home);
+                    queue.extend(suspects.into_iter().map(|id| (id, host_idx)));
+                }
+                Ok(WalkOutcome::Unwalkable) => queue.extend(m_ids.into_iter().map(|id| (id, host_idx))),
+                Ok(WalkOutcome::OutOfBudget) => break,
+                Err(e) => { result = Err(e); break; }
+            }
+            result = drain_singles(db, client, auth, series, issues, strays, checked, &mut queue, &mut tally).await;
+            if result.is_err() { break; }
+        }
+    }
+    if let Err(e) = &result {
+        notes.push(format!("[Phase 1] #208 audit stopped early: {}", e));
+    }
     notes.push(format!(
-        "[Phase 1] #208 audit: checked {} of {} Metron skeleton(s) in same-name families; relocated {}, dropped {}, removed {} (volume not in the library), left {} as they were.",
-        fetched, total, relocated, deleted, evicted, left
+        "[Phase 1] #208 audit: checked {} of {} unchecked Metron skeleton(s) ({} Metron call(s), {} volume list(s) walked); confirmed {} at home, relocated {}, dropped {}, removed {} (volume not in the library), left {} as they were; {} still to check.",
+        tally.processed(), total, tally.calls, tally.walked, tally.home, tally.relocated, tally.deleted, tally.evicted, tally.left,
+        total.saturating_sub(tally.processed())
     ));
 }
 
@@ -522,6 +683,7 @@ async fn phase1_metron(
     // the same-name families the year couldn't settle (one note per name+year, not per issue),
     // and what the in-window heal did.
     let mut seen: HashSet<String> = HashSet::new();
+    let mut checked = load_audit_checked(db).await;
     let mut skipped: std::collections::BTreeMap<(String, Option<i32>), (usize, usize)> = std::collections::BTreeMap::new();
     let (mut relocated, mut deleted, mut evicted) = (0usize, 0usize, 0usize);
 
@@ -570,6 +732,11 @@ async fn phase1_metron(
                 Some(StrayAction::Relocated) => relocated += 1,
                 Some(StrayAction::Deleted) => deleted += 1,
                 Some(StrayAction::Evicted) | None => {}
+            }
+            // Its skeleton now sits under the volume the anchored match names — proven at home for
+            // free, so the audit never spends a Metron call on it once it leaves the window.
+            if strays.get(&m_id).is_some_and(|st| st.series_id == s.id) {
+                checked.insert(m_id.clone());
             }
         }
 
@@ -634,7 +801,8 @@ async fn phase1_metron(
             relocated, deleted, evicted
         ));
     }
-    family_audit(db, client, &(user.to_string(), pass.to_string()), series, issues, strays, &seen, notes).await;
+    stray_audit(db, client, &(user.to_string(), pass.to_string()), series, issues, strays, &seen, &mut checked, notes).await;
+    save_audit_checked(db, &checked, strays).await;
 }
 
 /// Phase 2 — ComicVine: for the 25 oldest monitored CV series, fetch their latest 30 issues, upsert
@@ -868,6 +1036,7 @@ mod tests {
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, number TEXT, "filePath" TEXT, "releaseDate" TEXT,
                 "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT, "metadataId" TEXT, "metadataSource" TEXT)"#,
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, kind TEXT)"#,
+            r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }
@@ -1092,27 +1261,80 @@ mod tests {
         assert!(!strays.contains_key("172602"));
     }
 
+    // ==== #208 lone-volume audit: the out-of-window audit visited same-name FAMILIES only, so a
+    // stray the old first-in-table guess filed under a LONE same-name volume (a library with just
+    // X-Men 2013 got X-Men 2024's issues too) stayed once it left the Oracle window. The audit now
+    // covers every unseen stray, remembers the ones it has proven at home so the cost is one-time,
+    // and settles a Metron-sourced volume's own rows with one issue_list walk instead of a fetch each.
+
+    fn strays_of(rows: &[(&str, &str)]) -> StrayMap {
+        rows.iter().map(|(m_id, series_id)| {
+            ((*m_id).to_string(), StraySkeleton { issue_id: format!("i{}", m_id), series_id: (*series_id).into(), number: "1".into() })
+        }).collect()
+    }
+
     #[test]
-    fn family_audit_targets_only_same_name_families_and_ids_the_oracle_did_not_see() {
+    fn the_stray_audit_plans_every_unseen_unchecked_stray_families_first() {
         let series = vec![
-            rec("s2013", "X-Men", "Marvel", 2013, "COMICVINE", None, None),
-            rec("s2024", "X-Men", "Marvel", 2024, "COMICVINE", None, None),
-            rec("saga", "Saga", "Image", 2012, "COMICVINE", None, None), // no same-name sibling
+            rec("x2013", "X-Men", "Marvel", 2013, "COMICVINE", None, None),
+            rec("x2024", "X-Men", "Marvel", 2024, "COMICVINE", None, None),
+            rec("u2013", "Uncanny X-Men", "Marvel", 2013, "COMICVINE", None, None),  // LONE — the gap
+            rec("hulk", "Hulk", "Marvel", 2021, "COMICVINE", None, Some("7000")),     // ComicVine with a metronId
+            rec("wolv", "Wolverine", "Marvel", 2024, "METRON", Some("9000"), None),   // Metron-sourced
+            rec("slug", "Storm", "Marvel", 2023, "METRON", Some("storm-2023"), None), // Metron-sourced by slug — no id to walk
         ];
-        let mut strays: StrayMap = HashMap::new();
-        for (m_id, issue_id, series_id, num) in [
-            ("172602", "x34", "s2013", "34"),   // out-of-window stray in a family → audited
-            ("172640", "x40", "s2013", "40"),   // seen by the Oracle this run → already handled
-            ("172650", "x27", "s2024", "27"),   // in a family, unseen → audited (may well be correct; the fetch decides)
-            ("500", "saga60", "saga", "60"),    // no family → never fetched
-        ] {
-            strays.insert(m_id.into(), StraySkeleton { issue_id: issue_id.into(), series_id: series_id.into(), number: num.into() });
-        }
-        let seen: std::collections::HashSet<String> = ["172640".to_string()].into_iter().collect();
+        let strays = strays_of(&[
+            ("300", "x2013"),  // family → single, first
+            ("100", "u2013"),  // lone ComicVine volume → single (was never audited)
+            ("200", "hulk"),   // ComicVine host with a metronId → single (its Metron rows are the monitor's)
+            ("250", "slug"),   // slug-keyed Metron host → single, never a walk of /series/<slug>/
+            ("400", "x2013"),  // seen by the Oracle this run → not planned
+            ("500", "u2013"),  // already proven at home on an earlier run → not planned
+            ("610", "wolv"),   // Metron-sourced host → one walk of its own issue list for both
+            ("600", "wolv"),
+            ("700", "gone"),   // host no longer in the library → not planned
+        ]);
+        let seen: HashSet<String> = ["400".to_string()].into_iter().collect();
+        let checked: HashSet<String> = ["500".to_string()].into_iter().collect();
 
-        let targets = family_audit_targets(&series, &strays, &seen);
+        let plan = plan_stray_audit(&series, &strays, &seen, &checked);
 
-        assert_eq!(targets, vec![("172602".to_string(), 0usize), ("172650".to_string(), 1usize)]);
+        assert_eq!(plan.singles, vec![("300".to_string(), 0usize), ("100".to_string(), 2usize), ("200".to_string(), 3usize), ("250".to_string(), 5usize)]);
+        assert_eq!(plan.walks, vec![(4usize, "9000".to_string(), vec!["600".to_string(), "610".to_string()])]);
+    }
+
+    #[test]
+    fn a_walked_volume_keeps_its_own_issues_and_suspects_the_rest() {
+        let own: HashSet<String> = ["600", "601", "602"].iter().map(|s| s.to_string()).collect();
+        let (home, suspects) = split_walked(&["600".to_string(), "610".to_string(), "602".to_string()], &own);
+        assert_eq!(home, vec!["600".to_string(), "602".to_string()]);
+        assert_eq!(suspects, vec!["610".to_string()], "not in the volume's own list → fetched and matched like any stray");
+    }
+
+    #[test]
+    fn a_volume_walk_is_attempted_only_when_it_fits_the_page_cap() {
+        assert!(walk_fits(250, 100));                       // 3 pages
+        assert!(walk_fits(0, 0));                           // an empty list is one page, already read
+        assert!(walk_fits((WALK_PAGE_CAP * 100) as i64, 100));
+        assert!(!walk_fits((WALK_PAGE_CAP * 100 + 1) as i64, 100), "one page over the cap → the volume's strays fall back to single checks");
+    }
+
+    #[tokio::test]
+    async fn the_checked_set_persists_and_is_pruned_to_rows_that_are_still_strays() {
+        let db = fixture("checked").await;
+        assert!(load_audit_checked(&db).await.is_empty(), "no setting yet → nothing checked");
+
+        let checked: HashSet<String> = ["100", "200", "300"].iter().map(|s| s.to_string()).collect();
+        let strays = strays_of(&[("100", "u2013"), ("300", "x2013"), ("900", "x2013")]);
+        save_audit_checked(&db, &checked, &strays).await;
+
+        let back = load_audit_checked(&db).await;
+        let mut ids: Vec<&str> = back.iter().map(|s| s.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["100", "300"], "200 is no longer a stray (downloaded, moved or removed) → dropped from the set");
+
+        sqlx::query(r#"UPDATE "SystemSetting" SET value = 'not json' WHERE key = $1"#).bind(AUDIT_CHECKED_KEY).execute(&db.pool).await.unwrap();
+        assert!(load_audit_checked(&db).await.is_empty(), "an unreadable value starts over rather than failing the run");
     }
 
     // ==== #208 round 2 (anacronismo): X-Men (2013) healed, Uncanny X-Men (2013) did not — the heal
@@ -1135,6 +1357,10 @@ mod tests {
         assert!(stray_host_is_misfiled(&host(2024, "COMICVINE", None, Some("9000")), Some("8106"), Some(2024)));
         assert!(stray_host_is_misfiled(&host(2024, "METRON", Some("9000"), None), Some("8106"), Some(2024)));
         assert!(!stray_host_is_misfiled(&host(2013, "COMICVINE", None, Some("8106")), Some("8106"), Some(2024)));
+        // A Metron-sourced series can carry a name SLUG as its metadataId (the sync resolves it by
+        // search) — that is no Metron identity, so it never "proves" a mismatch; the year decides.
+        assert!(!stray_host_is_misfiled(&host(2024, "METRON", Some("uncanny-x-men-2024"), None), Some("8106"), Some(2024)));
+        assert!(stray_host_is_misfiled(&host(2013, "METRON", Some("uncanny-x-men-2013"), None), Some("8106"), Some(2024)));
     }
 
     #[tokio::test]

@@ -10,6 +10,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 pub struct DeepLinkResult {
     pub url: String,
     pub hoster: String,
+    /// #209: the button named this hoster but its link is GetComics' own /dls/ redirect — the URL
+    /// must be followed (resolve_redirect) before the hoster's resolver can use it.
+    #[serde(default)]
+    pub via_redirect: bool,
 }
 
 /// One hoster's slot in the priority list (order preserved, plus its enabled flag).
@@ -898,6 +902,83 @@ fn get_hoster_from_url(url: &str, is_main_btn: bool) -> String {
     "unknown".to_string()
 }
 
+/// The mirror a download button's LABEL names, for buttons whose link is GetComics' own /dls/
+/// redirect (#209). Whole-word match on the button text + title, so "Omega Men" is not Mega.
+/// GetComics' own buttons ("Main Server", "Download Now", "Mirror", "Link 2") and anything unknown
+/// return None — they stay classified by URL.
+fn hoster_from_label(label: &str) -> Option<&'static str> {
+    let words: Vec<String> = label.to_lowercase()
+        .chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect::<String>()
+        .split_whitespace().map(|w| w.to_string()).collect();
+    let joined = words.join(" ");
+    let has = |w: &str| words.iter().any(|x| x == w);
+    let has_phrase = |p: &str| joined.contains(p);
+    if has("pixeldrain") || has_phrase("pixel drain") { return Some("pixeldrain"); }
+    if has("mediafire") || has_phrase("media fire") { return Some("mediafire"); }
+    if has("mega") { return Some("mega"); }
+    if has("terabox") || has_phrase("tera box") { return Some("terabox"); }
+    if has("vikingfile") || has_phrase("viking file") { return Some("vikingfile"); }
+    if has("rootz") { return Some("rootz"); }
+    None
+}
+
+/// Where a GetComics /dls/ redirect actually landed, if it left GetComics: the URL to hand the
+/// hoster's resolver. None while the response is still on getcomics.org (the redirect itself, a
+/// Cloudflare interstitial, a query-string variant) or isn't a web URL at all.
+pub fn landed_hoster_url(original: &str, landed: &str) -> Option<String> {
+    if landed == original { return None; }
+    let url = reqwest::Url::parse(landed).ok()?;
+    if !matches!(url.scheme(), "http" | "https") { return None; }
+    let host = url.host_str()?.to_lowercase();
+    if host == "getcomics.org" || host.ends_with(".getcomics.org") { return None; }
+    Some(landed.to_string())
+}
+
+/// Follow a GetComics /dls/ redirect to the mirror it points at (#209), without downloading
+/// anything: a plain GET through the browser client (redirects followed, body never read), and
+/// when GetComics answers with a Cloudflare challenge instead, the configured solver's landed URL —
+/// the same landed-URL mechanism the streamer uses for gated main-server links. Ok(None) = it never
+/// left getcomics.org (no solver configured, or the solve didn't get through); the caller moves on
+/// to its next candidate.
+pub async fn resolve_redirect(db: &sqlx::AnyPool, url: &str) -> anyhow::Result<Option<String>> {
+    let client = crate::browser_http_client();
+    let resp = client.get(url)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .timeout(std::time::Duration::from_secs(25))
+        .send().await?;
+    if resp.status() == 429 {
+        mark_getcomics_rate_limit_flag(db).await;
+        anyhow::bail!("GetComics rate limited (429) the redirect link; deferring");
+    }
+    let landed = resp.url().to_string();
+    let status = resp.status().as_u16();
+    drop(resp); // never read the body — a mirror page or a file, either way not ours to fetch here
+    if let Some(hoster_url) = landed_hoster_url(url, &landed) {
+        log::info!("[GetComics] Redirect resolved: {} -> {}", url, hoster_url);
+        return Ok(Some(hoster_url));
+    }
+
+    log::info!("[GetComics] Redirect {} stayed on getcomics.org (HTTP {}); asking the solver to follow it.", url, status);
+    let flare_url: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'flaresolverr_url'"#)
+        .fetch_optional(db).await.ok().flatten().filter(|s: &String| !s.trim().is_empty());
+    let Some(flare_url) = flare_url else {
+        log::warn!("[GetComics] No solver configured; the redirect cannot be followed past the challenge.");
+        return Ok(None);
+    };
+    let sc = solver_config(db).await;
+    let clearance = flaresolverr_clearance(&client, db, &flare_url, url, &sc).await?;
+    match clearance.solved_url.as_deref().and_then(|l| landed_hoster_url(url, l)) {
+        Some(hoster_url) => {
+            log::info!("[GetComics] Redirect resolved via {}: {} -> {}", sc.kind, url, hoster_url);
+            Ok(Some(hoster_url))
+        }
+        None => {
+            log::warn!("[GetComics] The solver's browser did not leave getcomics.org for {} (landed: {:?}).", url, clearance.solved_url);
+            Ok(None)
+        }
+    }
+}
+
 /// The requested issue a multi-pack article should be section-targeted to. The caller derives it from
 /// the request name (only when it explicitly names an issue); `year` is the dynamic per-issue year,
 /// used to disambiguate same-numbered issues across volumes.
@@ -957,8 +1038,20 @@ fn classify_anchor(a_tag: ElementRef) -> Option<DeepLinkResult> {
 
     let hoster = get_hoster_from_url(&decoded, is_main_btn);
     if hoster == "unknown" { return None; }
+
+    // #209: GetComics routes some mirror buttons through its own /dls/ redirect, so the URL says
+    // "main server" while the button says PixelDrain — and the one-per-hoster dedupe then dropped
+    // the mirror as a duplicate main-server link. For a redirect link the button's LABEL names the
+    // hoster; the link is followed at download time (resolve_redirect). A URL that names its host
+    // keeps URL classification — the label is consulted only when the URL is GetComics' redirector.
+    if hoster == "getcomics_main" && decoded.to_lowercase().contains("/dls/") {
+        if let Some(mirror) = hoster_from_label(&format!("{} {}", text, title_attr)) {
+            log::debug!("[GetComics Debug] Decoded deep link -> {} (hoster: {} by label, via GetComics redirect)", decoded, mirror);
+            return Some(DeepLinkResult { url: decoded, hoster: mirror.to_string(), via_redirect: true });
+        }
+    }
     log::debug!("[GetComics Debug] Decoded deep link -> {} (hoster: {})", decoded, hoster);
-    Some(DeepLinkResult { url: decoded, hoster })
+    Some(DeepLinkResult { url: decoded, hoster, via_redirect: false })
 }
 
 /// Parse the article HTML into the FLAT anchor sweep (the single-page default the scraper always used)
@@ -1156,7 +1249,10 @@ pub async fn scrape_deep_link(
     }
 
     // --- FLAT BEHAVIOR (single page / no target) — unchanged from the original scraper. ---
-    let available: Vec<String> = found_links.iter().map(|l| l.hoster.clone()).collect();
+    // A redirected mirror is named as such so the next obfuscation shows up in the log (#209).
+    let available: Vec<String> = found_links.iter()
+        .map(|l| if l.via_redirect { format!("{} (via GetComics redirect)", l.hoster) } else { l.hoster.clone() })
+        .collect();
     log::info!("[GetComics] Found {} valid links. Available hosters: {}", found_links.len(), available.join(", "));
     log::debug!("[GetComics Debug] Enabled hoster priority: [{}]", enabled_order.join(", "));
 
@@ -1295,15 +1391,15 @@ mod tests {
 
         // Ranking a link set with the demoted order puts the mirror first, GC as fallback.
         let links = vec![
-            DeepLinkResult { url: "https://getcomics.org/dls/x".into(), hoster: "getcomics_main".into() },
-            DeepLinkResult { url: "https://comicfiles.ru/y".into(), hoster: "getcomics_direct".into() },
-            DeepLinkResult { url: "https://mediafire.com/z".into(), hoster: "mediafire".into() },
+            DeepLinkResult { url: "https://getcomics.org/dls/x".into(), hoster: "getcomics_main".into(), via_redirect: false },
+            DeepLinkResult { url: "https://comicfiles.ru/y".into(), hoster: "getcomics_direct".into(), via_redirect: false },
+            DeepLinkResult { url: "https://mediafire.com/z".into(), hoster: "mediafire".into(), via_redirect: false },
         ];
         let ranked = rank_and_dedupe(links, &demoted);
         assert_eq!(ranked[0].hoster, "mediafire");
         assert_eq!(ranked[1].hoster, "getcomics_direct");
         // GC-only pages still work — demotion never excludes.
-        let gc_only = vec![DeepLinkResult { url: "https://getcomics.org/dls/x".into(), hoster: "getcomics_main".into() }];
+        let gc_only = vec![DeepLinkResult { url: "https://getcomics.org/dls/x".into(), hoster: "getcomics_main".into(), via_redirect: false }];
         assert_eq!(rank_and_dedupe(gc_only, &demoted).len(), 1);
     }
 
@@ -1495,6 +1591,89 @@ mod tests {
         assert_eq!(get_hoster_from_url("https://www.zippyshare.com/v/abc", false), "unknown");
         assert_eq!(get_hoster_from_url("https://userscloud.com/abc", false), "unknown");
         assert_eq!(get_hoster_from_url("https://random-host.io/file", false), "unknown");
+    }
+
+    // ==== #209 (anacronismo): GetComics routes some mirror buttons (PixelDrain, on his Wolverine #28
+    // page) through its own getcomics.org/dls/ redirect. Classifying by URL alone filed that button
+    // as a second `getcomics_main`, and the one-per-hoster dedupe dropped it — "Preferred hoster
+    // 'pixeldrain' not available" while the page plainly listed it. For a redirect link the button's
+    // LABEL names the hoster; the URL still wins whenever it names its host.
+
+    const REDIRECTED_MIRRORS_HTML: &str = r#"
+        <article><div class="post-contents">
+          <p>Language : English | Year : 2026 | Size : 41.2 MB</p>
+          <a class="aio-button" href="https://getcomics.org/dls/AAAA" title="Main Server">MAIN SERVER</a>
+          <a class="aio-button" href="https://getcomics.org/dls/BBBB" title="PixelDrain">PIXELDRAIN</a>
+          <a class="aio-button" href="https://1024terabox.com/s/xyz">TERABOX</a>
+          <a class="aio-button" href="https://vikingfile.com/f/abc">VIKINGFILE</a>
+        </div></article>"#;
+
+    #[test]
+    fn a_mirror_label_on_a_getcomics_redirect_names_the_hoster() {
+        let (flat, _) = extract_article_links(REDIRECTED_MIRRORS_HTML);
+        let seen: Vec<(&str, &str, bool)> = flat.iter().map(|l| (l.hoster.as_str(), l.url.as_str(), l.via_redirect)).collect();
+        assert_eq!(seen, vec![
+            ("getcomics_main", "https://getcomics.org/dls/AAAA", false),
+            ("pixeldrain", "https://getcomics.org/dls/BBBB", true),   // the button said PixelDrain; the link is GC's redirect
+            ("terabox", "https://1024terabox.com/s/xyz", false),
+            ("vikingfile", "https://vikingfile.com/f/abc", false),
+        ]);
+    }
+
+    #[test]
+    fn a_url_that_names_its_host_beats_a_misleading_label() {
+        let html = r#"<div class="post-contents"><a class="aio-button" href="https://pixeldrain.com/u/abc">MEGA</a></div>"#;
+        let (flat, _) = extract_article_links(html);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].hoster, "pixeldrain");
+        assert!(!flat[0].via_redirect);
+    }
+
+    #[test]
+    fn hoster_from_label_vocabulary() {
+        assert_eq!(hoster_from_label("PIXELDRAIN"), Some("pixeldrain"));
+        assert_eq!(hoster_from_label("Pixel Drain Link"), Some("pixeldrain"));
+        assert_eq!(hoster_from_label("MEGA"), Some("mega"));
+        assert_eq!(hoster_from_label("Mega Link"), Some("mega"));
+        assert_eq!(hoster_from_label("MEDIAFIRE"), Some("mediafire"));
+        assert_eq!(hoster_from_label("TERABOX"), Some("terabox"));
+        assert_eq!(hoster_from_label("VikingFile"), Some("vikingfile"));
+        assert_eq!(hoster_from_label("Viking File"), Some("vikingfile"));
+        assert_eq!(hoster_from_label("ROOTZ"), Some("rootz"));
+        // GetComics' own buttons and anything unknown never become a mirror.
+        assert_eq!(hoster_from_label("MAIN SERVER"), None);
+        assert_eq!(hoster_from_label("DOWNLOAD NOW"), None);
+        assert_eq!(hoster_from_label("Mirror Server"), None);
+        assert_eq!(hoster_from_label("Omega Men Vol. 1"), None); // "mega" only as a word
+        assert_eq!(hoster_from_label(""), None);
+    }
+
+    #[test]
+    fn rank_and_dedupe_keeps_a_redirected_mirror_beside_the_main_server() {
+        let links = vec![
+            DeepLinkResult { url: "https://getcomics.org/dls/AAAA".into(), hoster: "getcomics_main".into(), via_redirect: false },
+            DeepLinkResult { url: "https://getcomics.org/dls/BBBB".into(), hoster: "pixeldrain".into(), via_redirect: true },
+            DeepLinkResult { url: "https://1024terabox.com/s/xyz".into(), hoster: "terabox".into(), via_redirect: false },
+        ];
+        let order: Vec<String> = ["pixeldrain", "getcomics_main", "terabox"].iter().map(|s| s.to_string()).collect();
+        let ranked = rank_and_dedupe(links, &order);
+        assert_eq!(ranked.iter().map(|l| l.hoster.as_str()).collect::<Vec<_>>(), vec!["pixeldrain", "getcomics_main", "terabox"]);
+        assert_eq!(ranked[0].url, "https://getcomics.org/dls/BBBB", "the preferred hoster's link is the redirect, resolved at download time");
+        assert!(ranked[0].via_redirect);
+    }
+
+    #[test]
+    fn landed_hoster_url_decides_when_the_redirect_left_getcomics() {
+        let orig = "https://getcomics.org/dls/BBBB";
+        assert_eq!(landed_hoster_url(orig, "https://pixeldrain.com/u/abc").as_deref(), Some("https://pixeldrain.com/u/abc"));
+        assert_eq!(landed_hoster_url(orig, "https://www.mediafire.com/file/x/y.cbz/file").as_deref(), Some("https://www.mediafire.com/file/x/y.cbz/file"));
+        // Still on GetComics (the redirect itself, a challenge page, or a query-string variant) → not resolved.
+        assert_eq!(landed_hoster_url(orig, orig), None);
+        assert_eq!(landed_hoster_url(orig, "https://getcomics.org/?__cf_chl=1"), None);
+        assert_eq!(landed_hoster_url(orig, "https://www.getcomics.org/dls/BBBB"), None);
+        // Not a fetchable web URL.
+        assert_eq!(landed_hoster_url(orig, "ftp://pixeldrain.com/u/abc"), None);
+        assert_eq!(landed_hoster_url(orig, "not a url"), None);
     }
 
     // Legacy single `getcomics` entry splits into direct (in place) + gated main (appended last).

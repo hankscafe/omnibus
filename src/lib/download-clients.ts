@@ -330,7 +330,12 @@ export const DownloadService = {
                   data: { status: 'DOWNLOADING', progress: 0 }
               });
 
-              resolvedHoster = await HosterEngine.resolveLink(url, hoster);
+              // #209: a mirror button behind GetComics' own /dls/ redirect arrives as that redirect
+              // link; follow it through the engine (Cloudflare-aware) before the hoster's resolver,
+              // which needs the mirror's real URL. A failure throws → the caller tries the next candidate.
+              const { resolveHosterUrl } = await import('./hosters/getcomics-redirect');
+              const hosterUrl = await resolveHosterUrl(url, hoster);
+              resolvedHoster = await HosterEngine.resolveLink(hosterUrl, hoster);
               
               if (resolvedHoster.success) {
                   if (resolvedHoster.directUrl) {

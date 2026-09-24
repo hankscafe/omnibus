@@ -139,6 +139,9 @@ struct ManualDdl {
 struct DdlCandidate {
     url: String,
     hoster: String,
+    // #209: the hoster came from the button's label and `url` is GetComics' /dls/ redirect — Node
+    // follows it (POST /api/getcomics/resolve) before the hoster's resolver sees a URL.
+    via_redirect: bool,
 }
 
 #[derive(Serialize)]
@@ -516,6 +519,7 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
         .route("/api/automation/search", post(handle_search))
         .route("/api/search/interactive", post(handle_interactive_search))
         .route("/api/getcomics/scrape", post(handle_getcomics_scrape))
+        .route("/api/getcomics/resolve", post(handle_getcomics_resolve))
         .layer(middleware::from_fn_with_state(shared_state.clone(), require_internal_auth))
         .with_state(shared_state);
 
@@ -1482,7 +1486,7 @@ async fn handle_search(
                         best_ddl.download_url = top.url.clone();
                         best_ddl.indexer = top.hoster.clone();
                         ddl_candidates = candidates.iter()
-                            .map(|c| DdlCandidate { url: c.url.clone(), hoster: c.hoster.clone() })
+                            .map(|c| DdlCandidate { url: c.url.clone(), hoster: c.hoster.clone(), via_redirect: c.via_redirect })
                             .collect();
                         best_match = Some(best_ddl);
                         break;
@@ -1501,7 +1505,7 @@ async fn handle_search(
                     // The result's download_url is already the resolvable /md5/ link — emit one candidate
                     // tagged for the existing Node resolver (premium key → stream; keyless → MANUAL_DDL).
                     log::info!("[Anna's Archive] Matched a result for {}.", payload.name);
-                    ddl_candidates = vec![DdlCandidate { url: best_aa.download_url.clone(), hoster: "annas_archive".to_string() }];
+                    ddl_candidates = vec![DdlCandidate { url: best_aa.download_url.clone(), hoster: "annas_archive".to_string(), via_redirect: false }];
                     best_aa.indexer = "annas_archive".to_string();
                     best_match = Some(best_aa);
                     break;
@@ -1614,6 +1618,41 @@ async fn handle_getcomics_scrape(
         Err(e) => {
             log::warn!("[GetComics] scrape endpoint failed for {}: {:?}", payload.url, e);
             Json(ScrapeResponse { success: false, ambiguous: false, links: Vec::new() })
+        }
+    }
+}
+
+/// #209: follow a GetComics /dls/ redirect to the mirror it points at, for a candidate the scraper
+/// classified by its button label. Node hands the landed URL to the hoster's resolver (PixelDrain
+/// needs its /u/<id> form); a failure here just moves Node on to the next candidate.
+#[derive(Deserialize)]
+struct ResolveRequest {
+    url: String,
+}
+
+#[derive(Serialize)]
+struct ResolveResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    landed_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn handle_getcomics_resolve(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ResolveRequest>,
+) -> Json<ResolveResponse> {
+    match getcomics::resolve_redirect(&state.db.pool, &payload.url).await {
+        Ok(Some(landed)) => Json(ResolveResponse { success: true, landed_url: Some(landed), error: None }),
+        Ok(None) => Json(ResolveResponse {
+            success: false,
+            landed_url: None,
+            error: Some("redirect stayed on getcomics.org (challenge not cleared, or no solver configured)".to_string()),
+        }),
+        Err(e) => {
+            log::warn!("[GetComics] resolve endpoint failed for {}: {:?}", payload.url, e);
+            Json(ResolveResponse { success: false, landed_url: None, error: Some(e.to_string()) })
         }
     }
 }

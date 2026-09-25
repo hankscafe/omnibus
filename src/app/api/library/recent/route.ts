@@ -14,12 +14,14 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
         // "Recently added" = newest ISSUE import per series, so new files landing in an existing
-        // series bump it to the front (series-row order only moved on brand-new series).
+        // series bump it to the front (series-row order only moved on brand-new series). By arrival
+        // (Issue.fileAddedAt, #206 follow-up): a download filling a monitored placeholder keeps the
+        // skeleton's old createdAt. Unstamped rows stay out — Postgres sorts a NULL max FIRST.
         const newestImports = await prisma.issue.groupBy({
             by: ['seriesId'],
-            where: { filePath: { not: null }, ...nestedSeriesAccessWhere(accessibleLibs) }, // <-- STRICT CHECK + per-library access
-            _max: { createdAt: true },
-            orderBy: { _max: { createdAt: 'desc' } },
+            where: { filePath: { not: null }, fileAddedAt: { not: null }, ...nestedSeriesAccessWhere(accessibleLibs) }, // <-- STRICT CHECK + per-library access
+            _max: { fileAddedAt: true },
+            orderBy: { _max: { fileAddedAt: 'desc' } },
             take: 7,
         });
         const orderedIds = newestImports.map(g => g.seriesId);

@@ -391,6 +391,12 @@ export async function initDatabase() {
         Logger.log(`[DB Init] Follow backfill failed: ${getErrorMessage(e)}`, "error");
     }
 
+    // 15. Issue.fileAddedAt (#206 follow-up): rows that predate the column take their createdAt, so
+    //     Recently Added, the Updates feed and the rest keep exactly the order they had. Idempotent;
+    //     it also catches any row a future write path forgets to stamp.
+    const { backfillFileAddedAt } = await import('./file-added');
+    await backfillFileAddedAt();
+
     // Inside initDatabase(), right before Logger.log("[DB Init] Schema mapping complete.")
     const logLevelSetting = await prisma.systemSetting.findUnique({ where: { key: 'system_log_level' } });
     if (logLevelSetting?.value) {

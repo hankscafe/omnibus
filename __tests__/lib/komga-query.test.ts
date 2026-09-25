@@ -37,7 +37,10 @@ describe('komga query: series sort', () => {
 
     it('reads the two sorts the source emits, plus Komga\'s prefixed and created forms', () => {
         expect(parseSeriesSort(sp('?sort=titleSort'))).toEqual({ field: 'name', dir: 'asc' });
-        expect(parseSeriesSort(sp('?sort=lastModified,desc'))).toEqual({ field: 'updatedAt', dir: 'desc' });
+        // lastModified = when the series last gained a file (Issue.fileAddedAt, #206 follow-up) —
+        // not Series.updatedAt, which the Series Monitor bumps on every run to rotate its window.
+        expect(parseSeriesSort(sp('?sort=lastModified,desc'))).toEqual({ field: 'fileAddedAt', dir: 'desc' });
+        expect(parseSeriesSort(sp('?sort=lastModifiedDate,asc'))).toEqual({ field: 'fileAddedAt', dir: 'asc' });
         expect(parseSeriesSort(sp('?sort=metadata.titleSort,desc'))).toEqual({ field: 'name', dir: 'desc' });
         expect(parseSeriesSort(sp('?sort=created,desc'))).toEqual({ field: 'createdAt', dir: 'desc' });
         expect(parseSeriesSort(sp('?sort=createdDate,asc'))).toEqual({ field: 'createdAt', dir: 'asc' });

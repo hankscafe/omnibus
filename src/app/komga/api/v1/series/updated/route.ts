@@ -1,6 +1,8 @@
 // src/app/komga/api/v1/series/updated/route.ts — #206 Komga facade: "Recently updated series"
 // (homepage section, View More, and the source's update check, which walks this list until it
-// meets a metadata.lastModified older than its last run). Newest-modified first.
+// meets a metadata.lastModified older than its last run). The series that most recently gained a
+// file first (Issue.fileAddedAt) — not Series.updatedAt, which every Series Monitor pass bumps, so
+// the list said nothing about new issues and Paperback flagged series that had none.
 import { authenticateKomga, komgaGuard, komgaJson } from '@/lib/komga/auth';
 import { listSeries } from '@/lib/komga/data';
 import { parsePaging, parseSeriesFilters } from '@/lib/komga/query';
@@ -17,7 +19,7 @@ export async function GET(req: Request) {
             libs: auth.libs,
             userId: auth.user.id,
             filters: parseSeriesFilters(sp),
-            sort: { field: 'updatedAt', dir: 'desc' },
+            sort: { field: 'fileAddedAt', dir: 'desc' },
             page,
             size,
         });

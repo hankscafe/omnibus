@@ -19,7 +19,8 @@ export function parsePaging(sp: URLSearchParams, defaultSize = 20): Paging {
     return { page, size, unpaged: sp.get('unpaged') === 'true' };
 }
 
-export type SeriesSortField = 'name' | 'updatedAt' | 'createdAt';
+/** `fileAddedAt` = when the series last gained a file (Issue.fileAddedAt, #206 follow-up). */
+export type SeriesSortField = 'name' | 'fileAddedAt' | 'createdAt';
 
 export interface SeriesSort {
     field: SeriesSortField;
@@ -32,8 +33,10 @@ const SORT_FIELDS: Record<string, SeriesSortField> = {
     titlesort: 'name',
     title: 'name',
     name: 'name',
-    lastmodified: 'updatedAt',
-    lastmodifieddate: 'updatedAt',
+    // A series' lastModified is its newest file arrival — never Series.updatedAt, which the Series
+    // Monitor bumps on every run to rotate its window.
+    lastmodified: 'fileAddedAt',
+    lastmodifieddate: 'fileAddedAt',
     created: 'createdAt',
     createddate: 'createdAt',
 };

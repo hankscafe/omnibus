@@ -174,6 +174,24 @@ describe('komga dto: series', () => {
         expect(seriesAuthors({ writers: null, artists: null })).toEqual([]);
     });
 
+    // Paperback's update check walks /series/updated and stops at the first lastModified older than
+    // its last run, so lastModified must be the same arrival time the list is ordered by — the
+    // series' newest Issue.fileAddedAt (#206 follow-up), never Series.updatedAt.
+    it('dates a series by its newest file arrival, falling back to its creation, never its updatedAt', () => {
+        const arrived = new Date('2026-09-20T09:00:00.000Z');
+        const touched = new Date('2026-09-24T12:00:00.000Z'); // a monitor run bumped the row
+        const s = { ...baseSeries(), updatedAt: touched };
+
+        const dto = toSeriesDto(s, { booksCount: 2, booksReadCount: 0, booksInProgressCount: 0, lastFileAddedAt: arrived });
+        expect(dto.lastModified).toBe(arrived.toISOString());
+        expect(dto.fileLastModified).toBe(arrived.toISOString());
+        expect(dto.metadata.lastModified).toBe(arrived.toISOString());
+        expect(dto.booksMetadata.lastModified).toBe(arrived.toISOString());
+
+        const unstamped = toSeriesDto(s, { booksCount: 2, booksReadCount: 0, booksInProgressCount: 0 });
+        expect(unstamped.metadata.lastModified).toBe(D.toISOString()); // createdAt, not the monitor's touch
+    });
+
     it('builds a SeriesDto with every field the source reads, typed so its .map/.toLowerCase calls hold', () => {
         const dto = toSeriesDto(baseSeries(), { booksCount: 10, booksReadCount: 3, booksInProgressCount: 1 }, seriesAuthors(baseSeries()));
 

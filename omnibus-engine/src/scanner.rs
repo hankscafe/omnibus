@@ -1380,8 +1380,8 @@ async fn exec_issue_insert(
            (id, "seriesId", "metadataId", "metadataSource", "matchState", number, "isAnnual", status, "filePath", "pageCount",
             name, description, "releaseDate", genres, writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "storyArcs", inker, editor, translator,
             tags, "mainCharacterOrTeam", "alternateSeries", "alternateNumber", "alternateCount", "storyArcNumber", gtin, notes, "scanInformation", review, "communityRating", "blackAndWhite",
-            "attachedVolumeId", "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, {annual}, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, $36, {now}, {now})"#,
+            "attachedVolumeId", "fileAddedAt", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, {annual}, 'DOWNLOADED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, {bw}, $36, {now}, {now}, {now})"#,
         annual = annual,
         bw = bw,
         now = db.now_expr()
@@ -2419,10 +2419,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         for write in chunk {
             match write {
                 PendingIssueWrite::Repoint { issue_id, file, page_count } => {
+                    // Issue.fileAddedAt (#206 follow-up): a placeholder the scan fills is an
+                    // arrival; a matched file renamed on disk (the ghost pass nulled its path)
+                    // keeps its stamp.
                     if let Err(e) = sqlx::query(&format!(
                         r#"UPDATE "Issue" SET "filePath"=$1, status='DOWNLOADED',
                                "pageCount"=CASE WHEN $2 > 0 THEN $2 ELSE "pageCount" END,
+                               {stamp},
                                "updatedAt"={now} WHERE id=$3"#,
+                        stamp = crate::file_added::rescan_set(&db),
                         now = db.now_expr()
                     ))
                     .bind(file).bind(*page_count).bind(issue_id).execute(&mut *tx).await
@@ -4035,7 +4040,7 @@ mod tests {
                 "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
                 "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
                 universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
-                "coverUrl" TEXT, "attachedVolumeId" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+                "coverUrl" TEXT, "attachedVolumeId" TEXT, "fileAddedAt" INTEGER, "createdAt" TEXT, "updatedAt" TEXT)"#,
             // #203 Phase 1: the round-trip's embed + series.json legs both reach for it.
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
                 "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
@@ -4106,6 +4111,15 @@ mod tests {
         scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "rt_lib".to_string(), None)
             .await
             .expect("rescan after wipe");
+
+        // Issue.fileAddedAt (#206 follow-up): a file the scan indexes is an arrival, stamped in
+        // Prisma's SQLite form (INTEGER epoch-ms) so it sorts with every Node-written stamp.
+        let fa = sqlx::query(r#"SELECT "fileAddedAt" AS fa, typeof("fileAddedAt") AS t FROM "Issue""#)
+            .fetch_one(&db.pool).await.expect("the rebuilt issue");
+        assert_eq!(fa.get::<String, _>("t"), "integer", "fileAddedAt is epoch-ms like Prisma writes it");
+        let fa_ms: i64 = fa.get("fa");
+        let sys_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        assert!((sys_ms - fa_ms).abs() < 3_600_000, "stamped at scan time, got {}", fa_ms);
 
         // -- 4. The series came back identical, from ComicInfo + series.json.
         let s = sqlx::query(

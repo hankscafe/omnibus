@@ -20,6 +20,7 @@ mod engine_config;
 mod discover;
 mod recommendations;
 mod coverage;
+mod file_added;
 mod monitor;
 mod download;
 mod log_forward;

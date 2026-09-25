@@ -97,10 +97,12 @@ describe('API Route: GET /api/v1/stats', () => {
         // completed30d: issues that physically landed in the library in the window.
         // A scan-populated library has zero completed Requests, so counting the
         // Request table left monthly growth permanently at 0.
+        // Arrival time (Issue.fileAddedAt, #206 follow-up): a download filling a placeholder counts
+        // in the month it landed — its row's createdAt is when the placeholder was made.
         expect(mocks.issueCount).toHaveBeenCalledWith({
             where: {
                 filePath: { not: null },
-                createdAt: { gte: expect.any(Date) }
+                fileAddedAt: { gte: expect.any(Date) }
             }
         });
 
@@ -112,7 +114,7 @@ describe('API Route: GET /api/v1/stats', () => {
 
         // The 30-day window uses a real cutoff ~30 days back.
         const issueWhere = mocks.issueCount.mock.calls.find(c => c[0]?.where?.filePath)![0].where;
-        const cutoff = issueWhere.createdAt.gte as Date;
+        const cutoff = issueWhere.fileAddedAt.gte as Date;
         const daysBack = (Date.now() - cutoff.getTime()) / 86_400_000;
         expect(daysBack).toBeGreaterThan(29);
         expect(daysBack).toBeLessThan(31);

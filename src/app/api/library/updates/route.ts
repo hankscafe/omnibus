@@ -28,17 +28,19 @@ export async function GET() {
     const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
     const cutoff = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
+    // Arrival time (Issue.fileAddedAt, #206 follow-up), not createdAt: a monitored download fills a
+    // placeholder born weeks earlier, and its createdAt kept it outside this window.
     const issues = await prisma.issue.findMany({
         where: {
             filePath: { not: null },
-            createdAt: { gte: cutoff },
+            fileAddedAt: { gte: cutoff },
             series: {
                 follows: { some: { userId } },
                 ...(accessibleLibs === 'ALL' ? {} : { libraryId: { in: accessibleLibs } }),
             },
         },
         include: { series: { select: { id: true, name: true, folderPath: true } } },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ fileAddedAt: 'desc' }, { id: 'desc' }],
         take: MAX_ITEMS,
     });
 
@@ -65,7 +67,8 @@ export async function GET() {
             name: i.name || null,
             filePath: i.filePath,
             coverUrl: cover,
-            createdAt: i.createdAt,
+            // The feed's date is the arrival; the field keeps its name for the page that groups by it.
+            createdAt: i.fileAddedAt ?? i.createdAt,
             isRead: readByIssue.get(i.id) === true,
         };
     });

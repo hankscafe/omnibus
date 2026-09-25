@@ -9,6 +9,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { moveFileSafe } from '@/lib/utils/safe-fs';
 import { countArchivePages } from '@/lib/utils/archive-pages';
+import { carriedStamp } from '@/lib/file-added';
 
 export async function POST(request: NextRequest) {
     try {
@@ -138,7 +139,10 @@ export async function POST(request: NextRequest) {
                     filePath: finalFilePath,
                     status: 'DOWNLOADED',
                     // Persist the page total so OPDS (pse:count) can stream this issue.
-                    pageCount: await countArchivePages(finalFilePath)
+                    pageCount: await countArchivePages(finalFilePath),
+                    // #206 follow-up: a re-home, not an arrival — the file keeps the time the
+                    // unmatched row it came from was announced with.
+                    fileAddedAt: carriedStamp(unmatchedIssue),
                 }
             }),
             prisma.issue.delete({

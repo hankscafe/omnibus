@@ -295,6 +295,12 @@ model Issue {
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
+  // When this row's current file ARRIVED (#206 follow-up) — what "new in your library" means for
+  // Recently Added, the Updates feed, the bell, the weekly digest, stats and the Komga facade.
+  // createdAt is row birth: a download filling a WANTED placeholder keeps the skeleton's old one.
+  // Stamped by the rules in src/lib/file-added.ts (twin: omnibus-engine/src/file_added.rs);
+  // backfilled from createdAt at startup for rows that predate it.
+  fileAddedAt     DateTime?
 
   readProgresses  ReadProgress[]
   readingListItems ReadingListItem[]
@@ -308,6 +314,7 @@ model Issue {
   @@index([seriesId, releaseDate]) // library-wide issues view: per-series releaseDate scans when filtered by a Series field
   @@index([filePath]) // reader progress GET/POST resolve an issue by its exact stored path (per page-turn)
   @@index([attachedVolumeId]) // the per-attachment sync lane scans its own rows on every refresh
+  @@index([fileAddedAt]) // Updates feed / bell / digest windows + Recently Added and "Recently updated series" order
 }
 
 // #203 Phase 1 (concept by anacronismo): a provider volume manually attached to a series whose own

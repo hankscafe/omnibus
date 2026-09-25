@@ -173,8 +173,8 @@ describe('Komga facade: GET /series (search + browse)', () => {
         expect(JSON.stringify(progressWhere)).toContain('ser_1');
     });
 
-    it('applies search, library, genre, tag and collection filters and the lastModified sort', async () => {
-        await getSeriesList(req('/series?page=1&size=40&search=bat&tag=Event&genre=Superhero&collection_id=col_1&library_id=lib_2&sort=lastModified,desc'));
+    it('applies search, library, genre, tag and collection filters and the created sort', async () => {
+        await getSeriesList(req('/series?page=1&size=40&search=bat&tag=Event&genre=Superhero&collection_id=col_1&library_id=lib_2&sort=created,desc'));
 
         const call = mocks.prisma.series.findMany.mock.calls[0][0];
         const where = JSON.stringify(call.where);
@@ -183,11 +183,61 @@ describe('Komga facade: GET /series (search + browse)', () => {
         expect(where).toContain('Superhero');
         expect(where).toContain('Event');
         expect(where).toContain('col_1');
-        expect(call.orderBy[0]).toEqual({ updatedAt: 'desc' });
+        expect(call.orderBy[0]).toEqual({ createdAt: 'desc' });
         expect(call.skip).toBe(40);
         expect(call.take).toBe(40);
         // count() sees the same filter so totalPages is honest.
         expect(JSON.stringify(mocks.prisma.series.count.mock.calls[0][0].where)).toBe(where);
+    });
+
+    // "Recently updated" = the series that most recently GAINED A FILE (Issue.fileAddedAt, #206
+    // follow-up) — not Series.updatedAt, which the Series Monitor bumps on every run. The order comes
+    // from a groupBy over stamped file rows under the same filters; unstamped rows are left out
+    // (Postgres sorts a NULL max FIRST under DESC, which would stop Paperback's walk dead).
+    describe('arrival order (sort=lastModified and /series/updated)', () => {
+        const ARRIVED = new Date('2026-09-20T09:00:00.000Z');
+        beforeEach(() => {
+            mocks.prisma.issue.groupBy.mockImplementation(async (args: any) =>
+                args.orderBy
+                    ? [{ seriesId: 'ser_2', _max: { fileAddedAt: ARRIVED } }, { seriesId: 'ser_1', _max: { fileAddedAt: D } }]
+                    : [{ seriesId: 'ser_1', _count: { _all: 3 }, _max: { fileAddedAt: D } }, { seriesId: 'ser_2', _count: { _all: 1 }, _max: { fileAddedAt: ARRIVED } }]
+            );
+            // The hydration query hands rows back in its own order — the route re-applies the arrival order.
+            mocks.prisma.series.findMany.mockResolvedValue([series(), series({ id: 'ser_2', name: 'Nightwing' })]);
+            mocks.prisma.series.count.mockResolvedValue(2);
+        });
+        const orderingCall = () => mocks.prisma.issue.groupBy.mock.calls.map((c: any) => c[0]).find((a: any) => a.orderBy);
+
+        it('orders by the newest stamped file per series, filtered and paged like any other sort', async () => {
+            const body = await (await getSeriesList(req('/series?page=1&size=40&search=bat&library_id=lib_2&sort=lastModified,desc'))).json();
+
+            const g = orderingCall();
+            expect(g.by).toEqual(['seriesId']);
+            expect(g._max).toEqual({ fileAddedAt: true });
+            expect(g.orderBy).toEqual([{ _max: { fileAddedAt: 'desc' } }, { seriesId: 'asc' }]);
+            expect(g.skip).toBe(40);
+            expect(g.take).toBe(40);
+            const gw = JSON.stringify(g.where);
+            expect(gw).toContain('"filePath":{"not":null}');
+            expect(gw).toContain('"fileAddedAt":{"not":null}');
+            expect(gw).toContain('"contains":"bat"');
+            expect(gw).toContain('lib_2');
+            expect(mocks.prisma.series.findMany.mock.calls[0][0].where).toEqual({ id: { in: ['ser_2', 'ser_1'] } });
+            const cw = JSON.stringify(mocks.prisma.series.count.mock.calls[0][0].where);
+            expect(cw).toContain('"fileAddedAt":{"not":null}');
+            expect(cw).toContain('"contains":"bat"');
+            expect(body.content.map((s: any) => s.id)).toEqual(['ser_2', 'ser_1']);
+            expect(body.totalElements).toBe(2);
+        });
+
+        it('GET /series/updated walks newest arrival first, and each lastModified is that arrival', async () => {
+            const body = await (await getSeriesUpdated(req('/series/updated?page=0&size=20&deleted=false'))).json();
+
+            expect(orderingCall().orderBy[0]).toEqual({ _max: { fileAddedAt: 'desc' } });
+            expect(body.content.map((s: any) => s.id)).toEqual(['ser_2', 'ser_1']);
+            // filterUpdatedManga compares metadata.lastModified with its last run — it must fall in list order.
+            expect(body.content.map((s: any) => s.metadata.lastModified)).toEqual([ARRIVED.toISOString(), D.toISOString()]);
+        });
     });
 
     it('scopes a regular user to granted libraries even when the request names another', async () => {
@@ -198,14 +248,9 @@ describe('Komga facade: GET /series (search + browse)', () => {
         expect(where).toContain('lib_9'); // both constraints stand (AND), neither overwrites the other
     });
 
-    it('GET /series/new forces newest-created first; GET /series/updated newest-modified first', async () => {
+    it('GET /series/new forces newest-created first', async () => {
         await getSeriesNew(req('/series/new?page=0&size=20&deleted=false'));
         expect(mocks.prisma.series.findMany.mock.calls[0][0].orderBy[0]).toEqual({ createdAt: 'desc' });
-
-        await getSeriesUpdated(req('/series/updated?page=0&size=20&deleted=false'));
-        expect(mocks.prisma.series.findMany.mock.calls[1][0].orderBy[0]).toEqual({ updatedAt: 'desc' });
-        const body = await (await getSeriesUpdated(req('/series/updated'))).json();
-        expect(body.content[0].metadata.lastModified).toBe(D.toISOString()); // filterUpdatedManga compares this
     });
 });
 

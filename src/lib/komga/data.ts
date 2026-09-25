@@ -50,8 +50,8 @@ export function seriesListWhere(libs: AccessibleLibraries, filters: SeriesFilter
 
 export function seriesOrderBy(sort: SeriesSort): Prisma.SeriesOrderByWithRelationInput[] {
     // `id` tiebreaker: OFFSET pagination needs a total order (same rule as the OPDS catalog).
+    // (fileAddedAt is an aggregate over a series' issues — listSeries orders it with a groupBy.)
     switch (sort.field) {
-        case 'updatedAt': return [{ updatedAt: sort.dir }, { id: 'asc' }];
         case 'createdAt': return [{ createdAt: sort.dir }, { id: 'asc' }];
         default: return [{ name: sort.dir }, { year: 'asc' }, { id: 'asc' }];
     }
@@ -66,13 +66,14 @@ export async function seriesCounts(seriesIds: string[], userId: string): Promise
             by: ['seriesId'],
             where: { seriesId: { in: seriesIds }, ...HAS_FILE },
             _count: { _all: true },
+            _max: { fileAddedAt: true }, // the series' lastModified (#206 follow-up)
         }),
         prisma.readProgress.findMany({
             where: { userId, issue: { seriesId: { in: seriesIds }, ...HAS_FILE } },
             select: { isCompleted: true, currentPage: true, issue: { select: { seriesId: true } } },
         }),
     ]);
-    for (const g of groups) out.set(g.seriesId, { ...ZERO_COUNTS, booksCount: g._count._all });
+    for (const g of groups) out.set(g.seriesId, { ...ZERO_COUNTS, booksCount: g._count._all, lastFileAddedAt: g._max?.fileAddedAt ?? null });
     for (const p of progress) {
         const c = out.get(p.issue.seriesId) ?? { ...ZERO_COUNTS };
         if (p.isCompleted) c.booksReadCount++;
@@ -91,12 +92,42 @@ export interface ListSeriesArgs {
     size: number;
 }
 
+/** A file row with an arrival stamp — the rows the arrival order ranks. */
+const STAMPED_FILE = { ...HAS_FILE, fileAddedAt: { not: null } } as const;
+
+/**
+ * Arrival order (#206 follow-up): the series that most recently gained a file, by the newest
+ * Issue.fileAddedAt under the same filters. Only stamped rows rank — Postgres sorts a NULL max
+ * FIRST under DESC, which would put an unstamped series at the top of Paperback's update walk and
+ * stop it dead (the startup backfill leaves none, but a gap must never reorder the list). `seriesId`
+ * breaks ties so OFFSET paging stays a total order; the count covers exactly the ranked set.
+ */
+async function listByArrival(where: Prisma.SeriesWhereInput, dir: 'asc' | 'desc', page: number, size: number) {
+    const [groups, total] = await Promise.all([
+        prisma.issue.groupBy({
+            by: ['seriesId'],
+            where: { ...STAMPED_FILE, series: where },
+            _max: { fileAddedAt: true },
+            orderBy: [{ _max: { fileAddedAt: dir } }, { seriesId: 'asc' }],
+            skip: page * size,
+            take: size,
+        }),
+        prisma.series.count({ where: { AND: [where, { issues: { some: STAMPED_FILE } }] } }),
+    ]);
+    const ids = groups.map(g => g.seriesId);
+    const found = ids.length ? await prisma.series.findMany({ where: { id: { in: ids } } }) : [];
+    const byId = new Map(found.map(s => [s.id, s]));
+    return { rows: ids.map(id => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s)), total };
+}
+
 export async function listSeries({ libs, userId, filters, sort, page, size }: ListSeriesArgs) {
     const where = seriesListWhere(libs, filters);
-    const [rows, total] = await Promise.all([
-        prisma.series.findMany({ where, orderBy: seriesOrderBy(sort), skip: page * size, take: size }),
-        prisma.series.count({ where }),
-    ]);
+    const { rows, total } = sort.field === 'fileAddedAt'
+        ? await listByArrival(where, sort.dir, page, size)
+        : await Promise.all([
+            prisma.series.findMany({ where, orderBy: seriesOrderBy(sort), skip: page * size, take: size }),
+            prisma.series.count({ where }),
+        ]).then(([rows, total]) => ({ rows, total }));
     const counts = await seriesCounts(rows.map(r => r.id), userId);
     const content = rows.map(r => toSeriesDto(r, counts.get(r.id) ?? ZERO_COUNTS, seriesAuthors(r)));
     return komgaPage(content, page, size, total);

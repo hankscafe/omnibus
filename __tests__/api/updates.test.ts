@@ -52,10 +52,24 @@ describe('API: /api/library/updates (GET)', () => {
         const arg = (prisma.issue.findMany as any).mock.calls[0][0];
         expect(arg.where.series.follows).toEqual({ some: { userId: 'u1' } });
         expect(arg.where.filePath).toEqual({ not: null });
-        expect(arg.where.createdAt.gte).toBeInstanceOf(Date);
+        // Arrival time (Issue.fileAddedAt, #206 follow-up) — a monitored download fills a placeholder
+        // born weeks earlier, and its createdAt kept it outside this 30-day window.
+        expect(arg.where.fileAddedAt.gte).toBeInstanceOf(Date);
+        expect(arg.where.createdAt).toBeUndefined();
         expect(arg.where.series.libraryId).toBeUndefined(); // 'ALL' access adds no filter
-        expect(arg.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+        expect(arg.orderBy).toEqual([{ fileAddedAt: 'desc' }, { id: 'desc' }]);
         expect(arg.take).toBe(500);
+    });
+
+    it('dates each item by when its file arrived, not when its row was born', async () => {
+        const arrived = new Date('2026-09-20T09:00:00Z');
+        (prisma.issue.findMany as any).mockResolvedValue([
+            dbIssue('i1', { createdAt: new Date('2026-06-01T00:00:00Z'), fileAddedAt: arrived }),
+        ]);
+
+        const data = await (await GET()).json();
+
+        expect(new Date(data.items[0].createdAt).toISOString()).toBe(arrived.toISOString());
     });
 
     it('applies the per-library access filter for restricted users', async () => {

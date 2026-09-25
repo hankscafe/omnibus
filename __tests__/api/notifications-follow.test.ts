@@ -41,7 +41,7 @@ describe('API: /api/notifications follow-arrivals summary (GET)', () => {
     it('pushes ONE summary entry with the count and the newest arrival date', async () => {
         const newest = new Date('2026-07-31T10:00:00Z');
         (prisma.issue.count as any).mockResolvedValue(3);
-        (prisma.issue.findFirst as any).mockResolvedValue({ createdAt: newest });
+        (prisma.issue.findFirst as any).mockResolvedValue({ fileAddedAt: newest });
 
         const res = await GET();
         const data = await res.json();
@@ -55,7 +55,7 @@ describe('API: /api/notifications follow-arrivals summary (GET)', () => {
 
     it('uses the singular title for one arrival', async () => {
         (prisma.issue.count as any).mockResolvedValue(1);
-        (prisma.issue.findFirst as any).mockResolvedValue({ createdAt: new Date() });
+        (prisma.issue.findFirst as any).mockResolvedValue({ fileAddedAt: new Date() });
 
         const data = await (await GET()).json();
 
@@ -74,15 +74,21 @@ describe('API: /api/notifications follow-arrivals summary (GET)', () => {
         await GET();
 
         const where = (prisma.issue.count as any).mock.calls[0][0].where;
-        expect(where.createdAt.gt).toEqual(marker);
+        // Arrival time (Issue.fileAddedAt, #206 follow-up): a monitored download filling an old
+        // placeholder counts; its row's createdAt predates the marker and never did.
+        expect(where.fileAddedAt.gt).toEqual(marker);
+        expect(where.createdAt).toBeUndefined();
         expect(where.filePath).toEqual({ not: null });
         expect(where.series.follows).toEqual({ some: { userId: 'u1' } });
+        const newest = (prisma.issue.findFirst as any).mock.calls[0][0];
+        expect(newest.orderBy).toEqual([{ fileAddedAt: 'desc' }, { id: 'desc' }]);
+        expect(newest.select).toEqual({ fileAddedAt: true });
     });
 
     it('bounds a missing marker by the 30-day feed window', async () => {
         await GET();
 
-        const gt: Date = (prisma.issue.count as any).mock.calls[0][0].where.createdAt.gt;
+        const gt: Date = (prisma.issue.count as any).mock.calls[0][0].where.fileAddedAt.gt;
         const expected = Date.now() - 30 * 24 * 60 * 60 * 1000;
         expect(Math.abs(gt.getTime() - expected)).toBeLessThan(60 * 1000);
     });

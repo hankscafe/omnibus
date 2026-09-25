@@ -461,14 +461,17 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 });
 
                 let res = if let Some(eid) = existing_issue_id {
-                    sqlx::query(
+                    sqlx::query(&format!(
                         // Preserve already-present data on re-import (parity with importer.ts dedupe):
                         // keep existing non-empty name/description/credits and a real metadataId; only
                         // upgrade metadataSource from LOCAL and matchState from UNMATCHED — never clobber
                         // a richly-matched issue with freshly-parsed (possibly empty) values.
+                        // Issue.fileAddedAt (#206 follow-up, importer.ts parity): filling a placeholder
+                        // is an arrival; replacing a file the row already had is not.
                         r#"UPDATE "Issue" SET
                                number=$1,
                                status='DOWNLOADED',
+                               {stamp},
                                "filePath"=$2,
                                name=COALESCE(NULLIF(name, ''), $3),
                                description=COALESCE(NULLIF(description, ''), $4),
@@ -481,7 +484,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                                "matchState"=CASE WHEN "matchState" = 'UNMATCHED' THEN $10 ELSE "matchState" END,
                                "pageCount"=CASE WHEN $11 > 0 THEN $11 ELSE "pageCount" END
                            WHERE id=$12"#,
-                    )
+                        stamp = crate::file_added::arrival_set(&db)
+                    ))
                     .bind(&issue_num).bind(&file_path_str).bind(&issue_title).bind(&issue_summary)
                     .bind(&writers_json).bind(&artists_json).bind(&characters_json)
                     .bind(&issue_meta_id).bind(&issue_meta_source).bind(issue_match_state).bind(page_count).bind(&eid)
@@ -490,8 +494,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 } else {
                     sqlx::query(&format!(
                         // isAnnual as a SQL literal — the Any-driver bool rule (#203).
-                        r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "pageCount", "releaseDate", "createdAt")
-                           VALUES ($1, $2, $3, {annual}, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, {now})"#,
+                        r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", status, "filePath", name, description, writers, artists, characters, "matchState", "metadataId", "metadataSource", "pageCount", "releaseDate", "fileAddedAt", "createdAt")
+                           VALUES ($1, $2, $3, {annual}, 'DOWNLOADED', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, {now}, {now})"#,
                         annual = if is_annual { "true" } else { "false" },
                         now = db.now_expr()
                     ))

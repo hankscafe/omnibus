@@ -43,8 +43,8 @@ describe('GET /api/library/recent', () => {
     it('orders series by newest imported issue, not by series id', async () => {
         // old-series has the NEWER issue import; new-series is a newer row with an older import
         mocks.issueGroupBy.mockResolvedValue([
-            { seriesId: 'old-series', _max: { createdAt: new Date('2026-07-25T10:00:00Z') } },
-            { seriesId: 'new-series', _max: { createdAt: new Date('2026-07-20T10:00:00Z') } },
+            { seriesId: 'old-series', _max: { fileAddedAt: new Date('2026-07-25T10:00:00Z') } },
+            { seriesId: 'new-series', _max: { fileAddedAt: new Date('2026-07-20T10:00:00Z') } },
         ]);
         // DB hands the hydration query back in its own (id) order — route must re-apply groupBy order
         mocks.seriesFindMany.mockResolvedValue([
@@ -55,10 +55,14 @@ describe('GET /api/library/recent', () => {
         const res = await GET();
         const data = await res.json();
 
+        // Issue.fileAddedAt (#206 follow-up), not createdAt: a download that fills a monitored
+        // placeholder keeps the skeleton's old createdAt and never reached the shelf. Unstamped rows
+        // are left out — Postgres sorts a NULL max FIRST under DESC.
         expect(mocks.issueGroupBy).toHaveBeenCalledWith(expect.objectContaining({
             by: ['seriesId'],
-            where: expect.objectContaining({ filePath: { not: null } }),
-            orderBy: { _max: { createdAt: 'desc' } },
+            where: expect.objectContaining({ filePath: { not: null }, fileAddedAt: { not: null } }),
+            _max: { fileAddedAt: true },
+            orderBy: { _max: { fileAddedAt: 'desc' } },
             take: 7,
         }));
         expect(data.items.map((i: any) => i.id)).toEqual(['old-series', 'new-series']);

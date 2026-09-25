@@ -1145,8 +1145,10 @@ export function initWorker() {
                     });
 
                     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+                    // The week's arrivals (Issue.fileAddedAt, #206 follow-up) — a download filling an
+                    // old placeholder is this week's news though its row was born earlier.
                     const candidateIssues = await prisma.issue.findMany({
-                        where: { createdAt: { gte: sevenDaysAgo }, filePath: { not: null } },
+                        where: { fileAddedAt: { gte: sevenDaysAgo }, filePath: { not: null } },
                         include: { series: true }, orderBy: { series: { name: 'asc' } }
                     });
 

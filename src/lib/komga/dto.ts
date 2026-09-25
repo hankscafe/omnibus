@@ -56,6 +56,8 @@ export interface SeriesCounts {
     booksCount: number;
     booksReadCount: number;
     booksInProgressCount: number;
+    /** The series' newest Issue.fileAddedAt — its lastModified (#206 follow-up). */
+    lastFileAddedAt?: Date | null;
 }
 
 export interface KomgaAuthor {
@@ -284,7 +286,10 @@ export function toCollectionDto(c: { id: string; name: string; createdAt: Date; 
 
 export function toSeriesDto(series: KomgaSeriesRow, counts: SeriesCounts, authors: KomgaAuthor[] = seriesAuthors(series)) {
     const created = series.createdAt.toISOString();
-    const lastModified = series.updatedAt.toISOString();
+    // When the series last gained a file (#206 follow-up) — the same key /series/updated orders by,
+    // which Paperback's update check relies on (it stops at the first lastModified older than its
+    // last run). Series.updatedAt moves on every Series Monitor pass and meant nothing to a reader.
+    const lastModified = (counts.lastFileAddedAt ?? series.createdAt).toISOString();
     // The year is the only disambiguator Paperback will show for same-named volumes.
     const title = series.year ? `${series.name} (${series.year})` : series.name;
     const booksUnreadCount = Math.max(0, counts.booksCount - counts.booksReadCount - counts.booksInProgressCount);

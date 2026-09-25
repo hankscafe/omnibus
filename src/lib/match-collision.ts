@@ -17,6 +17,7 @@ import { moveFileSafe, cleanupEmptyDirs, ensureLibraryDir } from '@/lib/utils/sa
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { describeIssueFromFilename, normalizeFractionNumbers, isSameIssue } from '@/lib/utils/issue-parser';
 import { filePatternForIssue } from '@/lib/utils/file-pattern';
+import { carriedStamp } from '@/lib/file-added';
 
 /** A folder as the disk sees it: one slash form, no trailing separator, no case. */
 export const normalizeFolder = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -235,13 +236,16 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
             });
             result.absorbed++;
         } else if (twin) {
-            await prisma.issue.update({ where: { id: twin.id }, data: { filePath: target, status: 'DOWNLOADED' } });
+            // #206 follow-up: a file with no row of its own has never been in the library — an
+            // arrival. (A file that brings its row, above, keeps that row's time.)
+            await prisma.issue.update({ where: { id: twin.id }, data: { filePath: target, status: 'DOWNLOADED', fileAddedAt: carriedStamp(null) } });
             usedTwins.add(twin.id);
             result.claimed++;
         } else {
             await prisma.issue.create({
                 data: {
                     seriesId: owner.id, attachedVolumeId: attachment.id, number, isAnnual: false, filePath: target, status: 'DOWNLOADED',
+                    fileAddedAt: carriedStamp(null),
                     ...(isLocal
                         ? localIdentity
                         : { metadataId: `unmatched_${Math.random()}`, metadataSource: 'LOCAL', matchState: 'UNMATCHED', name: `Vol. ${number}` }),

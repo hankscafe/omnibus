@@ -7,7 +7,8 @@ import { Logger } from './logger';
 import { resolveRemotePath } from './utils/path-resolver'; 
 import axios from 'axios';
 import { SystemNotifier } from './notifications';
-import { syncSeriesMetadata } from './metadata-fetcher'; 
+import { syncSeriesMetadata } from './metadata-fetcher';
+import { arrivalStamp } from './file-added';
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
 import { isSameIssue, extractIssueNumber, annualFlagForSignals } from '@/lib/utils/issue-parser';
@@ -872,10 +873,13 @@ export const Importer = {
          if (existingIssue) {
              await prisma.issue.update({
                  where: { id: existingIssue.id },
-                 data: { 
-                     status: 'DOWNLOADED', 
-                     filePath: finalPath, 
+                 data: {
+                     status: 'DOWNLOADED',
+                     filePath: finalPath,
                      pageCount,
+                     // #206 follow-up: filling a placeholder is an arrival (its createdAt is the
+                     // skeleton's); replacing a file the row already had is not.
+                     ...arrivalStamp(existingIssue),
                      name: existingIssue.name || xmlMeta?.title || null,
                      description: existingIssue.description || xmlMeta?.summary || null,
                      writers: existingIssue.writers && existingIssue.writers !== "[]" ? existingIssue.writers : writersStr,
@@ -908,6 +912,7 @@ export const Importer = {
                      status: 'DOWNLOADED',
                      filePath: finalPath,
                      pageCount,
+                     ...arrivalStamp(null),
                      name: xmlMeta?.title || null,
                      description: xmlMeta?.summary || null,
                      writers: writersStr,

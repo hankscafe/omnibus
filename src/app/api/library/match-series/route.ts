@@ -21,6 +21,7 @@ import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths'
 import { safeRelocateFolder, moveFileSafe, ensureLibraryDir } from '@/lib/utils/safe-fs';
 import { comicInfoDefaultsUpdateFragment } from '@/lib/utils/comicinfo-fields';
 import { countArchivePages } from '@/lib/utils/archive-pages';
+import { carriedStamp } from '@/lib/file-added';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { findLocalCoverBasename } from '@/lib/utils/cover-plan';
 import { parseComicVineCredits } from '@/lib/utils';
@@ -513,6 +514,15 @@ export async function POST(request: Request) {
 
                     // 2. Inline Database Update (No more silent transaction rollbacks!)
                     if (existingRecord) {
+                        // #206 follow-up: matching is a re-home, not an arrival. The row that already
+                        // held this file (still under its original path — rows move below) was
+                        // announced when the scan found it; its time carries over, so a bulk matching
+                        // session never floods Recently Added, the Updates feed or the digest.
+                        const originalPath = isFile ? oldFolderPath : path.join(oldFolderPath, file);
+                        const sourceRow = await prisma.issue.findFirst({
+                            where: { filePath: { in: [...new Set([originalPath, originalPath.replace(/\\/g, '/')])] } },
+                            select: { fileAddedAt: true, createdAt: true },
+                        });
                         const updatePayload: any = {
                             filePath: newFilePath,
                             // #205: an adopted skeleton (WANTED) now holds a file — it is downloaded,
@@ -524,7 +534,8 @@ export async function POST(request: Request) {
                             isAnnual: isAnnualFile,
                             seriesId: existingRecord.id,
                             // Persist the page total so OPDS (pse:count) can stream this issue.
-                            pageCount: await countArchivePages(newFilePath)
+                            pageCount: await countArchivePages(newFilePath),
+                            fileAddedAt: carriedStamp(sourceRow),
                         };
                         
                         if (isTargetFile && targetIssueMetaId) {

@@ -54,9 +54,11 @@ export async function GET() {
     try {
         const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const seen = me?.lastSeenUpdatesAt && me.lastSeenUpdatesAt > windowStart ? me.lastSeenUpdatesAt : windowStart;
+        // Arrival time (Issue.fileAddedAt, #206 follow-up): a monitored download filling an old
+        // placeholder counts — its row's createdAt predated the marker and never did.
         const followArrivalWhere = {
             filePath: { not: null },
-            createdAt: { gt: seen },
+            fileAddedAt: { gt: seen },
             series: {
                 follows: { some: { userId } },
                 ...(accessibleLibs === 'ALL' ? {} : { libraryId: { in: accessibleLibs } }),
@@ -64,7 +66,7 @@ export async function GET() {
         };
         const [arrivalCount, newestArrival] = await Promise.all([
             prisma.issue.count({ where: followArrivalWhere }),
-            prisma.issue.findFirst({ where: followArrivalWhere, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { createdAt: true } }),
+            prisma.issue.findFirst({ where: followArrivalWhere, orderBy: [{ fileAddedAt: 'desc' }, { id: 'desc' }], select: { fileAddedAt: true } }),
         ]);
         if (arrivalCount > 0) {
             formatted.push({
@@ -73,7 +75,7 @@ export async function GET() {
                 title: `${arrivalCount} New Issue${arrivalCount === 1 ? '' : 's'} In Your Follows`,
                 description: 'New arrivals in series you follow are waiting in Updates.',
                 imageUrl: null,
-                date: newestArrival?.createdAt || new Date(),
+                date: newestArrival?.fileAddedAt || new Date(),
             } as any);
         }
     } catch (e) {

@@ -400,6 +400,54 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(adopt.data.number).toBeUndefined();
     });
 
+    // Issue.fileAddedAt (#206 follow-up): matching is a RE-HOME, not an arrival. A file the scan
+    // already indexed was announced when it appeared; Accept carries that row's time over, so a
+    // bulk matching session never floods Recently Added, the Updates feed or the digest.
+    describe('fileAddedAt', () => {
+        const OLD = new Date('2026-06-01T08:00:00.000Z');
+        const boneSetup = () => {
+            vi.mocked(fs.promises.stat).mockResolvedValueOnce({ isFile: () => true } as any);
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p) === '/unmatched/Bone (1991) 13.5.cbz');
+            vi.mocked(fs.promises.readdir).mockResolvedValueOnce(['Bone (1991) 13.5.cbz'] as any);
+            vi.mocked(axios.get).mockResolvedValue({ data: Buffer.from('series-cover') } as any);
+            mocks.getSeriesDetails.mockResolvedValueOnce({ name: 'Bone', year: 1991, publisher: 'Cartoon Books', coverUrl: 'http://cover/img.jpg', status: 'Ended' });
+            mocks.findFirstSeries.mockResolvedValue({ id: 's1' });
+            mocks.updateSeries.mockResolvedValue({ id: 's1', year: 1991 });
+        };
+        const accept = () => POST(createReq({
+            oldFolderPath: '/unmatched/Bone (1991) 13.5.cbz', metadataId: '2127', metadataSource: 'METRON',
+            exactIssueNumber: '13.5', exactIssueId: '317233',
+        }));
+
+        it('carries the arrival time of the row that already held the file onto the row that adopts it', async () => {
+            boneSetup();
+            mocks.findManyIssues.mockImplementation(async (args: any) =>
+                args?.where?.seriesId === 's1' && args?.where?.isAnnual === false ? [{ id: 'cv_row', number: '13½' }] : []
+            );
+            mocks.findFirstIssue.mockImplementation(async (args: any) =>
+                JSON.stringify(args?.where ?? {}).includes('/unmatched/Bone (1991) 13.5.cbz') ? { fileAddedAt: OLD, createdAt: new Date('2026-05-01T00:00:00Z') } : null
+            );
+
+            expect((await accept()).status).toBe(200);
+
+            const adopt = mocks.updateIssue.mock.calls.map(c => c[0]).find(c => c?.where?.id === 'cv_row');
+            expect(adopt.data.fileAddedAt).toEqual(OLD);
+        });
+
+        it('stamps now when the file never had a row — its first appearance in the library', async () => {
+            boneSetup();
+            mocks.findManyIssues.mockResolvedValue([]);
+            mocks.findFirstIssue.mockResolvedValue(null);
+            const before = Date.now();
+
+            expect((await accept()).status).toBe(200);
+
+            const created = mocks.createIssue.mock.calls.at(-1)![0].data;
+            expect(created.fileAddedAt).toBeInstanceOf(Date);
+            expect(created.fileAddedAt.getTime()).toBeGreaterThanOrEqual(before);
+        });
+    });
+
     it('should refuse to overwrite a same-named loose file and report the conflict', async () => {
         // isFile = true and the target name already exists (existsSync defaults to true) → leave the loose
         // file in place, count the conflict, and never call rename (no clobber).

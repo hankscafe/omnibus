@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Importer } from '@/lib/importer';
 import fs from 'fs-extra';
 // Import the queue so we can assert against the mock
@@ -152,6 +152,58 @@ describe('File System: Importer Engine', () => {
                 delay: 600000
             })
         );
+    });
+
+    // Issue.fileAddedAt (#206 follow-up): a download is an arrival. The placeholder a monitored
+    // download fills keeps its old createdAt, so the arrival time has to be stamped here.
+    describe('fileAddedAt', () => {
+        const batmanRequest = () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+            });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false
+            });
+        };
+        const issueRow = (over: Record<string, unknown>) => ({
+            id: 'iss_1', seriesId: 'series_1', number: '1', isAnnual: false, name: null, description: null,
+            writers: null, artists: null, characters: null, metadataId: '900001', metadataSource: 'COMICVINE', matchState: 'MATCHED',
+            ...over,
+        });
+        afterEach(async () => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([]);
+        });
+
+        it('stamps a new row it creates', async () => {
+            batmanRequest();
+            const before = Date.now();
+            await Importer.importRequest('req_1');
+            const data = mocks.createIssue.mock.calls.at(-1)![0].data;
+            expect(data.fileAddedAt).toBeInstanceOf(Date);
+            expect(data.fileAddedAt.getTime()).toBeGreaterThanOrEqual(before);
+        });
+
+        it('stamps the WANTED placeholder it fills', async () => {
+            batmanRequest();
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([issueRow({ filePath: null, status: 'WANTED', fileAddedAt: null })]);
+            await Importer.importRequest('req_1');
+            const data = (prisma.issue.update as any).mock.calls.at(-1)[0].data;
+            expect(data.filePath).toContain('Batman #01.cbz');
+            expect(data.fileAddedAt).toBeInstanceOf(Date);
+        });
+
+        it('leaves the stamp alone when the download replaces a file the row already had', async () => {
+            batmanRequest();
+            const { prisma } = await import('@/lib/db');
+            const OLD = new Date('2026-06-01T08:00:00.000Z');
+            (prisma.issue.findMany as any).mockResolvedValue([issueRow({ filePath: '/library/comics/DC Comics/Batman (2016)/Batman #01.cbr', status: 'DOWNLOADED', fileAddedAt: OLD })]);
+            await Importer.importRequest('req_1');
+            const data = (prisma.issue.update as any).mock.calls.at(-1)[0].data;
+            expect(data.filePath).toContain('Batman #01.cbz');
+            expect('fileAddedAt' in data).toBe(false);
+        });
     });
 
     it('routes a nested batch archive to WATCHED via the engine without touching AdmZip', async () => {

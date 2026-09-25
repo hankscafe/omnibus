@@ -354,6 +354,12 @@ describe('Cron: BullMQ Worker Router', () => {
 
         await mocks.workerCb.current(mockJob);
 
+        // The week's arrivals are by Issue.fileAddedAt (#206 follow-up) — a download filling an old
+        // placeholder is this week's news even though its row was born earlier.
+        const digestQuery = mocks.issueFindMany.mock.calls.map((c: any) => c[0]).find((a: any) => a?.where?.filePath);
+        expect(digestQuery.where.fileAddedAt.gte).toBeInstanceOf(Date);
+        expect(digestQuery.where.createdAt).toBeUndefined();
+
         // Verify the Mailer was dispatched with the correct compiled payload
         expect(mocks.sendWeeklyDigest).toHaveBeenCalledWith(
             ['reader@omnibus.com'],

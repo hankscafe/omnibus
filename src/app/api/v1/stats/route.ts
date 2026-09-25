@@ -64,8 +64,9 @@ export async function GET(req: NextRequest) {
       // Monthly growth = issues that physically landed in the library this window.
       // Scan-populated libraries never create completed Requests (the engine inserts
       // Issue rows directly), so counting the Request table pinned this at 0.
-      // createdAt, not updatedAt: metadata syncs touch updatedAt on every row.
-      prisma.issue.count({ where: { filePath: { not: null }, createdAt: { gte: thirtyDaysAgo } } }),
+      // fileAddedAt (#206 follow-up), not updatedAt (metadata syncs touch it on every row) nor
+      // createdAt (a download filling a placeholder keeps the skeleton's birth).
+      prisma.issue.count({ where: { filePath: { not: null }, fileAddedAt: { gte: thirtyDaysAgo } } }),
       // Failed/given-up downloads end up STALLED (FAILED/ERROR are legacy).
       // updatedAt = when the request last transitioned, matching /api/admin/stats.
       prisma.request.count({ where: { status: { in: ['FAILED', 'ERROR', 'STALLED'] }, updatedAt: { gte: thirtyDaysAgo } } }),

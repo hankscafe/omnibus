@@ -156,6 +156,24 @@ describe('attachAsCollected', () => {
         expect(result).toEqual(expect.objectContaining({ moved: 1, claimed: 1, conflicts: 0 }));
     });
 
+    // Issue.fileAddedAt (#206 follow-up): a file that brings its own row keeps that row's arrival
+    // time (it was announced when the scan found it); a file with no row is new to the library.
+    it('keeps the arrival time on a row that brings its file along, and stamps a file that had no row', async () => {
+        await attachAsCollected(input);
+        const absorbed = mocks.issueUpdate.mock.calls.map(c => c[0]).find(c => c.where.id === 'u1');
+        expect('fileAddedAt' in absorbed.data).toBe(false);
+
+        vi.clearAllMocks();
+        vi.mocked(fs.promises.stat as any).mockResolvedValue({ isFile: () => true });
+        mocks.avUpsert.mockResolvedValue({ id: 'attX' });
+        mocks.engineFetchLong.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, results: [{ total: 1, created: 1 }] }) });
+        const before = Date.now();
+        await attachAsCollected({ ...input, source: '/unmatched/Saga v01.cbz', sourceSeriesId: null });
+        const claimed = mocks.issueUpdate.mock.calls.map(c => c[0]).find(c => c.where.id === 'sk1');
+        expect(claimed.data.fileAddedAt).toBeInstanceOf(Date);
+        expect(claimed.data.fileAddedAt.getTime()).toBeGreaterThanOrEqual(before);
+    });
+
     it('stops before touching a file when the engine cannot import the volume', async () => {
         mocks.engineFetchLong.mockResolvedValue({ ok: false, status: 502, json: async () => ({ error: 'ComicVine down' }) });
 
@@ -206,6 +224,8 @@ describe('attachAsCollected', () => {
             }));
             expect(mocks.issueUpdate).not.toHaveBeenCalled();
             expect(result).toEqual(expect.objectContaining({ moved: 1, claimed: 1, absorbed: 0 }));
+            // A loose file with no row of its own is new to the library.
+            expect(mocks.issueCreate.mock.calls[0][0].data.fileAddedAt).toBeInstanceOf(Date);
         });
     });
 });

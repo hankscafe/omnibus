@@ -1368,6 +1368,7 @@ export default function ProfilePage() {
                           <thead className="bg-muted border-b border-border text-muted-foreground uppercase text-xs">
                               <tr>
                                   <th className="px-4 py-3">Device / App</th>
+                                  <th className="px-4 py-3">KOReader</th>
                                   <th className="px-4 py-3">Created</th>
                                   <th className="px-4 py-3">Last Used</th>
                                   <th className="px-4 py-3 text-right">Actions</th>
@@ -1375,11 +1376,16 @@ export default function ProfilePage() {
                           </thead>
                           <tbody className="divide-y divide-border bg-background">
                               {apiKeys.length === 0 ? (
-                                  <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">You haven't generated any access keys.</td></tr>
+                                  <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground italic">You haven't generated any access keys.</td></tr>
                               ) : (
                                   apiKeys.map(key => (
                                       <tr key={key.id} className="hover:bg-muted/30">
                                           <td className="px-4 py-3 font-bold truncate max-w-[200px] text-foreground">{key.name}</td>
+                                          <td className="px-4 py-3">
+                                              <Badge variant={key.koreaderCompatible ? 'secondary' : 'outline'} className="text-[10px] uppercase tracking-wider">
+                                                  {key.koreaderCompatible ? 'Supported' : 'Legacy'}
+                                              </Badge>
+                                          </td>
                                           <td className="px-4 py-3 text-muted-foreground">{new Date(key.createdAt).toLocaleDateString()}</td>
                                           <td className="px-4 py-3 text-muted-foreground">{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : 'Never'}</td>
                                           <td className="px-4 py-3 text-right">

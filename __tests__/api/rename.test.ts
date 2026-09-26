@@ -153,6 +153,30 @@ describe('API Route: Bulk Library Renamer', () => {
         expect(body.manga_file_pattern).toBe('{Series} c{Issue}');
     });
 
+    it.each([
+        { pattern: '{Series} --- #{Issue}', filename: 'Batman - - #001.cbz' },
+        { pattern: '{Series} #{Issue} [{Imprint}]', filename: 'Batman #001.cbz' },
+    ])('cleans the Node fallback filename once before adding the extension: $pattern', async ({ pattern, filename }) => {
+        mocks.libraryFindMany.mockResolvedValue([{ id: 'lib_1', path: '/data/comics' }]);
+        mocks.fsExistsSync.mockImplementation((p: string | Buffer | URL) => !String(p).includes('#001'));
+        mocks.seriesFindMany.mockResolvedValue([{
+            id: 'series_1', libraryId: 'lib_1', folderPath: '/data/comics/Batman',
+            publisher: 'DC Comics', name: 'Batman', year: 2016, isManga: false, imprint: null,
+        }]);
+        mocks.issueFindMany.mockResolvedValue([{
+            id: 'issue_1', seriesId: 'series_1', filePath: '/data/comics/Batman/Batman 1.cbz',
+            number: '1', releaseDate: '2016-01-01',
+        }]);
+        const res = await POST(new NextRequest('http://localhost/api/library/rename', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesIds: ['series_1'], folderPattern: '{Series}', filePattern: pattern }),
+        }));
+        expect(res.status).toBe(200);
+        expect(mocks.fsMove).toHaveBeenCalledWith(
+            '/data/comics/Batman/Batman 1.cbz', path.join('/data/comics/Batman', filename),
+        );
+    });
+
     it('should physically move and rename files based on pattern matching', async () => {
         mocks.libraryFindMany.mockResolvedValue([{ id: 'lib_1', path: '/data/comics' }]);
         mocks.systemSettingFindMany.mockResolvedValue([]); 

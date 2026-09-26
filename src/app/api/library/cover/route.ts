@@ -195,7 +195,7 @@ async function serveLocalImage(request: NextRequest, absPath: string, stat: fs.S
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  let filePath = searchParams.get('path');
+  const filePath = searchParams.get('path');
   const issueId = searchParams.get('issueId');
   const wRaw = parseInt(searchParams.get('w') || '', 10);
   const w = ALLOWED_WIDTHS.includes(wRaw) ? wRaw : null;

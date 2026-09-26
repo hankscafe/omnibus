@@ -121,6 +121,44 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         mocks.moveFileSafe.mockResolvedValue(undefined);
     });
 
+    it.each([
+        { stored: null, override: undefined, effective: 'Absolute', saved: 'Absolute' },
+        { stored: '   ', override: undefined, effective: 'Absolute', saved: 'Absolute' },
+        { stored: 'Vertigo', override: undefined, effective: 'Vertigo', saved: undefined },
+        { stored: null, override: '', effective: '', saved: null },
+        { stored: 'Vertigo', override: 'Black Label', effective: 'Black Label', saved: 'Black Label' },
+    ])('keeps merge naming and storage consistent for $stored with override $override', async ({ stored, override, effective, saved }) => {
+        mocks.findManySettings.mockResolvedValue([{ key: 'folder_naming_pattern', value: '{Imprint}/{Series} ({Year})' }]);
+        mocks.findUniqueSeries.mockResolvedValue({ id: 'target', imprint: stored, year: 2016 });
+        mocks.findFirstSeries.mockResolvedValue({ id: 'source', imprint: 'Absolute' });
+        mocks.deleteSeries.mockResolvedValue({});
+        mocks.updateManyIssues.mockResolvedValue({ count: 1 });
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Batman', metadataId: '1234',
+            name: 'Batman', year: 2016, publisher: 'DC Comics',
+            imprint: override,
+        }));
+        expect(res.status).toBe(200);
+        const data = mocks.updateSeries.mock.calls[0][0].data;
+        expect(data.folderPath).toBe(`/comics/${effective ? effective + '/' : ''}Batman (2016)`);
+        expect(mocks.deleteSeries).toHaveBeenCalledWith({ where: { id: 'source' } });
+        expect(data.imprint).toBe(saved);
+    });
+
+    it('removes empty optional imprint before appending the extension', async () => {
+        mocks.findManySettings.mockResolvedValue([{ key: 'file_naming_pattern', value: '{Series} #{Issue} [{Imprint}]' }]);
+        vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p) === '/unmatched/Batman 001.cbz');
+        vi.mocked(fs.promises.stat).mockResolvedValueOnce({ isFile: () => true } as any);
+        vi.mocked(fs.promises.readdir).mockResolvedValueOnce(['Batman 001.cbz'] as any);
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Batman 001.cbz', metadataId: '1234',
+            name: 'Batman', year: 2016, publisher: 'DC Comics', exactIssueNumber: '1',
+        }));
+        expect(res.status).toBe(200);
+        expect(mocks.moveFileSafe.mock.calls.map(c => String(c[1]).replace(/\\/g, '/')).at(-1))
+            .toBe('/comics/DC Comics/Batman (2016)/Batman #01.cbz');
+    });
+
     it('should query ComicVine by default if metadataSource is not provided', async () => {
         mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'cv_api_key' });
         vi.mocked(axios.get).mockResolvedValueOnce({ data: { results: { name: 'Batman (CV)', start_year: '2016' } } } as any);

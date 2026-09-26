@@ -92,7 +92,8 @@ export async function processPageSweepChunk(
     enqueueNext: (data: PageSweepJobData) => Promise<unknown>,
     removeFn: typeof removePagesFromIssue = removePagesFromIssue,
 ): Promise<void> {
-    let { items, processed, removed } = data;
+    const { items } = data;
+    let { processed, removed } = data;
     const failed = [...data.failed];
 
     const finalize = async (status: 'COMPLETED' | 'CANCELLED') => {

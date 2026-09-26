@@ -182,10 +182,16 @@ export async function POST(request: Request) {
     // Imprint is a series-level ComicInfo field. An explicit request value, including an empty
     // value, wins; an omitted value preserves the existing matched/unmatched series value so a
     // routine re-match cannot silently remove an imprint folder tier.
-    const effectiveImprint = imprint !== undefined
-        ? imprint
-        : (existingRecord?.imprint ?? unmatchedRecord?.imprint ?? '');
+    const storedImprint = existingRecord?.imprint?.trim()
+        ? existingRecord.imprint
+        : (unmatchedRecord?.imprint ?? existingRecord?.imprint ?? '');
+    const effectiveImprint = imprint !== undefined ? imprint : storedImprint;
     const safeImprint = effectiveImprint ? sanitizeFilename(effectiveImprint) : '';
+    // A merge deletes the source row. Retain any imprint adopted from it on the surviving
+    // series so subsequent Standardize runs use the same value as this move.
+    const adoptedImprint = imprint === undefined && existingRecord && !existingRecord.imprint?.trim()
+        ? unmatchedRecord?.imprint?.trim()
+        : undefined;
 
     // NEVER-DEMOTE manga resolution (2026-07-25 worklist item 5): a context-free re-detection from
     // name+publisher+year used to overwrite isManga and physically move manga-library series into
@@ -218,11 +224,8 @@ export async function POST(request: Request) {
         .replace(/{Year}/gi, safeYear)
         .replace(/{VolumeYear}/gi, safeYear)
         .replace(/{UniverseName}/gi, safeUniverse)
-        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-        .replace(/\(\s*\)/g, '')
-        .replace(/\[\s*\]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
     relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')
@@ -355,6 +358,7 @@ export async function POST(request: Request) {
         // #199 ComicInfo defaults — the shared fragment (also used by the series editor's
         // library/update) applies the undefined-means-untouched contract, list-to-JSON-array
         // conversion, number validation, and the two-way B&W semantics in one place.
+        ...(adoptedImprint ? { imprint: adoptedImprint } : {}),
         ...comicInfoDefaultsUpdateFragment(req),
         ...(lockMetadata ? { hasCustomMetadata: true } : {})
     };
@@ -506,10 +510,10 @@ export async function POST(request: Request) {
                         .replace(/{IssueYear}/gi, issueYear)
                         .replace(/{Issue}/gi, formattedNum)
                         .replace(/{UniverseName}/gi, safeUniverse)
-                        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-                        .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + finalExt;
+                        .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
                     newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
-                        .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+                        .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + finalExt;
                     
                     const oldFilePath = path.join(activeFolderPath, file);
                     const newFilePath = path.join(activeFolderPath, newFileName);

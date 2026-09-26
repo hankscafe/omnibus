@@ -205,7 +205,8 @@ describe('File System: Importer Engine', () => {
             expect(data.filePath).toContain('Batman #01.cbz');
             expect('fileAddedAt' in data).toBe(false);
         });
-    it('uses ComicInfo Imprint on the first import and saves it for later naming', async () => {
+    });
+    it.each([null, '', '   '])('adopts ComicInfo Imprint over stored %j and saves it for later naming', async (imprint) => {
         mocks.findManySettings.mockResolvedValue([
             { key: 'download_path', value: '/downloads' },
             { key: 'folder_naming_pattern', value: '{Imprint}/{Publisher}/{Series} ({Year})' },
@@ -216,7 +217,7 @@ describe('File System: Importer Engine', () => {
         });
         mocks.findFirstSeries.mockResolvedValueOnce({
             id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016,
-            libraryId: 'lib_1', isManga: false, hasCustomMetadata: false, imprint: null,
+            libraryId: 'lib_1', isManga: false, hasCustomMetadata: false, imprint,
         });
         mocks.parseComicInfo.mockResolvedValueOnce({ imprint: 'Absolute' });
 

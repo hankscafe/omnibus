@@ -191,17 +191,17 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
         const twin = twinFor(number);
         const padded = !number.includes('.') && number.length === 1 ? `0${number}` : number;
         const issueYear = (twin?.releaseDate || '').slice(0, 4) || (volumeYear ? String(volumeYear) : '');
-        let newName = isLocal ? base : pattern
-            .replace(/{Publisher}/gi, safePublisher)
-            .replace(/{Series}/gi, safeSeries)
-            .replace(/{Year}/gi, owner.year ? String(owner.year) : '')
-            .replace(/{VolumeYear}/gi, owner.year ? String(owner.year) : '')
-            .replace(/{IssueYear}/gi, issueYear)
-            .replace(/{Issue}/gi, padded)
-            .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
+        let newName = base;
         if (!isLocal) {
-            newName = replaceNamingToken(newName, '{Imprint}', safeImprint)
-                .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+            const namedPattern = pattern
+                .replace(/{Publisher}/gi, safePublisher)
+                .replace(/{Series}/gi, safeSeries)
+                .replace(/{Year}/gi, owner.year ? String(owner.year) : '')
+                .replace(/{VolumeYear}/gi, owner.year ? String(owner.year) : '')
+                .replace(/{IssueYear}/gi, issueYear)
+                .replace(/{Issue}/gi, padded);
+            newName = replaceNamingToken(namedPattern, '{Imprint}', safeImprint)
+                .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
         }
         const target = `${ownerFolder}/${newName}`;
         // A local book's identity is its lane and number — stable across a wipe, unlike a row id.

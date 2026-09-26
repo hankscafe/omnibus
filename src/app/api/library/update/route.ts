@@ -88,11 +88,8 @@ export async function POST(request: Request) {
         .replace(/{Year}/gi, safeYear)
         .replace(/{VolumeYear}/gi, safeYear)
         .replace(/{UniverseName}/gi, safeUniverse)
-        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-        .replace(/\(\s*\)/g, '')
-        .replace(/\[\s*\]/g, '') 
-        .replace(/\s+/g, ' ')
-        .trim();
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
     relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')

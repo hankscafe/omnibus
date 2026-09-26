@@ -100,13 +100,8 @@ export async function POST(request: NextRequest) {
             .replace(/{IssueYear}/gi, issueYear)
             .replace(/{Issue}/gi, formattedNum || "")
             .replace(/{IssueTitle}/gi, cleanIssueName.replace(/[<>:"/\\|?*]/g, '').trim()) // <-- ADD THIS
-            .replace(/{UniverseName}/gi, "") // <-- ADD THIS
-            .replace(/\(\s*\)/g, '')
-            .replace(/\[\s*\]/g, '')
-            .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS
-            .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // <-- ADD THIS
-            .replace(/\s+/g, ' ')
-            .trim();
+            .replace(/{UniverseName}/gi, ""); // <-- ADD THIS
+
         newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
             .replace(/\(\s*\)/g, '')
             .replace(/\[\s*\]/g, '')

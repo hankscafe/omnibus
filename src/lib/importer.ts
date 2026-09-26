@@ -648,9 +648,9 @@ export const Importer = {
     // the series record (set by a prior scan or a manual edit). A group found only in this file's
     // ComicInfo.xml is persisted to the series below so subsequent imports/renames pick it up.
     const safeSeriesGroup = (series as any)?.seriesGroup ? sanitize((series as any).seriesGroup) : "";
-    const imprintName = (series as any)?.imprint?.trim()
-        ? (series as any).imprint
-        : (!(series as any)?.hasCustomMetadata ? (xmlMeta?.imprint || "") : "");
+    const storedImprint = (series as any)?.imprint?.trim();
+    const shouldAdoptImprint = !storedImprint && !(series as any)?.hasCustomMetadata && !!xmlMeta?.imprint;
+    const imprintName = storedImprint || (shouldAdoptImprint ? xmlMeta.imprint : "");
     const safeImprint = imprintName ? sanitize(imprintName) : "";
 
     Logger.log(`[Importer Debug] Applying Folder Pattern: "${folderPattern}" | Variables -> Publisher: "${publisherName}", Series: "${seriesNameFromMeta}", Year: "${seriesYearFromMeta}"`, 'debug');
@@ -661,11 +661,8 @@ export const Importer = {
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
         .replace(/{VolumeYear}/gi, seriesYearFromMeta.toString())
         .replace(/{UniverseName}/gi, safeUniverse)
-        .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-        .replace(/\(\s*\)/g, '')
-        .replace(/\[\s*\]/g, '') 
-        .replace(/\s+/g, ' ')
-        .trim();
+        .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
     relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')
@@ -748,13 +745,8 @@ export const Importer = {
         .replace(/{Issue}/gi, formattedNum)
         .replace(/{IssueTitle}/gi, sanitize(issueTitle))
         .replace(/{UniverseName}/gi, sanitize(universeName))
-        .replace(/{SeriesGroup}/gi, sanitize(seriesGroupName))
-        .replace(/\(\s*\)/g, '')
-        .replace(/\[\s*\]/g, '')
-        .replace(/\s*-\s*-/g, ' - ') // Collapses double hyphens (e.g., " -  - " becomes " - ")
-        .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // Removes any leading or trailing hyphens
-        .replace(/\s+/g, ' ')
-        .trim();
+        .replace(/{SeriesGroup}/gi, sanitize(seriesGroupName));
+
     newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '')
@@ -961,7 +953,7 @@ export const Importer = {
                      ...((xmlMeta?.seriesGroup && !(series as any).seriesGroup) ? { seriesGroup: xmlMeta.seriesGroup } : {}),
                      // Imprint follows the same fill-blank rule, while a curated series remains
                      // authoritative when ComicInfo from a new download disagrees.
-                     ...((xmlMeta?.imprint && !(series as any).imprint && !(series as any).hasCustomMetadata) ? { imprint: xmlMeta.imprint } : {})
+                     ...(shouldAdoptImprint ? { imprint: imprintName } : {})
                  }
              });
          } catch (e) { }

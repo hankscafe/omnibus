@@ -40,6 +40,19 @@ describe('API Route: Rename Preview', () => {
         });
     });
 
+    it('preserves the previous cleanup result for templates without Imprint', async () => {
+        mocks.issueFindMany.mockResolvedValue([{
+            id: 'issue_1', number: '1', name: 'Batman #1', releaseDate: '2016-01-01',
+            filePath: '/data/comics/old/Batman 1.cbz', attachedVolume: null,
+        }]);
+        const res = await post({
+            seriesIds: ['series_1'], folderPattern: '{Series}', filePattern: '{Series} --- #{Issue}',
+        });
+        const { previews } = await res.json();
+        // Original Node cleanup and the Rust renamer each collapse the hyphen run once.
+        expect(previews[0].newPath).toBe('/data/comics/Batman/Batman - - #001.cbz');
+    });
+
     it('promises a LOCAL collected edition\'s books under the edition\'s name, and everything else under the series', async () => {
         mocks.issueFindMany.mockResolvedValue([
             {

@@ -73,11 +73,8 @@ export async function POST(request: NextRequest) {
                 .replace(/{Year}/gi, safeYear)
                 .replace(/{VolumeYear}/gi, safeYear)
                 .replace(/{UniverseName}/gi, safeUniverse)
-                .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-                .replace(/\(\s*\)/g, '')
-                .replace(/\[\s*\]/g, '')
-                .replace(/\s+/g, ' ')
-                .trim();
+                .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
             relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint);
             relFolderPath = relFolderPath.replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -142,13 +139,8 @@ export async function POST(request: NextRequest) {
                     .replace(/{Issue}/gi, formattedNum || "")
                     .replace(/{IssueTitle}/gi, cleanIssueName.replace(/[<>:"/\\|?*]/g, '').trim()) // <-- ADD THIS
                     .replace(/{UniverseName}/gi, safeUniverse) // <-- ADD THIS
-                    .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-                    .replace(/\(\s*\)/g, '')
-                    .replace(/\[\s*\]/g, '')
-                    .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS
-                    .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // <-- ADD THIS
-                    .replace(/\s+/g, ' ')
-                    .trim();
+                    .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
                 newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
                     .replace(/\(\s*\)/g, '')
                     .replace(/\[\s*\]/g, '')

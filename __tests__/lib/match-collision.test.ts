@@ -119,6 +119,22 @@ describe('attachAsCollected', () => {
         expect(result).toEqual(expect.objectContaining({ attachmentId: 'attX', moved: 1, absorbed: 1, skeletonsReplaced: 1, conflicts: 0 }));
     });
 
+    it.each([
+        { imprint: null, suffix: '' },
+        { imprint: 'Black $& Label', suffix: ' [Black $& Label]' },
+    ])('cleans the collected imprint suffix before adding the extension: $imprint', async ({ imprint, suffix }) => {
+        const result = await attachAsCollected({
+            ...input,
+            owner: { ...OWNER, imprint },
+            config: { collected_file_naming_pattern: '{Series} Vol. {Issue} [{Imprint}]' },
+        });
+        expect(result.moved).toBe(1);
+        expect(mocks.moveFileSafe).toHaveBeenCalledWith(
+            '/unmatched/Saga TPB/Saga v01.cbz',
+            `/comics/Image/Saga (2012)/Saga Vol. 01${suffix}.cbz`,
+        );
+    });
+
     it('leaves a file whose collected name is already taken exactly where it is — row, folder and series untouched', async () => {
         vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p).replace(/\\/g, '/') === '/comics/Image/Saga (2012)/Saga Vol. 01 (2012).cbz');
         mocks.issueCount.mockResolvedValue(1);

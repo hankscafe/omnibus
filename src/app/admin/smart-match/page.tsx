@@ -756,7 +756,7 @@ export default function SmartMatchPage() {
         (async () => {
             try {
                 let vid = volId ? String(volId) : '';
-                let provider = volId ? volProvider : issueProvider;
+                const provider = volId ? volProvider : issueProvider;
                 if (!vid && issueId) {
                     // Only an issue id — one detail call resolves its volume, then the normal path runs.
                     const r = await fetch(`/api/issue-details?id=${issueId}&type=issue&provider=${issueProvider}`);

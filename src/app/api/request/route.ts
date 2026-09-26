@@ -262,11 +262,8 @@ export async function POST(request: NextRequest) {
           .replace(/{Publisher}/gi, safePubFolder)
           .replace(/{Series}/gi, safeFolderName)
           .replace(/{Year}/gi, year ? year.toString() : "")
-          .replace(/{VolumeYear}/gi, year ? year.toString() : "")
-          .replace(/\(\s*\)/g, '') 
-          .replace(/\[\s*\]/g, '') 
-          .replace(/\s+/g, ' ')
-          .trim();
+          .replace(/{VolumeYear}/gi, year ? year.toString() : "");
+
       relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
           .replace(/\(\s*\)/g, '')
           .replace(/\[\s*\]/g, '')

@@ -115,11 +115,8 @@ export async function POST(request: NextRequest) {
             .replace(/{Year}/gi, safeYear)
             .replace(/{VolumeYear}/gi, safeYear)
             .replace(/{UniverseName}/gi, safeUniverse)
-            .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-            .replace(/\(\s*\)/g, '')
-            .replace(/\[\s*\]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+            .replace(/{SeriesGroup}/gi, safeSeriesGroup);
+
         relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
             .replace(/\(\s*\)/g, '')
             .replace(/\[\s*\]/g, '')
@@ -232,12 +229,7 @@ export async function POST(request: NextRequest) {
                 .replace(/{Issue}/gi, paddedNum)
                 .replace(/{IssueTitle}/gi, sanitize(cleanIssueName))
                 .replace(/{UniverseName}/gi, safeUniverse)
-                .replace(/{SeriesGroup}/gi, safeSeriesGroup)
-                .replace(/\(\s*\)/g, '')
-                .replace(/\[\s*\]/g, '')
-                .replace(/\s*-\s*-/g, ' - ')
-                .replace(/(^\s*-\s*|\s*-\s*$)/g, '')
-                .replace(/\s+/g, ' ');
+                .replace(/{SeriesGroup}/gi, safeSeriesGroup);
 
             newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
                 .replace(/\(\s*\)/g, '')

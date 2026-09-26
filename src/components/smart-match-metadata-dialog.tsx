@@ -160,10 +160,7 @@ export function buildFolderPreview(
     .replace(/{VolumeYear}/gi, yr)
     .replace(/{UniverseName}/gi, sanitizePart(v.universe || ""))
     .replace(/{SeriesGroup}/gi, sanitizePart(v.seriesGroup || ""))
-    .replace(/\(\s*\)/g, "")
-    .replace(/\[\s*\]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
+
   out = replaceNamingToken(out, "{Imprint}", sanitizeNamingPart(v.imprint || ""))
     .replace(/\(\s*\)/g, "")
     .replace(/\[\s*\]/g, "")

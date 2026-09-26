@@ -33,6 +33,8 @@ struct ComicInfo {
     #[serde(default)]
     series_group: Option<String>,
     #[serde(default)]
+    imprint: Option<String>,
+    #[serde(default)]
     writer: Option<String>,
     #[serde(default)]
     penciller: Option<String>,
@@ -252,12 +254,16 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
             // or shadow a real ID match on a stale name collision.
             let existing_series = sqlx::query(
                 // isManga is CAST for the Any driver (no SQLite BOOLEAN mapping).
-                r#"SELECT id, CAST("isManga" AS INTEGER) AS "isManga", "libraryId", "folderPath" FROM "Series"
+                r#"SELECT id, CAST("isManga" AS INTEGER) AS "isManga", "libraryId", "folderPath", imprint,
+                          CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata" FROM "Series"
                    WHERE "metadataSource" = $1 AND "metadataId" = $2"#
             )
             .bind(&meta_source).bind(&meta_id)
             .fetch_optional(&db.pool).await?;
 
+            let had_existing_series = existing_series.is_some();
+            let mut existing_imprint: Option<String> = None;
+            let mut existing_has_custom_metadata = false;
             let series_id: String;
             let target_lib_id: String;
             let dest_folder: PathBuf;
@@ -267,6 +273,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 is_manga = series_row.get::<i64, _>("isManga") != 0;
                 target_lib_id = series_row.get("libraryId");
                 dest_folder = PathBuf::from(series_row.get::<String, _>("folderPath"));
+                existing_imprint = series_row.try_get("imprint").unwrap_or(None);
+                existing_has_custom_metadata = series_row.try_get::<i64, _>("hasCustomMetadata").unwrap_or(0) != 0;
             } else {
                 series_id = uuid::Uuid::new_v4().to_string();
 
@@ -311,7 +319,9 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
 
                 target_lib_id = fallback_lib_id;
                 let series_group_fs = clean_fs_name(&info.series_group.clone().unwrap_or_default());
+                let imprint_fs = crate::renamer::sanitize_component(info.imprint.as_deref().unwrap_or_default().trim());
                 let universe_fs = clean_fs_name(&info.universe.clone().unwrap_or_default());
+                let folder_pattern = crate::renamer::replace_token_ci(&folder_pattern, "{Imprint}", &imprint_fs);
                 let rel_folder = clean_naming_leftovers(&folder_pattern
                     .replace("{Publisher}", &clean_fs_name(&publisher))
                     .replace("{Series}", &clean_fs_name(&series_name))
@@ -328,6 +338,19 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 dest_folder = folder;
             }
 
+            // A curated nonblank Series imprint is authoritative. Otherwise a new or unlocked
+            // existing series may adopt the archive's standard ComicInfo value for this import.
+            let effective_imprint = resolve_effective_imprint(
+                had_existing_series,
+                existing_imprint.as_deref(),
+                existing_has_custom_metadata,
+                info.imprint.as_deref(),
+            );
+            let imprint_fs = crate::renamer::sanitize_component(&effective_imprint);
+            let imprint_db = if effective_imprint.is_empty() { None } else { Some(effective_imprint.clone()) };
+            let should_adopt_imprint = imprint_db.is_some()
+                && (!had_existing_series || (!existing_has_custom_metadata && existing_imprint.as_deref().map(str::trim).unwrap_or("").is_empty()));
+
             let _ = std::fs::create_dir_all(&dest_folder);
 
             let formatted_num = if issue_num.len() == 1 { format!("0{}", issue_num) } else { issue_num.clone() };
@@ -342,8 +365,9 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
             } else {
                 &file_pattern
             };
-            
-            let new_filename = clean_naming_leftovers(&pattern_to_use
+
+            let pattern_with_imprint = crate::renamer::replace_token_ci(pattern_to_use, "{Imprint}", &imprint_fs);
+            let new_filename = clean_naming_leftovers(&pattern_with_imprint
                 .replace("{Publisher}", &clean_fs_name(&publisher))
                 .replace("{Series}", &clean_fs_name(&series_name))
                 .replace("{Year}", &year_str)
@@ -395,6 +419,13 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 .bind(dest_folder.to_string_lossy().to_string())
                 .bind(&meta_id).bind(&meta_source).bind(is_manga).bind(&series_group_db).bind(&target_lib_id)
                 .execute(&db.pool).await;
+
+                if should_adopt_imprint {
+                    if let Some(imprint_value) = imprint_db.as_deref() {
+                        let _ = sqlx::query(r#"UPDATE "Series" SET imprint = $1 WHERE id = $2"#)
+                            .bind(imprint_value).bind(&series_id).execute(&db.pool).await;
+                    }
+                }
 
                 let issue_id = uuid::Uuid::new_v4().to_string();
 
@@ -599,6 +630,19 @@ fn clean_fs_name(input: &str) -> String {
     input.replace(&['<', '>', ':', '"', '/', '\\', '|', '?', '*'][..], "").trim().to_string()
 }
 
+fn resolve_effective_imprint(
+    had_existing_series: bool,
+    stored_imprint: Option<&str>,
+    has_custom_metadata: bool,
+    comic_info_imprint: Option<&str>,
+) -> String {
+    match stored_imprint.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value.to_string(),
+        None if had_existing_series && has_custom_metadata => String::new(),
+        None => comic_info_imprint.unwrap_or_default().trim().to_string(),
+    }
+}
+
 /// Removes the debris an unfilled naming variable leaves behind — empty `()`/`[]` groups (e.g. a
 /// blank `{Year}` inside `({Year})`) and collapsed whitespace — then trims (parity with importer.ts).
 fn clean_naming_leftovers(input: &str) -> String {
@@ -625,6 +669,22 @@ pub(crate) fn split_to_json(s: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comicinfo_imprint_deserializes() {
+        let info: ComicInfo = quick_xml::de::from_str(
+            "<ComicInfo><Imprint>Absolute</Imprint></ComicInfo>",
+        ).expect("parse ComicInfo imprint");
+        assert_eq!(info.imprint.as_deref(), Some("Absolute"));
+    }
+
+    #[test]
+    fn stored_or_locked_imprint_precedence_is_respected() {
+        assert_eq!(resolve_effective_imprint(true, Some(" Vertigo "), true, Some("Absolute")), "Vertigo");
+        assert_eq!(resolve_effective_imprint(false, None, false, Some(" Absolute ")), "Absolute");
+        assert_eq!(resolve_effective_imprint(true, None, false, Some(" Absolute ")), "Absolute");
+        assert_eq!(resolve_effective_imprint(true, None, true, Some("Absolute")), "");
+    }
 
     #[test]
     fn fs_name_strips_invalid_characters() {

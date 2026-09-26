@@ -11,6 +11,7 @@ import { Logger } from '@/lib/logger';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { cleanupEmptyDirs } from '@/lib/utils/safe-fs';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
+import { replaceNamingToken } from '@/lib/utils/naming';
 
 export async function POST(request: NextRequest) {
   try {
@@ -105,15 +106,21 @@ export async function POST(request: NextRequest) {
         const safeYear = s.year ? s.year.toString() : "";
         const safeUniverse = (s as any).universe ? sanitize((s as any).universe) : "";
         const safeSeriesGroup = (s as any).seriesGroup ? sanitize((s as any).seriesGroup) : "";
+        const safeImprint = (s as any).imprint ? sanitize((s as any).imprint) : "";
 
         // --- Compute the target folder from the active pattern ---
-        const relFolderPath = activeFolderPattern
+        let relFolderPath = activeFolderPattern
             .replace(/{Publisher}/gi, safePublisher)
             .replace(/{Series}/gi, safeSeries)
             .replace(/{Year}/gi, safeYear)
             .replace(/{VolumeYear}/gi, safeYear)
             .replace(/{UniverseName}/gi, safeUniverse)
             .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+            .replace(/\(\s*\)/g, '')
+            .replace(/\[\s*\]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
             .replace(/\(\s*\)/g, '')
             .replace(/\[\s*\]/g, '')
             .replace(/\s+/g, ' ')
@@ -226,6 +233,13 @@ export async function POST(request: NextRequest) {
                 .replace(/{IssueTitle}/gi, sanitize(cleanIssueName))
                 .replace(/{UniverseName}/gi, safeUniverse)
                 .replace(/{SeriesGroup}/gi, safeSeriesGroup)
+                .replace(/\(\s*\)/g, '')
+                .replace(/\[\s*\]/g, '')
+                .replace(/\s*-\s*-/g, ' - ')
+                .replace(/(^\s*-\s*|\s*-\s*$)/g, '')
+                .replace(/\s+/g, ' ');
+
+            newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
                 .replace(/\(\s*\)/g, '')
                 .replace(/\[\s*\]/g, '')
                 .replace(/\s*-\s*-/g, ' - ')

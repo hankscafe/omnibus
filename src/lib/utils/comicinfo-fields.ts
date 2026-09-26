@@ -95,7 +95,13 @@ export function comicInfoDefaultsUpdateFragment(req: Record<string, any>): Recor
             .map(([field, column]) => [column, req[field] ? JSON.stringify(splitArr(req[field])) : null])
     );
     for (const k of SCALAR_FIELDS) {
-        if (req[k] !== undefined) frag[k] = req[k] || null;
+        if (req[k] !== undefined) {
+            // Imprint also controls naming paths, so normalize whitespace-only values to a true
+            // clear rather than persisting a visually blank but non-null folder component.
+            frag[k] = k === 'imprint'
+                ? (typeof req[k] === 'string' ? req[k].trim() || null : null)
+                : (req[k] || null);
+        }
     }
     if (req.alternateCount !== undefined) {
         frag.alternateCount = Number.isFinite(parseInt(req.alternateCount, 10)) ? parseInt(req.alternateCount, 10) : null;

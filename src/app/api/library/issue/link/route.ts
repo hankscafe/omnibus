@@ -10,6 +10,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { moveFileSafe } from '@/lib/utils/safe-fs';
 import { countArchivePages } from '@/lib/utils/archive-pages';
 import { carriedStamp } from '@/lib/file-added';
+import { replaceNamingToken, sanitizeNamingPart } from '@/lib/utils/naming';
 
 export async function POST(request: NextRequest) {
     try {
@@ -63,6 +64,7 @@ export async function POST(request: NextRequest) {
         const safePublisher = series.publisher ? series.publisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
         const safeName = series.name ? series.name.replace(/[<>:"/\\|?*]/g, '').trim() : "Unknown Series";
         const safeYear = series.year ? series.year.toString() : "";
+        const safeImprint = series.imprint ? sanitizeNamingPart(series.imprint) : "";
         
         const issueNumStr = targetIssue.number;
         let formattedNum = issueNumStr;
@@ -90,7 +92,7 @@ export async function POST(request: NextRequest) {
         }
 
         // 4. Generate the new file name (Added {VolumeYear} and {IssueYear} tags)
-        const newFileName = filePatternToUse
+        let newFileName = filePatternToUse
             .replace(/{Publisher}/gi, safePublisher)
             .replace(/{Series}/gi, safeName)
             .replace(/{Year}/gi, safeYear)
@@ -103,6 +105,13 @@ export async function POST(request: NextRequest) {
             .replace(/\[\s*\]/g, '')
             .replace(/\s*-\s*-/g, ' - ') // <-- ADD THIS
             .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // <-- ADD THIS
+            .replace(/\s+/g, ' ')
+            .trim();
+        newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
+            .replace(/\(\s*\)/g, '')
+            .replace(/\[\s*\]/g, '')
+            .replace(/\s*-\s*-/g, ' - ')
+            .replace(/(^\s*-\s*|\s*-\s*$)/g, '')
             .replace(/\s+/g, ' ')
             .trim() + ext;
 

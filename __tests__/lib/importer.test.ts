@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     updateRequest: vi.fn(),
     createIssue: vi.fn(),
     upsertSeries: vi.fn(),
+    updateSeries: vi.fn(),
     log: vi.fn(),
     sendAlert: vi.fn(),
     detectManga: vi.fn().mockResolvedValue(false),
@@ -34,7 +35,7 @@ vi.mock('@/lib/db', () => ({
         request: { findUnique: mocks.findUniqueRequest, update: mocks.updateRequest, updateMany: vi.fn().mockResolvedValue({ count: 1 }), count: vi.fn().mockResolvedValue(0) },
         systemSetting: { findMany: mocks.findManySettings, findUnique: vi.fn().mockResolvedValue(null) },
         library: { findMany: mocks.findManyLibraries },
-        series: { findFirst: mocks.findFirstSeries, upsert: mocks.upsertSeries, update: vi.fn() },
+        series: { findFirst: mocks.findFirstSeries, upsert: mocks.upsertSeries, update: mocks.updateSeries },
         issue: { create: mocks.createIssue, findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
         downloadClient: { findFirst: mocks.findFirstClient }
     }
@@ -204,6 +205,33 @@ describe('File System: Importer Engine', () => {
             expect(data.filePath).toContain('Batman #01.cbz');
             expect('fileAddedAt' in data).toBe(false);
         });
+    it('uses ComicInfo Imprint on the first import and saves it for later naming', async () => {
+        mocks.findManySettings.mockResolvedValue([
+            { key: 'download_path', value: '/downloads' },
+            { key: 'folder_naming_pattern', value: '{Imprint}/{Publisher}/{Series} ({Year})' },
+            { key: 'file_naming_pattern', value: '{Imprint} {Series} #{Issue}' },
+        ]);
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+        });
+        mocks.findFirstSeries.mockResolvedValueOnce({
+            id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016,
+            libraryId: 'lib_1', isManga: false, hasCustomMetadata: false, imprint: null,
+        });
+        mocks.parseComicInfo.mockResolvedValueOnce({ imprint: 'Absolute' });
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        expect(fs.copy).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.stringMatching(/Absolute[\\/]DC Comics[\\/]Batman \(2016\)[\\/](?:\d+_)?Absolute Batman #01\.cbz$/),
+            expect.any(Object),
+        );
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'series_1' },
+            data: expect.objectContaining({ imprint: 'Absolute' }),
+        }));
     });
 
     it('routes a nested batch archive to WATCHED via the engine without touching AdmZip', async () => {

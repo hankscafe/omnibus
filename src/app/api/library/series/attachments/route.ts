@@ -71,7 +71,7 @@ async function attachLocal(session: any, series: any, kind: string, body: any) {
             owner: {
                 id: series.id, name: series.name, year: series.year ?? null, publisher: series.publisher ?? null,
                 metadataSource: series.metadataSource || 'COMICVINE', metadataId: series.metadataId ?? null,
-                folderPath: series.folderPath, isManga: !!series.isManga,
+                folderPath: series.folderPath, isManga: !!series.isManga, imprint: series.imprint ?? null,
             },
             source: sourcePath, sourceSeriesId: sourceSeries?.id ?? null,
             metadataSource: 'LOCAL', volumeId, volumeName: name, volumeYear: startYear || 0,

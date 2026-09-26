@@ -12,6 +12,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord';
 import { Mailer } from '@/lib/mailer';
+import { replaceNamingToken, sanitizeNamingPart } from '@/lib/utils/naming';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { cvId, name, year, publisher, image, type, searchResult, source, monitored, requestId, metadataSource } = body;
+    const { cvId, name, year, publisher, image, type, searchResult, source, monitored, requestId, metadataSource, imprint } = body;
     const targetMetadataSource = metadataSource || 'COMICVINE';
 
     // Use strict check since cvId might be 0 during an interactive search override
@@ -80,15 +81,27 @@ export async function POST(request: NextRequest) {
             const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
             const folderPattern = config.folder_naming_pattern || "{Publisher}/{Series} ({Year})";
 
+            const existingSeries = await prisma.series.findUnique({
+                where: { metadataSource_metadataId: { metadataSource: targetMetadataSource, metadataId: cvId.toString() } },
+                select: { imprint: true },
+            });
+
             const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
             const safePubFolder = safePublisher !== "Unknown" ? safePublisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
+            const effectiveImprint = typeof imprint === 'string' ? imprint : (existingSeries?.imprint || '');
+            const safeImprint = sanitizeNamingPart(effectiveImprint);
 
-            const relFolderPath = folderPattern
+            let relFolderPath = folderPattern
                 .replace(/{Publisher}/gi, safePubFolder)
                 .replace(/{Series}/gi, safeFolderName)
                 .replace(/{Year}/gi, year ? year.toString() : "")
                 .replace(/\(\s*\)/g, '') 
                 .replace(/\[\s*\]/g, '') 
+                .replace(/\s+/g, ' ')
+                .trim();
+            relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
+                .replace(/\(\s*\)/g, '')
+                .replace(/\[\s*\]/g, '')
                 .replace(/\s+/g, ' ')
                 .trim();
 
@@ -100,7 +113,7 @@ export async function POST(request: NextRequest) {
 
             await prisma.series.upsert({
                 where: { metadataSource_metadataId: { metadataSource: targetMetadataSource, metadataId: cvId.toString() } },
-                update: { monitored: true, coverUrl: image },
+                update: { monitored: true, coverUrl: image, ...(typeof imprint === 'string' ? { imprint: imprint.trim() || null } : {}) },
                 create: { 
                     metadataId: cvId.toString(), 
                     metadataSource: targetMetadataSource,
@@ -111,7 +124,8 @@ export async function POST(request: NextRequest) {
                     monitored: true,
                     isManga: isManga,
                     libraryId: targetLib?.id,
-                    coverUrl: image
+                    coverUrl: image,
+                    ...(typeof imprint === 'string' ? { imprint: imprint.trim() || null } : {})
                 }
             });
         }

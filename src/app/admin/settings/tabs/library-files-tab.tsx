@@ -89,7 +89,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                 <h3 className="text-lg font-bold text-foreground">Media Naming Conventions</h3>
                                 <p className="text-[11px] text-muted-foreground mt-1">
                                     Customize how Omnibus names your folders and files during imports. 
-                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{VolumeYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueTitle}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{UniverseName}"}</code>
+                                    Available tags: <code className="bg-muted px-1 rounded border border-border">{"{Publisher}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Imprint}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Series}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Year}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{VolumeYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueYear}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{Issue}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{IssueTitle}"}</code>, <code className="bg-muted px-1 rounded border border-border">{"{UniverseName}"}</code>
                                 </p>
                             </div>
                             <Button 
@@ -112,7 +112,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     placeholder="{Publisher}/{Series} ({Year})"
                                     className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                                 />
-                                <p className="text-[10px] text-muted-foreground">Use slashes (/) to create sub-folders. Tokens: {`{Publisher} {Series} {Year} {VolumeYear} {UniverseName} {SeriesGroup}`}. {`{SeriesGroup}`} groups related series under one umbrella folder (e.g. {`{SeriesGroup}/{Series} ({Year})`}).</p>
+                                <p className="text-[10px] text-muted-foreground">Use slashes (/) to create sub-folders. Tokens: {`{Publisher} {Imprint} {Series} {Year} {VolumeYear} {UniverseName} {SeriesGroup}`}. A blank imprint removes its folder tier. {`{SeriesGroup}`} groups related series under one umbrella folder (e.g. {`{SeriesGroup}/{Series} ({Year})`}).</p>
                             </div>
                             
                             <div className="space-y-2">
@@ -123,7 +123,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     placeholder="{Series} #{Issue}"
                                     className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                                 />
-                                <p className="text-[10px] text-muted-foreground">Applied to standard Western comics. Tokens: {`{Series} {Issue} {IssueTitle} {IssueYear} {Year} {Publisher} {UniverseName} {SeriesGroup}`}.</p>
+                                <p className="text-[10px] text-muted-foreground">Applied to standard Western comics. Tokens: {`{Series} {Issue} {IssueTitle} {IssueYear} {Year} {Publisher} {Imprint} {UniverseName} {SeriesGroup}`}.</p>
                             </div>
 
                             <div className="space-y-2 md:col-span-2 lg:col-span-1">
@@ -134,7 +134,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     placeholder="{Series} Vol. {Issue}" 
                                     className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                                 />
-                                <p className="text-[10px] text-muted-foreground">Applied to items flagged as Manga.</p>
+                                <p className="text-[10px] text-muted-foreground">Applied to items flagged as Manga. The same folder and metadata tokens, including {`{Imprint}`}, are available.</p>
                             </div>
 
                             {/* #203 COLLECTED: TPB naming conventions vary far more than annuals
@@ -148,7 +148,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     placeholder="{Series} Vol. {Issue} ({IssueYear})"
                                     className="h-12 sm:h-10 font-mono bg-muted/30 border-border text-foreground"
                                 />
-                                <p className="text-[10px] text-muted-foreground">Applied to trades and omnibuses attached to a series as collected editions. Their number is whatever you set, so it doubles as reading order.</p>
+                                <p className="text-[10px] text-muted-foreground">Applied to trades and omnibuses attached to a series as collected editions. The same file tokens, including {`{Imprint}`}, are available. Their number is whatever you set, so it doubles as reading order.</p>
                             </div>
                         </div>
 
@@ -163,6 +163,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     <span className="text-primary break-all">
                                         {(config.folder_naming_pattern || "{Publisher}/{Series} ({Year})")
                                             .replace(/{Publisher}/gi, "Marvel")
+                                            .replace(/{Imprint}/gi, "Marvel")
                                             .replace(/{Series}/gi, "Amazing Spider-Man")
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
@@ -180,6 +181,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     <span className="text-primary break-all">
                                         {(config.file_naming_pattern || "{Series} #{Issue}")
                                             .replace(/{Publisher}/gi, "Marvel")
+                                            .replace(/{Imprint}/gi, "Marvel")
                                             .replace(/{Series}/gi, "Amazing Spider-Man")
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
@@ -198,6 +200,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     <span className="text-primary break-all">
                                         {(config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
                                             .replace(/{Publisher}/gi, "Shueisha")
+                                            .replace(/{Imprint}/gi, "Shueisha")
                                             .replace(/{Series}/gi, "Chainsaw Man")
                                             .replace(/{Year}/gi, "2018")
                                             .replace(/{VolumeYear}/gi, "2018")

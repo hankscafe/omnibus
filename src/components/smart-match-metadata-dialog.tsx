@@ -13,6 +13,7 @@ import { COMIC_INFO_DEFAULT_KEYS, type ComicInfoDefaults } from "@/lib/utils/com
 import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
 import { FileText, FileX, FolderTree, Check, Image as ImageIcon, Upload, Loader2, RefreshCw } from "lucide-react"
 import { resolveIssueIdByNumber } from "@/lib/utils/smart-match-search"
+import { replaceNamingToken, sanitizeNamingPart } from "@/lib/utils/naming"
 import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 
 // #199 ComicInfo defaults: the field list + types live in the shared lib module (the API routes
@@ -149,16 +150,21 @@ const sanitizePart = (s: string) => (s || "").replace(/[<>:"/\\|?*]/g, "").trim(
 
 export function buildFolderPreview(
   pattern: string,
-  v: { name?: string; year?: string | number; publisher?: string; universe?: string; seriesGroup?: string }
+  v: { name?: string; year?: string | number; publisher?: string; universe?: string; seriesGroup?: string; imprint?: string }
 ): string {
   const yr = v.year != null ? v.year.toString() : ""
-  const out = (pattern || "{Publisher}/{Series} ({Year})")
+  let out = (pattern || "{Publisher}/{Series} ({Year})")
     .replace(/{Publisher}/gi, sanitizePart(v.publisher || "") || "Other")
     .replace(/{Series}/gi, sanitizePart(v.name || "") || "Unknown Series")
     .replace(/{Year}/gi, yr)
     .replace(/{VolumeYear}/gi, yr)
     .replace(/{UniverseName}/gi, sanitizePart(v.universe || ""))
     .replace(/{SeriesGroup}/gi, sanitizePart(v.seriesGroup || ""))
+    .replace(/\(\s*\)/g, "")
+    .replace(/\[\s*\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  out = replaceNamingToken(out, "{Imprint}", sanitizeNamingPart(v.imprint || ""))
     .replace(/\(\s*\)/g, "")
     .replace(/\[\s*\]/g, "")
     .replace(/\s+/g, " ")
@@ -204,7 +210,11 @@ export default function SmartMatchMetadataDialog({
   // #199 ComicInfo defaults (Credits/Story & Tags/Details tabs) — plain strings, comma-separated
   // for the list-type tags; the API splits them server-side. B&W is a real boolean (see interface).
   const [fields, setFields] = useState<ComicInfoDefaults>({})
-  const setField = (k: keyof ComicInfoDefaults) => (v: string) => setFields(f => ({ ...f, [k]: v }))
+  const [imprintTouched, setImprintTouched] = useState(false)
+  const setField = (k: keyof ComicInfoDefaults) => (v: string) => {
+    setFields(f => ({ ...f, [k]: v }))
+    if (k === 'imprint') setImprintTouched(true)
+  }
   const [blackAndWhite, setBlackAndWhite] = useState(false)
   // #199 round 4 Beta B: keep = files primary (default); replace = explicit provider rewrite.
   const [dataMode, setDataMode] = useState<'keep' | 'replace'>('keep')
@@ -214,8 +224,8 @@ export default function SmartMatchMetadataDialog({
   // Field seeding, shared by dialog-open and the keep/replace switch (#199 round 4 Beta B).
   // keep: the admin's saved override, then the library's OWN files, then the provider suggestion.
   // replace: provider-fresh — the suggestion's core fields + the matched volume's credits; prior
-  // edits and file values are deliberately discarded (that's what "replace" means, and the
-  // warning copy says so).
+  // edits and file values are deliberately discarded. The current imprint stays seeded when one
+  // exists because the naming route treats an explicit or stored value as authoritative unless cleared.
   const applySeed = (mode: 'keep' | 'replace') => {
     if (mode === 'replace') {
       setName(seed?.name ?? '')
@@ -224,7 +234,12 @@ export default function SmartMatchMetadataDialog({
       setUniverse('')
       setSeriesGroup('')
       setDescription(seed?.description ?? '')
-      setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, providerFields?.[k] ?? ''])) as ComicInfoDefaults)
+      const replaceImprint = initialOverride?.imprint ?? providerFields?.imprint ?? ''
+      setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [
+        k,
+        k === 'imprint' ? replaceImprint : (providerFields?.[k] ?? ''),
+      ])) as ComicInfoDefaults)
+      setImprintTouched(initialOverride?.imprint === '')
       setBlackAndWhite(false)
       setIssueTitle('')
       return
@@ -236,7 +251,15 @@ export default function SmartMatchMetadataDialog({
     setUniverse(seedValue(initialOverride?.universe, pf?.universe, undefined))
     setSeriesGroup(seedValue(initialOverride?.seriesGroup, pf?.seriesGroup, undefined))
     setDescription(seedValue(initialOverride?.description, pf?.description, seed?.description))
-    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, seedValue(initialOverride?.[k], pf?.[k], undefined)])) as ComicInfoDefaults)
+    setFields(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [
+      k,
+      // A saved empty imprint is an intentional clear, unlike other empty fields which mean
+      // "leave the file/default value alone". Keep it ahead of ComicInfo prefill when reopening.
+      k === 'imprint' && initialOverride?.imprint !== undefined
+        ? initialOverride.imprint
+        : seedValue(initialOverride?.[k], pf?.[k], undefined),
+    ])) as ComicInfoDefaults)
+    setImprintTouched(initialOverride?.imprint === '')
     setBlackAndWhite(initialOverride?.blackAndWhite ?? prefill?.blackAndWhite?.value ?? false)
     setIssueTitle(seedValue(initialOverride?.issueTitle, prefill?.issue?.title ? { value: prefill.issue.title } : undefined, undefined))
   }
@@ -294,7 +317,7 @@ export default function SmartMatchMetadataDialog({
     return () => { cancelled = true; controller.abort() }
   }, [open, showIssueCover, archiveFilePath, initialIssueCover, initialIssueCoverFromArchive])
 
-  const preview = buildFolderPreview(folderPattern, { name, year, publisher, universe, seriesGroup })
+  const preview = buildFolderPreview(folderPattern, { name, year, publisher, universe, seriesGroup, imprint: fields.imprint })
 
   // Provenance chip for a core field whose CURRENT value still equals what the files supplied —
   // it disappears the moment the admin edits, so the badge never lies (#199 round 4).
@@ -384,6 +407,11 @@ export default function SmartMatchMetadataDialog({
   const handleSave = () => {
     // Opt-in only: uploaded image wins, else the archive cover; off → the provider supplies it.
     const issueCover = useArchiveCover ? (issueCoverDataUrl || archiveCoverDataUrl || undefined) : undefined
+    const comicInfoValues = Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, (fields[k] || "").trim() || undefined])) as Partial<ComicInfoDefaults>
+    // Empty ComicInfo fields normally mean "leave the stored default alone". Imprint is also a
+    // naming input, so preserve that contract while allowing an admin who deliberately clears the
+    // field to send an explicit empty value and remove the imprint folder tier.
+    if (imprintTouched) comicInfoValues.imprint = (fields.imprint || '').trim()
     onSave({
       name: name.trim(),
       year: year.trim(),
@@ -393,7 +421,7 @@ export default function SmartMatchMetadataDialog({
       description,
       // #199 ComicInfo defaults: trimmed, empty → undefined (the undefined-means-untouched contract,
       // same as universe/seriesGroup on the page side)…
-      ...(Object.fromEntries(COMIC_INFO_DEFAULT_KEYS.map(k => [k, (fields[k] || "").trim() || undefined])) as Partial<ComicInfoDefaults>),
+      ...comicInfoValues,
       // …except the B&W switch, which is deliberately two-way: false must CLEAR a mistaken Yes.
       blackAndWhite,
       coverImageBase64: coverDataUrl || undefined,

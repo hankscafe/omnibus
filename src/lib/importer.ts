@@ -18,6 +18,7 @@ import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { WATCHED_DIR } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
+import { replaceNamingToken } from '@/lib/utils/naming';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -624,6 +625,21 @@ export const Importer = {
     const filePattern = config.file_naming_pattern || "{Series} #{Issue}";
     const mangaFilePattern = config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
 
+    // Read ComicInfo once before calculating the destination. Imprint is a series-level field, but
+    // a new import may only have it in the archive; naming must use that value on the first move
+    // and the later Series update below adopts it for future Standardize runs.
+    let pageCount = 0;
+    let xmlMeta: any = null;
+    const isActualZip = inMemoryTrueExt === '.cbz' || inMemoryTrueExt === '.zip' || actualSourceFile.toLowerCase().match(/\.(cbz|zip|epub)$/i);
+    if (isActualZip) {
+        try {
+            const zip = new AdmZip(actualSourceFile);
+            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName)).length;
+            const { parseComicInfo } = await import('./metadata-extractor');
+            xmlMeta = await parseComicInfo(actualSourceFile);
+        } catch(e) {}
+    }
+
     const publisherName = (series?.publisher && series.publisher !== "Unknown") ? sanitize(series.publisher) : "Other";
     const seriesYearFromMeta = series?.year || req.activeDownloadName?.match(/\((\d{4})\)/)?.[1] || "";
     const seriesNameFromMeta = series?.name || cleanSeriesName;
@@ -632,10 +648,14 @@ export const Importer = {
     // the series record (set by a prior scan or a manual edit). A group found only in this file's
     // ComicInfo.xml is persisted to the series below so subsequent imports/renames pick it up.
     const safeSeriesGroup = (series as any)?.seriesGroup ? sanitize((series as any).seriesGroup) : "";
+    const imprintName = (series as any)?.imprint?.trim()
+        ? (series as any).imprint
+        : (!(series as any)?.hasCustomMetadata ? (xmlMeta?.imprint || "") : "");
+    const safeImprint = imprintName ? sanitize(imprintName) : "";
 
     Logger.log(`[Importer Debug] Applying Folder Pattern: "${folderPattern}" | Variables -> Publisher: "${publisherName}", Series: "${seriesNameFromMeta}", Year: "${seriesYearFromMeta}"`, 'debug');
 
-    const relFolderPath = folderPattern
+    let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
@@ -644,6 +664,11 @@ export const Importer = {
         .replace(/{SeriesGroup}/gi, safeSeriesGroup)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '') 
+        .replace(/\s+/g, ' ')
+        .trim();
+    relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -688,21 +713,6 @@ export const Importer = {
 
     Logger.log(`[Importer Debug] Evaluated Folder Pattern: Publisher="${publisherName}", Series="${seriesNameFromMeta}", Year="${seriesYearFromMeta}" -> Result: ${destFolder}`, 'debug');
 
-    let pageCount = 0;
-    let xmlMeta: any = null;
-
-    const isActualZip = inMemoryTrueExt === '.cbz' || inMemoryTrueExt === '.zip' || actualSourceFile.toLowerCase().match(/\.(cbz|zip|epub)$/i);
-
-    if (isActualZip) {
-        try {
-            const zip = new AdmZip(actualSourceFile);
-            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName)).length;
-            
-            const { parseComicInfo } = await import('./metadata-extractor');
-            xmlMeta = await parseComicInfo(actualSourceFile);
-        } catch(e) {}
-    }
-
     const rawFileName = path.basename(actualSourceFile);
     const ext = path.extname(rawFileName);
     const extractedNum = extractIssueNumber(rawFileName);
@@ -729,7 +739,7 @@ export const Importer = {
     const universeName = xmlMeta?.universe || "";
     const seriesGroupName = xmlMeta?.seriesGroup || (series as any)?.seriesGroup || "";
 
-    const newFileName = filePatToUse
+    let newFileName = filePatToUse
         .replace(/{Publisher}/gi, publisherName)
         .replace(/{Series}/gi, sanitize(seriesNameFromMeta))
         .replace(/{Year}/gi, seriesYearFromMeta.toString())
@@ -743,6 +753,13 @@ export const Importer = {
         .replace(/\[\s*\]/g, '')
         .replace(/\s*-\s*-/g, ' - ') // Collapses double hyphens (e.g., " -  - " becomes " - ")
         .replace(/(^\s*-\s*|\s*-\s*$)/g, '') // Removes any leading or trailing hyphens
+        .replace(/\s+/g, ' ')
+        .trim();
+    newFileName = replaceNamingToken(newFileName, '{Imprint}', safeImprint)
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
+        .replace(/\s*-\s*-/g, ' - ')
+        .replace(/(^\s*-\s*|\s*-\s*$)/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -941,7 +958,10 @@ export const Importer = {
                      // Capture a Series Group embedded in the file's ComicInfo.xml so future
                      // imports/renames can place this series under its umbrella folder. Only
                      // fills a blank — never clobbers an existing (e.g. manually set) group.
-                     ...((xmlMeta?.seriesGroup && !(series as any).seriesGroup) ? { seriesGroup: xmlMeta.seriesGroup } : {})
+                     ...((xmlMeta?.seriesGroup && !(series as any).seriesGroup) ? { seriesGroup: xmlMeta.seriesGroup } : {}),
+                     // Imprint follows the same fill-blank rule, while a curated series remains
+                     // authoritative when ComicInfo from a new download disagrees.
+                     ...((xmlMeta?.imprint && !(series as any).imprint && !(series as any).hasCustomMetadata) ? { imprint: xmlMeta.imprint } : {})
                  }
              });
          } catch (e) { }

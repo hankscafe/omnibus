@@ -25,7 +25,7 @@ pub struct RenameSummary {
 /// Strips characters invalid in file/folder names + neutralizes dot-only traversal segments.
 /// Byte-for-byte parity with Node's sanitizeFilename (utils/sanitize.ts) — both sides MUST produce
 /// identical paths or renames and imports would disagree about where a series lives.
-fn sanitize_component(s: &str) -> String {
+pub(crate) fn sanitize_component(s: &str) -> String {
     let cleaned: String = s
         .chars()
         .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
@@ -40,7 +40,7 @@ fn sanitize_component(s: &str) -> String {
 
 /// Case-insensitive replacement of a naming token like `{Publisher}` (parity with Node's `/gi`
 /// replaces). Tokens are pure ASCII, so byte-wise ASCII-case comparison is safe on UTF-8 input.
-fn replace_token_ci(input: &str, token: &str, value: &str) -> String {
+pub(crate) fn replace_token_ci(input: &str, token: &str, value: &str) -> String {
     let bytes = input.as_bytes();
     let tok = token.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -177,6 +177,7 @@ struct SeriesRow {
     year: i32,
     universe: Option<String>,
     series_group: Option<String>,
+    imprint: Option<String>,
     folder_path: String,
     library_id: Option<String>,
     is_manga: bool,
@@ -271,7 +272,7 @@ pub async fn run_bulk_rename(
     } else {
         // Portable IN (...) list + CAST bool columns for the Any driver (see src/db.rs).
         let sql = format!(
-            r#"SELECT id, name, publisher, year, universe, "seriesGroup", "folderPath", "libraryId", CAST("isManga" AS INTEGER) AS "isManga"
+            r#"SELECT id, name, publisher, year, universe, "seriesGroup", imprint, "folderPath", "libraryId", CAST("isManga" AS INTEGER) AS "isManga"
                FROM "Series" WHERE id IN ({})"#,
             Db::in_placeholders(1, series_ids.len())
         );
@@ -312,6 +313,7 @@ pub async fn run_bulk_rename(
             year: row.get("year"),
             universe: row.get("universe"),
             series_group: row.get("seriesGroup"),
+            imprint: row.get("imprint"),
             folder_path: row.get("folderPath"),
             library_id: row.get("libraryId"),
             is_manga: row.get::<i64, _>("isManga") != 0,
@@ -341,10 +343,12 @@ pub async fn run_bulk_rename(
         let safe_year = if s.year != 0 { s.year.to_string() } else { String::new() };
         let safe_universe = s.universe.as_deref().filter(|u| !u.is_empty()).map(sanitize_component).unwrap_or_default();
         let safe_series_group = s.series_group.as_deref().filter(|g| !g.is_empty()).map(sanitize_component).unwrap_or_default();
+        let safe_imprint = s.imprint.as_deref().filter(|i| !i.is_empty()).map(sanitize_component).unwrap_or_default();
 
         // --- Compute the target folder from the active pattern ---
         let mut rel = folder_pattern.to_string();
         for (token, value) in [
+            ("{Imprint}", safe_imprint.as_str()),
             ("{Publisher}", safe_publisher.as_str()),
             ("{Series}", safe_series.as_str()),
             ("{Year}", safe_year.as_str()),
@@ -476,6 +480,7 @@ pub async fn run_bulk_rename(
             // tokens still flow through the same substitution + sanitize chain as every other name.
             let mut file_name = file_pattern_for_issue(is_annual, is_collected, s.is_manga, file_pattern, manga_file_pattern, collected_file_pattern).to_string();
             for (token, value) in [
+                ("{Imprint}", safe_imprint.as_str()),
                 ("{Publisher}", raw_publisher),
                 ("{Series}", series_token),
                 ("{Year}", year_str.as_str()),
@@ -581,6 +586,7 @@ mod tests {
     fn replace_token_ci_is_case_insensitive_and_utf8_safe() {
         assert_eq!(replace_token_ci("{Series} #{Issue}", "{Series}", "Batman"), "Batman #{Issue}");
         assert_eq!(replace_token_ci("{series}/{SERIES}", "{Series}", "X"), "X/X");
+        assert_eq!(replace_token_ci("{imprint}/{IMPRINT}", "{Imprint}", "$&"), "$&/$&");
         // Non-ASCII around the token must survive untouched.
         assert_eq!(replace_token_ci("Ünïcode {Year} déjà", "{Year}", "2016"), "Ünïcode 2016 déjà");
         assert_eq!(replace_token_ci("no tokens here", "{Issue}", "5"), "no tokens here");
@@ -754,7 +760,7 @@ mod tests {
         let db = Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
         for ddl in [
             r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT NOT NULL, publisher TEXT, year INTEGER NOT NULL DEFAULT 0,
-                universe TEXT, "seriesGroup" TEXT, "folderPath" TEXT NOT NULL DEFAULT '', "libraryId" TEXT, "isManga" INTEGER NOT NULL DEFAULT 0)"#,
+                universe TEXT, "seriesGroup" TEXT, imprint TEXT, "folderPath" TEXT NOT NULL DEFAULT '', "libraryId" TEXT, "isManga" INTEGER NOT NULL DEFAULT 0)"#,
             r#"CREATE TABLE "Library" (id TEXT PRIMARY KEY, path TEXT NOT NULL, "isDefault" INTEGER NOT NULL DEFAULT 0, "isManga" INTEGER NOT NULL DEFAULT 0)"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, name TEXT, number TEXT NOT NULL, "filePath" TEXT,
                 "releaseDate" TEXT, "isAnnual" INTEGER NOT NULL DEFAULT 0, "attachedVolumeId" TEXT)"#,
@@ -777,7 +783,7 @@ mod tests {
         let messy_str = messy.to_string_lossy().replace('\\', "/");
 
         sqlx::query(r#"INSERT INTO "Library" (id, path, "isDefault", "isManga") VALUES ('lib_1', $1, 1, 0)"#).bind(&root_str).execute(&db.pool).await.unwrap();
-        sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "libraryId", "isManga") VALUES ('s1', 'Batman', 'DC Comics', 2016, $1, 'lib_1', 0)"#)
+        sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, imprint, "folderPath", "libraryId", "isManga") VALUES ('s1', 'Batman', 'DC Comics', 2016, 'Absolute', $1, 'lib_1', 0)"#)
             .bind(&messy_str).execute(&db.pool).await.unwrap();
         sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", kind, name) VALUES ('att_local', 's1', 'LOCAL', 'COLLECTED', 'Batman Compendium')"#).execute(&db.pool).await.unwrap();
         sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", kind, name) VALUES ('att_cv', 's1', 'COMICVINE', 'COLLECTED', 'Batman')"#).execute(&db.pool).await.unwrap();
@@ -791,16 +797,16 @@ mod tests {
                 .execute(&db.pool).await.unwrap();
         }
 
-        let summary = run_bulk_rename(&db, &["s1".to_string()], "{Publisher}/{Series} ({Year})", "{Series} #{Issue}", None, None).await.unwrap();
+        let summary = run_bulk_rename(&db, &["s1".to_string()], "{Imprint}/{Publisher}/{Series} ({Year})", "{Imprint} {Series} #{Issue}", None, Some("{Imprint} {Series} Vol. {Issue} ({IssueYear})")).await.unwrap();
         assert_eq!((summary.files_renamed, summary.folders_renamed, summary.conflicts), (3, 1, 0));
 
-        let target = root.join("DC Comics").join("Batman (2016)");
+        let target = root.join("Absolute").join("DC Comics").join("Batman (2016)");
         // The local edition's book carries the edition's name — the name rule still claims it.
-        assert!(target.join("Batman Compendium Vol. 001 (2016).cbz").exists(), "local book named after its edition");
-        assert!(!target.join("Batman Vol. 001 (2016).cbz").exists(), "never the series name for a local book");
+        assert!(target.join("Absolute Batman Compendium Vol. 001 (2016).cbz").exists(), "local book named after its edition");
+        assert!(!target.join("Absolute Batman Vol. 001 (2016).cbz").exists(), "never the series name for a local book");
         // The provider trade and the plain issue are unchanged in shape.
-        assert!(target.join("Batman Vol. 002 (2016).cbz").exists());
-        assert!(target.join("Batman #003.cbz").exists());
+        assert!(target.join("Absolute Batman Vol. 002 (2016).cbz").exists());
+        assert!(target.join("Absolute Batman #003.cbz").exists());
 
         let path_of = |id: &str| {
             let db = &db;
@@ -809,9 +815,9 @@ mod tests {
                 sqlx::query(r#"SELECT "filePath" FROM "Issue" WHERE id = $1"#).bind(id).fetch_one(&db.pool).await.unwrap().get::<Option<String>, _>("filePath").unwrap_or_default()
             }
         };
-        assert!(path_of("local_book").await.ends_with("Batman Compendium Vol. 001 (2016).cbz"));
-        assert!(path_of("cv_book").await.ends_with("Batman Vol. 002 (2016).cbz"));
-        assert!(path_of("issue_3").await.ends_with("Batman #003.cbz"));
+        assert!(path_of("local_book").await.ends_with("Absolute Batman Compendium Vol. 001 (2016).cbz"));
+        assert!(path_of("cv_book").await.ends_with("Absolute Batman Vol. 002 (2016).cbz"));
+        assert!(path_of("issue_3").await.ends_with("Absolute Batman #003.cbz"));
         let _ = fs::remove_dir_all(&root);
     }
 }

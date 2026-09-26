@@ -18,6 +18,7 @@ import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { describeIssueFromFilename, normalizeFractionNumbers, isSameIssue } from '@/lib/utils/issue-parser';
 import { filePatternForIssue } from '@/lib/utils/file-pattern';
 import { carriedStamp } from '@/lib/file-added';
+import { replaceNamingToken } from '@/lib/utils/naming';
 
 /** A folder as the disk sees it: one slash form, no trailing separator, no case. */
 export const normalizeFolder = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -31,6 +32,7 @@ export interface FolderOwner {
     name: string;
     year: number | null;
     publisher: string | null;
+    imprint?: string | null;
     metadataSource: string;
     metadataId: string | null;
     folderPath: string;
@@ -46,13 +48,13 @@ export async function folderOwner(folderPath: string, excludeIds: string[]): Pro
     if (!base) return null;
     const candidates = await prisma.series.findMany({
         where: { folderPath: { contains: base } },
-        select: { id: true, name: true, year: true, publisher: true, metadataSource: true, metadataId: true, folderPath: true, isManga: true },
+        select: { id: true, name: true, year: true, publisher: true, imprint: true, metadataSource: true, metadataId: true, folderPath: true, isManga: true },
     });
     const hit = candidates.find(s => !!s.folderPath && sameFolder(s.folderPath, folderPath) && !excludeIds.includes(s.id));
     if (!hit) return null;
     return {
         id: hit.id, name: hit.name, year: hit.year ?? null, publisher: hit.publisher ?? null,
-        metadataSource: hit.metadataSource || 'COMICVINE', metadataId: hit.metadataId ?? null,
+        metadataSource: hit.metadataSource || 'COMICVINE', metadataId: hit.metadataId ?? null, imprint: hit.imprint ?? null,
         folderPath: hit.folderPath, isManga: !!hit.isManga,
     };
 }
@@ -177,6 +179,7 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
     });
     const safePublisher = sanitizeFilename(owner.publisher || 'Other');
     const safeSeries = sanitizeFilename(owner.name);
+    const safeImprint = sanitizeFilename(owner.imprint || '');
     const ownerFolder = owner.folderPath.replace(/\\/g, '/').replace(/\/+$/, '');
     let ensured = false;
 
@@ -188,7 +191,7 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
         const twin = twinFor(number);
         const padded = !number.includes('.') && number.length === 1 ? `0${number}` : number;
         const issueYear = (twin?.releaseDate || '').slice(0, 4) || (volumeYear ? String(volumeYear) : '');
-        const newName = isLocal ? base : pattern
+        let newName = isLocal ? base : pattern
             .replace(/{Publisher}/gi, safePublisher)
             .replace(/{Series}/gi, safeSeries)
             .replace(/{Year}/gi, owner.year ? String(owner.year) : '')
@@ -196,6 +199,10 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
             .replace(/{IssueYear}/gi, issueYear)
             .replace(/{Issue}/gi, padded)
             .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim() + ext;
+        if (!isLocal) {
+            newName = replaceNamingToken(newName, '{Imprint}', safeImprint)
+                .replace(/\(\s*\)/g, '').replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+        }
         const target = `${ownerFolder}/${newName}`;
         // A local book's identity is its lane and number — stable across a wipe, unlike a row id.
         const localIdentity = { metadataId: `local_${attachment.id}_${number}`, metadataSource: 'LOCAL', matchState: 'MATCHED', name: `Vol. ${number}` };

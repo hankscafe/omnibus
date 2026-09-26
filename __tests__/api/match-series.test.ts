@@ -199,6 +199,9 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
     });
 
     it('persists the #199 ComicInfo defaults: lists as JSON arrays, validated numbers, two-way B&W', async () => {
+        mocks.findManySettings.mockResolvedValue([
+            { key: 'folder_naming_pattern', value: '{Imprint}/{Series} ({Year})' }
+        ]);
         const res = await POST(createReq({
             oldFolderPath: '/unmatched/Caravan',
             metadataId: '4050-1',
@@ -226,6 +229,7 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
             storyArcNumber: '2',
             blackAndWhite: true,
         });
+        expect(data.folderPath).toContain('/comics/Vertigo/Caravan (2009)');
     });
 
     it('clears B&W to null when the switch is off — never stores a false "No" claim', async () => {

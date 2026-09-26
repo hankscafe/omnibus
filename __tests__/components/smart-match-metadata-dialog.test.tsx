@@ -6,7 +6,7 @@
 // genuine uploads embed, the comic's own art never does.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import SmartMatchMetadataDialog, { shouldEmbedIssueCover } from '@/components/smart-match-metadata-dialog';
+import SmartMatchMetadataDialog, { buildFolderPreview, shouldEmbedIssueCover } from '@/components/smart-match-metadata-dialog';
 import { openTab } from '../helpers/radix';
 
 const toast = vi.fn();
@@ -22,6 +22,17 @@ const baseProps = {
     showIssueCover: true,
     archiveFilePath: '/library/Unmatched/One-Shot 001.cbz',
 };
+
+describe('buildFolderPreview imprint token', () => {
+    it('uses the ComicInfo imprint and drops an empty imprint tier', () => {
+        expect(buildFolderPreview('{Imprint}/{Series} ({Year})', {
+            imprint: 'Absolute', name: 'Absolute Batman', year: 2024,
+        })).toBe('Absolute/Absolute Batman (2024)');
+        expect(buildFolderPreview('{Imprint}/{Series} ({Year})', {
+            imprint: '', name: 'Batman', year: 2016,
+        })).toBe('Batman (2016)');
+    });
+});
 
 
 describe('shouldEmbedIssueCover (#199 gate)', () => {
@@ -254,6 +265,32 @@ describe('SmartMatchMetadataDialog ComicInfo defaults (#199)', () => {
         expect(override.writer).toBe('W. Riter');
         expect(override.imprint).toBe('Vertigo');
         expect(override.blackAndWhite).toBe(true);
+    });
+
+    it('sends an explicit empty imprint when the admin clears it', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps}
+            initialOverride={{ imprint: 'Vertigo' }} onSave={onSave} />);
+
+        fireEvent.change(screen.getByLabelText('Publisher Imprint'), { target: { value: '' } });
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        expect(onSave.mock.calls[0][0].imprint).toBe('');
+    });
+
+    it('keeps a saved empty imprint clear ahead of ComicInfo prefill when reopened', async () => {
+        const onSave = vi.fn();
+        render(<SmartMatchMetadataDialog {...baseProps}
+            initialOverride={{ imprint: '' }}
+            prefill={{ fields: { imprint: { value: 'Absolute', source: 'ComicInfo' } } }}
+            onSave={onSave} />);
+
+        expect((screen.getByLabelText('Publisher Imprint') as HTMLInputElement).value).toBe('');
+        fireEvent.click(screen.getByRole('button', { name: /replace with provider data/i }));
+        expect((screen.getByLabelText('Publisher Imprint') as HTMLInputElement).value).toBe('');
+        fireEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+        expect(onSave.mock.calls[0][0].imprint).toBe('');
     });
 });
 

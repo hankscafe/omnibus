@@ -13,6 +13,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
 import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 import { comicInfoDefaultsUpdateFragment } from '@/lib/utils/comicinfo-fields';
+import { replaceNamingToken } from '@/lib/utils/naming';
 
 export async function POST(request: Request) {
   try {
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const { currentPath, name, year, publisher, cvId, monitored, isManga, status, bookType, seriesGroup,
-            description, universe, writeToFile, lockMetadata, clearCustomMetadata } = body;
+            description, universe, imprint, writeToFile, lockMetadata, clearCustomMetadata } = body;
     // #199 ComicInfo defaults from the series editor's Credits/Story & Tags/Details tabs — the
     // shared fragment (also used by match-series) converts + validates them; absent keys touch
     // nothing, so callers that never send these fields (Edit Info modal, scripts) are unaffected.
@@ -73,13 +74,15 @@ export async function POST(request: Request) {
     // supplied explicitly (the metadata editor) and takes precedence when provided.
     const existingMetaRow = await prisma.series.findFirst({
         where: { folderPath: currentPath },
-        select: { universe: true, seriesGroup: true }
+        select: { universe: true, seriesGroup: true, imprint: true }
     });
     const safeUniverse = existingMetaRow?.universe ? sanitize(existingMetaRow.universe) : "";
     const effectiveSeriesGroup = (seriesGroup !== undefined ? seriesGroup : existingMetaRow?.seriesGroup) || "";
     const safeSeriesGroup = effectiveSeriesGroup ? sanitize(effectiveSeriesGroup) : "";
+    const effectiveImprint = imprint !== undefined ? imprint : existingMetaRow?.imprint;
+    const safeImprint = effectiveImprint ? sanitize(effectiveImprint) : "";
 
-    const relFolderPath = folderPattern
+    let relFolderPath = folderPattern
         .replace(/{Publisher}/gi, safePublisher)
         .replace(/{Series}/gi, safeSeries)
         .replace(/{Year}/gi, safeYear)
@@ -88,6 +91,11 @@ export async function POST(request: Request) {
         .replace(/{SeriesGroup}/gi, safeSeriesGroup)
         .replace(/\(\s*\)/g, '')
         .replace(/\[\s*\]/g, '') 
+        .replace(/\s+/g, ' ')
+        .trim();
+    relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -232,13 +240,16 @@ export async function POST(request: Request) {
                 name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
                 status: status || undefined,
-                bookType: parsedBookType || undefined
+                bookType: parsedBookType || undefined,
+                ...(imprint !== undefined ? { imprint: imprint || null } : {}),
+                ...comicInfoFrag
             },
             create: {
                 metadataId: parsedCvId.toString(), metadataSource: 'COMICVINE', matchState: 'MATCHED', name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
                 status: status || 'Ongoing',
-                bookType: parsedBookType
+                bookType: parsedBookType,
+                ...comicInfoFrag
             }
         });
     }

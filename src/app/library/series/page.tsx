@@ -2292,7 +2292,7 @@ function SeriesContent() {
                   <DialogDescription>
                       This will physically move and rename the files on your hard drive to match your selected naming conventions.
                       <br/><br/>
-                      <span className="text-[11px] font-mono opacity-80">Available tags: {"{Publisher}"}, {"{Series}"}, {"{VolumeYear}"}, {"{IssueYear}"}, {"{Issue}"}</span>
+                      <span className="text-[11px] font-mono opacity-80">Available tags: {"{Publisher}"}, {"{Imprint}"}, {"{Series}"}, {"{VolumeYear}"}, {"{IssueYear}"}, {"{Issue}"}</span>
                   </DialogDescription>
               </DialogHeader>
               

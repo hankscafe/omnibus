@@ -174,6 +174,7 @@ export async function parseComicInfo(filePath: string) {
             title: info.Title ? String(info.Title).trim() : null,
             universe: info.Universe ? String(info.Universe).trim() : null,
             seriesGroup: info.SeriesGroup ? String(info.SeriesGroup).trim() : null,
+            imprint: info.Imprint ? String(info.Imprint).trim() : null,
             number: info.Number ? String(info.Number).trim() : null,
             publisher: info.Publisher ? String(info.Publisher).trim() : null,
             year: parsedYear,

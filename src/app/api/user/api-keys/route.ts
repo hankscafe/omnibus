@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
+import { hashRawKeyForKoreader } from '@/lib/koreader-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,12 +27,16 @@ export async function GET() {
                 name: true,
                 prefix: true,
                 createdAt: true,
-                lastUsedAt: true
+                lastUsedAt: true,
+                syncKeyHash: true
             },
             orderBy: { createdAt: 'desc' }
         });
-        
-        return NextResponse.json(opdsKeys);
+
+        return NextResponse.json(opdsKeys.map(({ syncKeyHash, ...key }) => ({
+            ...key,
+            koreaderCompatible: Boolean(syncKeyHash)
+        })));
     } catch (error: unknown) {
         Logger.log(`[User API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
@@ -51,19 +56,24 @@ export async function POST(request: Request) {
 
         const rawKey = 'omn_' + crypto.randomBytes(32).toString('hex');
         const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+        const syncKeyHash = hashRawKeyForKoreader(rawKey);
         const prefix = rawKey.substring(0, 12) + '...';
 
         const newKey = await prisma.opdsKey.create({
-            data: { name, keyHash, prefix, userId }
+            data: { name, keyHash, syncKeyHash, prefix, userId }
         });
 
         // ADDED: Audit logging for user key generation
         await AuditLogger.log('CREATED_OPDS_KEY', { keyName: name }, userId);
 
         // Strip keyHash out before sending to the client
-        const { keyHash: _, ...safeKey } = newKey;
+        const { keyHash: _, syncKeyHash: __, ...safeKey } = newKey;
 
-        return NextResponse.json({ success: true, rawKey, apiKey: safeKey });
+        return NextResponse.json({
+            success: true,
+            rawKey,
+            apiKey: { ...safeKey, koreaderCompatible: Boolean(syncKeyHash) }
+        });
     } catch (error: unknown) {
         Logger.log(`[User API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

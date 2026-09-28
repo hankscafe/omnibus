@@ -92,7 +92,7 @@ describe('Security: Next.js Front-Door Middleware', () => {
     // redirected to /login, whose HTML the source then failed to parse as JSON ("unrecognized
     // token '<'"). Each facade handler validates the key itself, like /api/opds.
     it('should pass /komga/api requests through to their self-authenticating handlers', async () => {
-        for (const pathname of ['/komga/api/v1/libraries', '/komga/api/v1/series/abc/books', '/komga/api/v1/books/x/pages/1']) {
+        for (const pathname of ['/komga/api/v1/libraries', '/komga/api/v1/series/abc/books', '/komga/api/v1/books/x/pages/1', '/komga/api/v1/series/list', '/komga/api/v2/series/abc/read-progress/tachiyomi']) {
             mocks.getToken.mockResolvedValueOnce(null); // Paperback has no session cookie
             const res = await middleware(createReq(pathname)) as Response;
 

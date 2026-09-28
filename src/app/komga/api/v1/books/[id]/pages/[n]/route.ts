@@ -4,7 +4,7 @@
 // immutable caching) — so page n is handed to it in-process as index n-1, headers and all.
 // `?convert=png` (sent for non-image page types) is accepted and ignored: pages come back as WebP.
 import { GET as streamOpdsPage } from '@/app/api/opds/page/[issueId]/[pageIndex]/route';
-import { komgaGuard, komgaText } from '@/lib/komga/auth';
+import { komgaGuard, komgaError } from '@/lib/komga/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,10 +12,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return komgaGuard('books/{id}/pages/{n}', async () => {
         const { id, n } = await params;
         const page = /^\d+$/.test(n) ? parseInt(n, 10) : NaN;
-        if (!Number.isInteger(page) || page < 1) return komgaText(404, 'Page Not Found');
-        return streamOpdsPage(
+        if (!Number.isInteger(page) || page < 1) return komgaError(404);
+        const res = await streamOpdsPage(
             new Request(req.url, { headers: req.headers }),
             { params: Promise.resolve({ issueId: id, pageIndex: String(page - 1) }) },
         );
+        // The streamer's own refusals are plain text (it serves OPDS readers); the facade answers
+        // every error the Komga way (#206 round 4).
+        return res.ok ? res : komgaError(res.status);
     });
 }

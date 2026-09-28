@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
+import { hashRawKeyForKoreader } from '@/lib/koreader-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,13 +25,17 @@ export async function GET() {
                 lastUsedAt: true,
                 expiresAt: true,
                 createdAt: true,
+                syncKeyHash: true,
                 // Nested select replaces include
                 user: { select: { username: true, role: true } },
                 createdBy: { select: { username: true } }
             },
             orderBy: { createdAt: 'desc' }
         });
-        return NextResponse.json(apiKeys);
+        return NextResponse.json(apiKeys.map(({ syncKeyHash, ...key }) => ({
+            ...key,
+            koreaderCompatible: Boolean(syncKeyHash)
+        })));
     } catch (error) {
         Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
@@ -51,6 +56,7 @@ export async function POST(request: Request) {
         
         // Hash it for DB storage
         const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+        const syncKeyHash = hashRawKeyForKoreader(rawKey);
         
         // Create a prefix for display (e.g. omn_a1b2c3d4...)
         const prefix = rawKey.substring(0, 12) + '...';
@@ -65,6 +71,7 @@ export async function POST(request: Request) {
             data: {
                 name,
                 keyHash,
+                syncKeyHash,
                 prefix,
                 userId,
                 createdById: (session.user as any).id,
@@ -78,10 +85,14 @@ export async function POST(request: Request) {
 
         await AuditLogger.log('CREATED_ADMIN_API_KEY', { keyName: name, assignedTo: apiKey.user.username }, (session.user as any).id);
         
-        // Strip keyHash out before sending to the client
-        const { keyHash: _, ...safeKey } = apiKey;
-        
-        return NextResponse.json({ success: true, rawKey, apiKey: safeKey });
+        // Strip keyHash and syncKeyHash out before sending to the client
+        const { keyHash: _, syncKeyHash: __, ...safeKey } = apiKey;
+
+        return NextResponse.json({
+            success: true,
+            rawKey,
+            apiKey: { ...safeKey, koreaderCompatible: Boolean(syncKeyHash) }
+        });
     } catch (error) {
         Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

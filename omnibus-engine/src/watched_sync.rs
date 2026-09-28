@@ -318,7 +318,7 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 }
 
                 target_lib_id = fallback_lib_id;
-                let folder_segments = expand_folder_pattern(
+                let rel_folder = expand_folder_pattern(
                     &folder_pattern,
                     info.imprint.as_deref(),
                     &publisher,
@@ -326,13 +326,14 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                     &year_str,
                     info.universe.as_deref().unwrap_or_default(),
                     info.series_group.as_deref().unwrap_or_default(),
-                );
-                // Build the path one segment at a time, dropping any that resolved to empty — a
-                // leading "" segment would otherwise make join() absolute on Unix.
-                let mut folder = PathBuf::from(&fallback_lib_path);
-                for seg in folder_segments {
-                    folder.push(seg);
-                }
+                ).join("/");
+                // Build the path one segment at a time under the library root (blank segments were
+                // already dropped); anything that would leave the root is refused and sent to unmatched.
+                let Some(folder) = library_subfolder(&fallback_lib_path, &rel_folder) else {
+                    log::warn!("[Watched Sync] Folder pattern for '{}' expanded to '{}', which leaves the library root; routing to unmatched for review.", series_name, rel_folder);
+                    if move_to_unmatched(&path, &unmatched_dir).is_ok() { unmatched_count += 1; }
+                    continue;
+                };
                 dest_folder = folder;
             }
 
@@ -627,8 +628,34 @@ fn clean_empty_folders(dir: &Path, base_dir: &Path) -> Result<bool> {
     Ok(is_empty)
 }
 
+/// Strips characters invalid in file/folder names and neutralizes dot-only traversal values — the
+/// same rules as renamer's sanitize_component and Node's sanitizeFilename. ComicInfo feeds this, so
+/// a `<Publisher>..</Publisher>` becomes "_" instead of a ".." segment above the library root.
 fn clean_fs_name(input: &str) -> String {
-    input.replace(&['<', '>', ':', '"', '/', '\\', '|', '?', '*'][..], "").trim().to_string()
+    let cleaned = input.replace(&['<', '>', ':', '"', '/', '\\', '|', '?', '*'][..], "");
+    let cleaned = cleaned.trim();
+    let safe = cleaned.trim_matches('.').trim();
+    if safe.is_empty() && !cleaned.is_empty() {
+        return "_".to_string();
+    }
+    safe.to_string()
+}
+
+/// Joins an expanded folder pattern onto the library root one segment at a time, dropping blank
+/// segments. Refuses (None) any segment that isn't a single plain name — "..", ".", a dots-only run,
+/// a drive prefix — so no pattern + metadata combination can place a series outside the library
+/// root (defence in depth behind clean_fs_name).
+fn library_subfolder(root: &str, rel_folder: &str) -> Option<PathBuf> {
+    let mut folder = PathBuf::from(root);
+    for seg in rel_folder.split(['/', '\\']).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let mut parts = Path::new(seg).components();
+        let plain = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None));
+        if !plain || seg.chars().all(|c| c == '.') {
+            return None;
+        }
+        folder.push(seg);
+    }
+    Some(folder)
 }
 
 fn replace_imprint_token(pattern: &str, imprint: Option<&str>) -> String {
@@ -739,6 +766,83 @@ mod tests {
         assert_eq!(clean_fs_name("Bat: Man?"), "Bat Man");
         assert_eq!(clean_fs_name("  A/B\\C|D  "), "ABCD");
         assert_eq!(clean_fs_name("Plain Name"), "Plain Name");
+    }
+
+    #[test]
+    fn fs_name_neutralizes_dot_only_traversal_values() {
+        // ComicInfo values are untrusted: <Publisher>..</Publisher> must never survive as a ".."
+        // path segment (parity with renamer's sanitize_component + Node's sanitizeFilename).
+        assert_eq!(clean_fs_name(".."), "_");
+        assert_eq!(clean_fs_name("."), "_");
+        assert_eq!(clean_fs_name("..."), "_");
+        assert_eq!(clean_fs_name(" .. "), "_");
+        assert_eq!(clean_fs_name("..Name"), "Name");
+        assert_eq!(clean_fs_name("Name..."), "Name");
+        // Separators are stripped first, so a smuggled "../.." collapses to dots and then to "_".
+        assert_eq!(clean_fs_name("../.."), "_");
+        assert_eq!(clean_fs_name("..\\etc"), "etc");
+        // Interior dots are ordinary name characters; a blank value stays blank (dropped token).
+        assert_eq!(clean_fs_name("Mr. Miracle"), "Mr. Miracle");
+        assert_eq!(clean_fs_name(""), "");
+    }
+
+    /// The watched-sync folder expansion for a NEW series, token for token.
+    fn expand_folder(pattern: &str, publisher: &str, series: &str, year: &str, universe: &str, group: &str) -> String {
+        clean_naming_leftovers(&pattern
+            .replace("{Publisher}", &clean_fs_name(publisher))
+            .replace("{Series}", &clean_fs_name(series))
+            .replace("{Year}", year)
+            .replace("{VolumeYear}", year)
+            .replace("{UniverseName}", &clean_fs_name(universe))
+            .replace("{SeriesGroup}", &clean_fs_name(group)))
+    }
+
+    fn assert_plainly_under(root: &Path, folder: &Path) {
+        assert!(folder.starts_with(root), "{:?} is not under {:?}", folder, root);
+        let rel = folder.strip_prefix(root).unwrap();
+        assert!(
+            rel.components().all(|c| matches!(c, std::path::Component::Normal(_))),
+            "{:?} has a non-plain component",
+            folder
+        );
+    }
+
+    #[test]
+    fn dot_dot_comicinfo_values_cannot_climb_out_of_the_library_root() {
+        let root = if cfg!(windows) { r"C:\comics" } else { "/comics" };
+        for pattern in ["{Publisher}/{Series} ({Year})", "{Series}", "{UniverseName}/{SeriesGroup}/{Series}"] {
+            for hostile in ["..", ".", "...", " .. ", "../..", "..\\.."] {
+                for (publisher, series, universe, group) in [
+                    (hostile, "Saga", "", ""),
+                    ("Image", hostile, "", ""),
+                    (hostile, hostile, hostile, hostile),
+                ] {
+                    let rel = expand_folder(pattern, publisher, series, "", universe, group);
+                    let folder = library_subfolder(root, &rel)
+                        .unwrap_or_else(|| panic!("{:?} with {:?} was refused; clean_fs_name should defuse it", pattern, hostile));
+                    assert_plainly_under(Path::new(root), &folder);
+                }
+            }
+        }
+        // The default pattern still reads naturally around the neutralized value.
+        let rel = expand_folder("{Publisher}/{Series} ({Year})", "..", "Saga", "2012", "", "");
+        assert_eq!(library_subfolder(root, &rel).unwrap(), Path::new(root).join("_").join("Saga (2012)"));
+    }
+
+    #[test]
+    fn library_subfolder_refuses_any_segment_that_is_not_a_plain_name() {
+        // Defence in depth behind clean_fs_name: pattern literals + blank tokens (or a future
+        // unsanitized token) must still never yield a path that leaves the root.
+        let root = if cfg!(windows) { r"C:\comics" } else { "/comics" };
+        for rel in ["..", "../escape", "Marvel/../../etc", "Marvel\\..\\x", ".", "Marvel/./x", "...", "Marvel/ .. /x"] {
+            assert_eq!(library_subfolder(root, rel), None, "{:?} should be refused", rel);
+        }
+        #[cfg(windows)]
+        assert_eq!(library_subfolder(root, "D:/Marvel"), None); // a drive prefix would replace the root
+        // Ordinary expansions are untouched: blank segments dropped, interior dots kept.
+        assert_eq!(library_subfolder(root, "Marvel//X-Men (1991)"), Some(Path::new(root).join("Marvel").join("X-Men (1991)")));
+        assert_eq!(library_subfolder(root, " DC Comics / Mr. Miracle (2017) "), Some(Path::new(root).join("DC Comics").join("Mr. Miracle (2017)")));
+        assert_eq!(library_subfolder(root, ""), Some(PathBuf::from(root)));
     }
 
     #[test]

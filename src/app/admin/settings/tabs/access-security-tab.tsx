@@ -226,13 +226,14 @@ export function AccessSecurityTab({ s }: { s: SettingsBag }) {
                                     <th className="px-4 py-3">Role</th>
                                     <th className="px-4 py-3">Created By</th>
                                     <th className="px-4 py-3">Last Used</th>
+                                    <th className="px-4 py-3">KOReader</th>
                                     <th className="px-4 py-3">Expiration</th>
                                     <th className="px-4 py-3 text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border">
                                 {apiKeys.length === 0 ? (
-                                    <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground italic">No API keys generated yet.</td></tr>
+                                    <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground italic">No API keys generated yet.</td></tr>
                                 ) : (
                                     apiKeys.map(key => (
                                         <tr key={key.id} className="hover:bg-muted/30 transition-colors">
@@ -244,6 +245,11 @@ export function AccessSecurityTab({ s }: { s: SettingsBag }) {
                                             </td>
                                             <td className="px-4 py-3 text-muted-foreground">{key.createdBy?.username || "Unknown"}</td>
                                             <td className="px-4 py-3 text-muted-foreground">{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : 'Never'}</td>
+                                            <td className="px-4 py-3">
+                                                <Badge variant={key.koreaderCompatible ? 'secondary' : 'outline'} className="text-[10px] uppercase tracking-wider">
+                                                    {key.koreaderCompatible ? 'Supported' : 'Legacy'}
+                                                </Badge>
+                                            </td>
                                             <td className="px-4 py-3 text-muted-foreground">
                                                 {key.expiresAt ? (
                                                     new Date(key.expiresAt) < new Date() ? <span className="text-red-500 font-bold">Expired</span> : new Date(key.expiresAt).toLocaleDateString()

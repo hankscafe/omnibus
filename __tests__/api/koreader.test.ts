@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PUT } from '@/app/api/koreader/syncs/progress/route';
-import crypto from 'crypto';
 
 // 1. Hoist our mocks
 const mocks = vi.hoisted(() => ({
     findUniqueOpds: vi.fn(),
+    updateOpds: vi.fn(),
     findUniqueApi: vi.fn(),
+    updateApi: vi.fn(),
     koreaderUpsert: vi.fn(),
     findManyIssue: vi.fn(),
     readProgressUpsert: vi.fn(),
@@ -18,8 +19,8 @@ const mocks = vi.hoisted(() => ({
 // 2. Mock Prisma and Logger
 vi.mock('@/lib/db', () => ({
     prisma: {
-        opdsKey: { findUnique: mocks.findUniqueOpds },
-        apiKey: { findUnique: mocks.findUniqueApi },
+        opdsKey: { findUnique: mocks.findUniqueOpds, update: mocks.updateOpds },
+        apiKey: { findUnique: mocks.findUniqueApi, update: mocks.updateApi },
         koreaderSync: { upsert: mocks.koreaderUpsert },
         issue: { findMany: mocks.findManyIssue },
         readProgress: { upsert: mocks.readProgressUpsert, findUnique: mocks.readProgressFindUnique },
@@ -37,13 +38,28 @@ const createReq = (headers: Record<string, string>, body: any) => new Request('h
 
 describe('Integrations: KOReader Progress Sync', () => {
 
+    beforeEach(() => {
+        mocks.updateOpds.mockReset().mockResolvedValue({});
+        mocks.updateApi.mockReset().mockResolvedValue({});
+        mocks.findUniqueOpds.mockReset();
+        mocks.findUniqueApi.mockReset();
+        mocks.koreaderUpsert.mockReset().mockResolvedValue({});
+        mocks.findManyIssue.mockReset();
+        mocks.readProgressUpsert.mockReset().mockResolvedValue({});
+        mocks.readProgressFindUnique.mockReset();
+        mocks.upsertDailyStat.mockReset();
+        mocks.upsertDailyIssueRead.mockReset();
+        mocks.log.mockReset();
+    });
+
     it('should reject requests that are missing the custom KOReader headers', async () => {
         const req = createReq({}, { document: 'book.cbz', percentage: 0.5 });
         const res = await PUT(req);
         
         expect(res.status).toBe(401);
         const data = await res.json();
-        expect(data.authorized).toBe('KO');
+        expect(data.code).toBe(2001);
+        expect(data.message).toContain('Unauthorized');
     });
 
     it('should reject requests with invalid OPDS API keys', async () => {
@@ -60,8 +76,11 @@ describe('Integrations: KOReader Progress Sync', () => {
     it('should accept valid OPDS keys and sync KOReader progress back to the Omnibus Web UI', async () => {
         // 1. Authenticate successfully
         mocks.findUniqueOpds.mockResolvedValueOnce({
+            id: 'opds_1',
+            expiresAt: null,
             user: { id: 'user_1', username: 'TestUser' }
         });
+        mocks.updateOpds.mockResolvedValue({});
 
         // 2. Find the Omnibus Issue that matches the KOReader document (exact filename, unambiguous)
         mocks.findManyIssue.mockResolvedValueOnce([{ id: 'issue_100', filePath: '/manga/Naruto/vol_1.cbz' }]);
@@ -69,7 +88,7 @@ describe('Integrations: KOReader Progress Sync', () => {
         // 3. KOReader says the user finished the book (99%+)
         const req = createReq(
             { 'x-auth-user': 'TestUser', 'x-auth-key': 'valid_key' }, 
-            { document: '/manga/Naruto/vol_1.cbz', percentage: 0.995, progress: 'page 100', device: 'Kindle', device_id: 'abc' }
+            { document: 'd41d8cd98f00b204e9800998ecf8427e', metadata: { filename: '/manga/Naruto/vol_1.cbz' }, percentage: 0.995, progress: 'page 100', device: 'Kindle', device_id: 'abc' }
         );
 
         const res = await PUT(req);
@@ -86,8 +105,11 @@ describe('Integrations: KOReader Progress Sync', () => {
 
     it('should feed the reading heatmap with pages derived from the percentage advance', async () => {
         mocks.findUniqueOpds.mockResolvedValueOnce({
+            id: 'opds_1',
+            expiresAt: null,
             user: { id: 'user_1', username: 'TestUser' }
         });
+        mocks.updateOpds.mockResolvedValue({});
         // The matched issue has a known real page count of 40
         mocks.findManyIssue.mockResolvedValueOnce([{ id: 'issue_100', pageCount: 40, filePath: '/manga/Naruto/vol_1.cbz' }]);
         // The user had previously synced to 25%
@@ -95,7 +117,7 @@ describe('Integrations: KOReader Progress Sync', () => {
 
         const req = createReq(
             { 'x-auth-user': 'TestUser', 'x-auth-key': 'valid_key' },
-            { document: '/manga/Naruto/vol_1.cbz', percentage: 0.75, progress: 'page 30', device: 'Kindle', device_id: 'abc' }
+            { document: 'd41d8cd98f00b204e9800998ecf8427e', metadata: { filename: '/manga/Naruto/vol_1.cbz' }, percentage: 0.75, progress: 'page 30', device: 'Kindle', device_id: 'abc' }
         );
         const res = await PUT(req);
         expect(res.status).toBe(200);
@@ -112,15 +134,18 @@ describe('Integrations: KOReader Progress Sync', () => {
 
     it('should not log heatmap pages when the synced percentage moves backwards', async () => {
         mocks.findUniqueOpds.mockResolvedValueOnce({
+            id: 'opds_1',
+            expiresAt: null,
             user: { id: 'user_1', username: 'TestUser' }
         });
+        mocks.updateOpds.mockResolvedValue({});
         mocks.findManyIssue.mockResolvedValueOnce([{ id: 'issue_100', pageCount: 40, filePath: '/manga/Naruto/vol_1.cbz' }]);
         // The user was already at 80%, but the device syncs an older 50% state
         mocks.readProgressFindUnique.mockResolvedValueOnce({ currentPage: 80, totalPages: 100 });
 
         const req = createReq(
             { 'x-auth-user': 'TestUser', 'x-auth-key': 'valid_key' },
-            { document: '/manga/Naruto/vol_1.cbz', percentage: 0.5, progress: 'page 20', device: 'Kindle', device_id: 'abc' }
+            { document: 'd41d8cd98f00b204e9800998ecf8427e', metadata: { filename: '/manga/Naruto/vol_1.cbz' }, percentage: 0.5, progress: 'page 20', device: 'Kindle', device_id: 'abc' }
         );
         const res = await PUT(req);
         expect(res.status).toBe(200);

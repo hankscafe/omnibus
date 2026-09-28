@@ -5,6 +5,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { escapeXml } from '@/lib/utils/xml';
 import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
+import { getPublicBaseUrl } from '@/lib/opds-base-url';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
         }
 
     const url = new URL(req.url);
-    const baseUrl = url.origin;
+    const baseUrl = getPublicBaseUrl(req);
     const page = parseInt(url.searchParams.get('page') || '1');
     const limit = 50;
     const skip = (page - 1) * limit;

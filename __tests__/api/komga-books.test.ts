@@ -15,13 +15,17 @@ import { GET as getBookThumb } from '@/app/komga/api/v1/books/[id]/thumbnail/rou
 import { PATCH as patchProgress } from '@/app/komga/api/v1/books/[id]/read-progress/route';
 import { GET as getBooks } from '@/app/komga/api/v1/books/route';
 import { GET as getOnDeck } from '@/app/komga/api/v1/books/ondeck/route';
+import { GET as getSeriesOnDeck } from '@/app/komga/api/v1/series/ondeck/route';
+import { GET as getSeriesContinue } from '@/app/komga/api/v1/series/continue/route';
+import { GET as catchAllGet, POST as catchAllPost } from '@/app/komga/api/v1/[...rest]/route';
+import { POST as postSeriesOne } from '@/app/komga/api/v1/series/[id]/route';
 
 const mocks = vi.hoisted(() => ({
     validateApiKey: vi.fn(),
     getAccessibleLibraryIds: vi.fn(),
     prisma: {
-        series: { findUnique: vi.fn() },
-        issue: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+        series: { findUnique: vi.fn(), findMany: vi.fn() },
+        issue: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
         readProgress: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), count: vi.fn() },
     },
     stat: vi.fn(),
@@ -382,5 +386,138 @@ describe('Komga facade: GET /books (Continue Reading) and /books/ondeck', () => 
 
         const body = await (await getOnDeck(req('/books/ondeck'))).json();
         expect(body.content).toEqual([]);
+    });
+});
+
+// #206 round 4 (the Discord poster): with Show On Deck / Show Continue Reading on, Paperback reported
+// `JSON Parse error: Unexpected identifier "Not"`. The source's getViewMoreItems builds
+// `/series/<section id>` for EVERY section — `/series/new` and `/series/updated` exist, but On Deck
+// and Continue Reading become `/series/ondeck` and `/series/continue`, which fell to the series-by-id
+// route and its plain-text "Not Found". Now both answer the series behind those books, and every
+// error the facade sends is a Komga (Spring) JSON body the source can parse.
+describe('Komga facade: View More for On Deck and Continue Reading', () => {
+    const seriesRow = (id: string, name: string) => ({
+        id, name, year: 2016, publisher: 'DC Comics', folderPath: `/comics/${name}`, libraryId: 'lib_1', isManga: false,
+        description: null, status: 'Continuing', genres: null, tags: null, writers: null, artists: null, languageISO: null,
+        createdAt: D, updatedAt: D,
+    });
+    beforeEach(() => {
+        // Hydration hands rows back in its own order — the routes re-apply the section's order.
+        mocks.prisma.series.findMany.mockResolvedValue([seriesRow('ser_1', 'Batman'), seriesRow('ser_2', 'Nightwing')]);
+        mocks.prisma.issue.groupBy.mockResolvedValue([
+            { seriesId: 'ser_1', _count: { _all: 3 }, _max: { fileAddedAt: D } },
+            { seriesId: 'ser_2', _count: { _all: 2 }, _max: { fileAddedAt: D } },
+        ]);
+    });
+
+    it('/series/continue lists each series with an unfinished book once, most recently read first', async () => {
+        mocks.prisma.readProgress.findMany.mockImplementation(async (args: any) =>
+            args.where.isCompleted === false
+                ? [{ issue: { seriesId: 'ser_2' } }, { issue: { seriesId: 'ser_1' } }, { issue: { seriesId: 'ser_2' } }]
+                : []
+        );
+
+        const res = await getSeriesContinue(req('/series/continue?page=0&size=20&deleted=false'));
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(await res.text()); // exactly what the source does
+        expect(body.content.map((s: any) => s.id)).toEqual(['ser_2', 'ser_1']);
+        expect(body.content[0].metadata.title).toBe('Nightwing (2016)');
+        expect(body.totalElements).toBe(2);
+        const call = mocks.prisma.readProgress.findMany.mock.calls.map((c: any) => c[0]).find((a: any) => a.where.isCompleted === false);
+        expect(call.where).toEqual(expect.objectContaining({ userId: 'user_1', isCompleted: false, currentPage: { gt: 0 } }));
+        expect(JSON.stringify(call.where)).toContain('lib_1');
+        expect(call.orderBy).toEqual({ updatedAt: 'desc' });
+    });
+
+    it('/series/continue pages the distinct series the way View More asks for them', async () => {
+        mocks.prisma.readProgress.findMany.mockImplementation(async (args: any) =>
+            args.where.isCompleted === false ? [{ issue: { seriesId: 'ser_2' } }, { issue: { seriesId: 'ser_1' } }] : []
+        );
+
+        const second = await (await getSeriesContinue(req('/series/continue?page=1&size=1&deleted=false'))).json();
+        expect(second.content.map((s: any) => s.id)).toEqual(['ser_1']);
+        expect(second.totalElements).toBe(2);
+        const past = await (await getSeriesContinue(req('/series/continue?page=2&size=1&deleted=false'))).json();
+        expect(past.content).toEqual([]); // the source stops on an empty page
+    });
+
+    it('/series/ondeck lists the series behind the On Deck books', async () => {
+        mocks.prisma.readProgress.findMany.mockImplementation(async (args: any) => {
+            if (args.where.issue?.seriesId) return []; // the SeriesDto read counts
+            if (args.where.isCompleted === true && !args.where.issueId) {
+                return [{ updatedAt: MTIME, issue: { id: 'iss_1', seriesId: 'ser_1' } }];
+            }
+            return [{ issueId: 'iss_1', currentPage: 24, isCompleted: true, updatedAt: MTIME }];
+        });
+        mocks.prisma.series.findUnique.mockResolvedValue({ id: 'ser_1', name: 'Batman', libraryId: 'lib_1' });
+        mocks.prisma.issue.findMany.mockResolvedValue([issue({ id: 'iss_1', number: '1' }), issue({ id: 'iss_2', number: '2' })]);
+
+        const res = await getSeriesOnDeck(req('/series/ondeck?page=0&size=20&deleted=false'));
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(await res.text());
+        expect(body.content.map((s: any) => s.id)).toEqual(['ser_1']);
+        expect(body.content[0].booksCount).toBe(3);
+    });
+
+    it('answers an empty page, not an error, when nothing is on deck or in progress', async () => {
+        for (const res of [await getSeriesOnDeck(req('/series/ondeck?page=0&size=20')), await getSeriesContinue(req('/series/continue?page=0&size=20'))]) {
+            expect(res.status).toBe(200);
+            const body = JSON.parse(await res.text());
+            expect(body.content).toEqual([]);
+        }
+    });
+
+    it('asks for the key like every other call', async () => {
+        mocks.validateApiKey.mockResolvedValue({ valid: false, user: null });
+        const res = await getSeriesContinue(req('/series/continue'));
+        expect(res.status).toBe(401);
+    });
+});
+
+describe('Komga facade: every error is a Komga JSON body', () => {
+    const errorBody = async (res: Response, status: number) => {
+        expect(res.status).toBe(status);
+        expect(res.headers.get('content-type')).toContain('application/json');
+        const body = JSON.parse(await res.text()); // never "Unexpected identifier"
+        expect(body).toEqual(expect.objectContaining({ status, error: expect.any(String), timestamp: expect.any(String) }));
+        return body;
+    };
+
+    it('404 and 403 from the book routes', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValueOnce(null);
+        expect((await errorBody(await getBookPages(req('/books/nope/pages'), params({ id: 'nope' })), 404)).error).toBe('Not Found');
+
+        mocks.prisma.issue.findUnique.mockResolvedValueOnce(issue());
+        mocks.getAccessibleLibraryIds.mockResolvedValueOnce([]);
+        expect((await errorBody(await getBookThumb(req('/books/iss_1/thumbnail'), params({ id: 'iss_1' })), 403)).error).toBe('Forbidden');
+
+        expect((await errorBody(await getBookPage(req('/books/iss_1/pages/0'), params({ id: 'iss_1', n: '0' })), 404)).error).toBe('Not Found');
+    });
+
+    it('400 from a malformed read-progress PATCH, 401 with the Basic challenge, 500 from a failing handler', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue());
+        const bad = await patchProgress(req('/books/iss_1/read-progress', { method: 'PATCH', body: '{nope', headers: { 'content-type': 'application/json' } }), params({ id: 'iss_1' }));
+        expect((await errorBody(bad, 400)).error).toBe('Bad Request');
+
+        mocks.validateApiKey.mockResolvedValueOnce({ valid: false, user: null });
+        const denied = await getSeriesBooks(req('/series/ser_1/books'), params({ id: 'ser_1' }));
+        expect((await errorBody(denied, 401)).error).toBe('Unauthorized');
+        expect(denied.headers.get('www-authenticate')).toContain('Basic realm="Omnibus Komga"');
+
+        mocks.prisma.series.findUnique.mockRejectedValueOnce(new Error('db gone'));
+        expect((await errorBody(await getSeriesBooks(req('/series/ser_1/books'), params({ id: 'ser_1' })), 500)).error).toBe('Internal Server Error');
+    });
+
+    it('an unknown /komga/api/v1 path answers a JSON 404 for any method, not the HTML not-found page', async () => {
+        const get = await catchAllGet(req('/readlists'));
+        expect((await errorBody(get, 404)).path).toBe('/api/v1/readlists');
+        await errorBody(await catchAllPost(req('/readlists/list', { method: 'POST', body: '{}' })), 404);
+    });
+
+    it('a POST that lands on the series/{id} segment is a JSON 405, not an empty body', async () => {
+        const res = await postSeriesOne(req('/series/ser_1', { method: 'POST', body: '{}' }));
+        expect((await errorBody(res, 405)).error).toBe('Method Not Allowed');
     });
 });

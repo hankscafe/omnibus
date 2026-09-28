@@ -59,6 +59,7 @@ describe('Komga facade: authentication', () => {
         const res = await getLibraries(req('/libraries'));
         expect(res.status).toBe(401);
         expect(res.headers.get('www-authenticate')).toContain('Basic realm="Omnibus Komga"');
+        expect(JSON.parse(await res.text())).toEqual(expect.objectContaining({ status: 401, error: 'Unauthorized' }));
     });
 
     it('rejects a key that names no user (legacy admin key) — progress needs a person', async () => {
@@ -183,6 +184,8 @@ describe('Komga facade: GET /series (search + browse)', () => {
         expect(where).toContain('Superhero');
         expect(where).toContain('Event');
         expect(where).toContain('col_1');
+        // A collection filter only reaches the caller's OWN collections (#206: collections are per user).
+        expect(where).toContain('"collection":{"userId":"user_1"}');
         expect(call.orderBy[0]).toEqual({ createdAt: 'desc' });
         expect(call.skip).toBe(40);
         expect(call.take).toBe(40);
@@ -267,6 +270,18 @@ describe('Komga facade: GET /series/{id}', () => {
         mocks.prisma.series.findUnique.mockResolvedValue(null);
         const res = await getSeriesOne(req('/series/nope'), params('nope'));
         expect(res.status).toBe(404);
+    });
+
+    // #206 round 4: the source's View More asked for /series/ondeck through this route and got a
+    // plain-text "Not Found" → `JSON Parse error: Unexpected identifier "Not"`. Komga answers errors
+    // as a JSON body, which the source parses and shows as an empty list.
+    it('answers a 404 as a Komga JSON error body the source can parse', async () => {
+        mocks.prisma.series.findUnique.mockResolvedValue(null);
+        const res = await getSeriesOne(req('/series/ondeck'), params('ondeck'));
+        expect(res.headers.get('content-type')).toContain('application/json');
+        const body = JSON.parse(await res.text());
+        expect(body).toEqual(expect.objectContaining({ status: 404, error: 'Not Found' }));
+        expect(body.content ?? []).toEqual([]); // the source's `result.content ?? []` finds nothing to show
     });
 
     it('403s a series in a library the user was not granted', async () => {

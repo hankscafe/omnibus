@@ -21,7 +21,8 @@ import {
     type SeriesCounts,
     type ProgressRow,
 } from './dto';
-import type { SeriesFilters, SeriesSort } from './query';
+import type { Paging, SeriesFilters, SeriesSort } from './query';
+import { bookWhereFor, pinnedSeriesId, seriesWhereFor, type SearchBody } from './search';
 
 export const HAS_FILE = { filePath: { not: null } } as const;
 const ZERO_COUNTS: SeriesCounts = { booksCount: 0, booksReadCount: 0, booksInProgressCount: 0 };
@@ -33,8 +34,12 @@ type IssueWithLane = Prisma.IssueGetPayload<{ include: { attachedVolume: { selec
 // Series
 // ---------------------------------------------------------------------------------------------
 
-/** The list filter: grants AND has-files AND each requested constraint — nothing overwrites another. */
-export function seriesListWhere(libs: AccessibleLibraries, filters: SeriesFilters): Prisma.SeriesWhereInput {
+/**
+ * The list filter: grants AND has-files AND each requested constraint — nothing overwrites another,
+ * and the grants are always the first clause, outside anything a client sends. `extra` is a search
+ * body's condition (POST /series/list), already translated by search.ts.
+ */
+export function seriesListWhere(libs: AccessibleLibraries, filters: SeriesFilters, userId?: string, extra?: Prisma.SeriesWhereInput): Prisma.SeriesWhereInput {
     const and: Prisma.SeriesWhereInput[] = [
         seriesAccessWhere(libs) as Prisma.SeriesWhereInput,
         { issues: { some: HAS_FILE } },
@@ -44,13 +49,17 @@ export function seriesListWhere(libs: AccessibleLibraries, filters: SeriesFilter
     // Genres/tags are JSON-array strings; a quoted needle matches whole values only.
     for (const g of filters.genres) and.push({ genres: { contains: `"${g}"` } });
     for (const t of filters.tags) and.push({ tags: { contains: `"${t}"` } });
-    if (filters.collectionIds.length) and.push({ collectionItems: { some: { collectionId: { in: filters.collectionIds } } } });
+    // Collections belong to a user — a collection filter only reaches the caller's own.
+    if (filters.collectionIds.length) {
+        and.push({ collectionItems: { some: { collectionId: { in: filters.collectionIds }, ...(userId ? { collection: { userId } } : {}) } } });
+    }
+    if (extra && Object.keys(extra).length > 0) and.push(extra);
     return { AND: and };
 }
 
 export function seriesOrderBy(sort: SeriesSort): Prisma.SeriesOrderByWithRelationInput[] {
     // `id` tiebreaker: OFFSET pagination needs a total order (same rule as the OPDS catalog).
-    // (fileAddedAt is an aggregate over a series' issues — listSeries orders it with a groupBy.)
+    // (fileAddedAt and readDate are aggregates over a series' issues — listSeries orders those itself.)
     switch (sort.field) {
         case 'createdAt': return [{ createdAt: sort.dir }, { id: 'asc' }];
         default: return [{ name: sort.dir }, { year: 'asc' }, { id: 'asc' }];
@@ -90,6 +99,8 @@ export interface ListSeriesArgs {
     sort: SeriesSort;
     page: number;
     size: number;
+    /** A search body's translated condition — ANDed inside the grants. */
+    extra?: Prisma.SeriesWhereInput;
 }
 
 /** A file row with an arrival stamp — the rows the arrival order ranks. */
@@ -120,14 +131,43 @@ async function listByArrival(where: Prisma.SeriesWhereInput, dir: 'asc' | 'desc'
     return { rows: ids.map(id => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s)), total };
 }
 
-export async function listSeries({ libs, userId, filters, sort, page, size }: ListSeriesArgs) {
-    const where = seriesListWhere(libs, filters);
+/** How far back "last read" ordering looks (the caller's most recent progress rows). */
+const READ_DATE_CAP = 500;
+
+/**
+ * `sort=readProgress.readDate,desc` (the 0.9 source's Continue Reading): series by when the caller
+ * last read in them, newest first. Series never read don't rank. Hydrated in that order and paged
+ * by slicing, so the count is exactly the ranked set.
+ */
+async function listByReadDate(where: Prisma.SeriesWhereInput, userId: string, libs: AccessibleLibraries, page: number, size: number) {
+    const recent = await prisma.readProgress.findMany({
+        where: { userId, issue: { ...HAS_FILE, ...(nestedSeriesAccessWhere(libs) as Prisma.IssueWhereInput) } },
+        orderBy: { updatedAt: 'desc' },
+        take: READ_DATE_CAP,
+        select: { issue: { select: { seriesId: true } } },
+    });
+    const ordered = distinct(recent.map(r => r.issue.seriesId));
+    const matching = ordered.length
+        ? await prisma.series.findMany({ where: { AND: [where, { id: { in: ordered } }] }, select: { id: true } })
+        : [];
+    const keep = new Set(matching.map(m => m.id));
+    const ids = ordered.filter(id => keep.has(id));
+    const slice = ids.slice(page * size, page * size + size);
+    const found = slice.length ? await prisma.series.findMany({ where: { id: { in: slice } } }) : [];
+    const byId = new Map(found.map(s => [s.id, s]));
+    return { rows: slice.map(id => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s)), total: ids.length };
+}
+
+export async function listSeries({ libs, userId, filters, sort, page, size, extra }: ListSeriesArgs) {
+    const where = seriesListWhere(libs, filters, userId, extra);
     const { rows, total } = sort.field === 'fileAddedAt'
         ? await listByArrival(where, sort.dir, page, size)
-        : await Promise.all([
-            prisma.series.findMany({ where, orderBy: seriesOrderBy(sort), skip: page * size, take: size }),
-            prisma.series.count({ where }),
-        ]).then(([rows, total]) => ({ rows, total }));
+        : sort.field === 'readDate'
+            ? await listByReadDate(where, userId, libs, page, size)
+            : await Promise.all([
+                prisma.series.findMany({ where, orderBy: seriesOrderBy(sort), skip: page * size, take: size }),
+                prisma.series.count({ where }),
+            ]).then(([rows, total]) => ({ rows, total }));
     const counts = await seriesCounts(rows.map(r => r.id), userId);
     const content = rows.map(r => toSeriesDto(r, counts.get(r.id) ?? ZERO_COUNTS, seriesAuthors(r)));
     return komgaPage(content, page, size, total);
@@ -260,14 +300,19 @@ async function tileFor(row: ProgressWithIssue['issue'], progress: ProgressRow | 
     });
 }
 
-/** `/books?read_status=IN_PROGRESS&sort=readProgress.readDate,desc`: unfinished books, newest read first. */
-export async function inProgressBooks(userId: string, libs: AccessibleLibraries, page: number, size: number) {
-    const where: Prisma.ReadProgressWhereInput = {
+/** The user's started-but-unfinished books with files, inside their library grants. */
+function inProgressWhere(userId: string, libs: AccessibleLibraries): Prisma.ReadProgressWhereInput {
+    return {
         userId,
         isCompleted: false,
         currentPage: { gt: 0 },
         issue: { ...HAS_FILE, ...(nestedSeriesAccessWhere(libs) as Prisma.IssueWhereInput) },
     };
+}
+
+/** `/books?read_status=IN_PROGRESS&sort=readProgress.readDate,desc`: unfinished books, newest read first. */
+export async function inProgressBooks(userId: string, libs: AccessibleLibraries, page: number, size: number) {
+    const where = inProgressWhere(userId, libs);
     const [rows, total] = await Promise.all([
         prisma.readProgress.findMany({
             where,
@@ -320,4 +365,139 @@ export async function onDeckBooks(userId: string, libs: AccessibleLibraries, siz
         }));
     }
     return komgaPage(out, 0, size, out.length);
+}
+
+// ---------------------------------------------------------------------------------------------
+// View More for On Deck / Continue Reading (#206 round 4)
+// ---------------------------------------------------------------------------------------------
+// The source's getViewMoreItems asks for `/series/<section id>` for every homepage section and
+// reads SeriesDtos (it opens `/series/{id}/thumbnail` and the series itself), so On Deck and
+// Continue Reading are answered here as the series behind their books, in the section's order.
+
+/** How far back View More looks — the homepage sections themselves show 20. */
+const VIEW_MORE_CAP = 50;
+
+async function seriesPageFor(seriesIds: string[], userId: string, page: number, size: number) {
+    const slice = seriesIds.slice(page * size, page * size + size);
+    const found = slice.length ? await prisma.series.findMany({ where: { id: { in: slice } } }) : [];
+    const byId = new Map(found.map(s => [s.id, s]));
+    const rows = slice.map(id => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s));
+    const counts = await seriesCounts(rows.map(r => r.id), userId);
+    const content = rows.map(r => toSeriesDto(r, counts.get(r.id) ?? ZERO_COUNTS, seriesAuthors(r)));
+    return komgaPage(content, page, size, seriesIds.length);
+}
+
+const distinct = (ids: string[]) => ids.filter((id, i) => ids.indexOf(id) === i);
+
+/** `/series/continue`: each series with an unfinished book, most recently read first. */
+export async function inProgressSeries(userId: string, libs: AccessibleLibraries, page: number, size: number) {
+    const rows = await prisma.readProgress.findMany({
+        where: inProgressWhere(userId, libs),
+        orderBy: { updatedAt: 'desc' },
+        take: VIEW_MORE_CAP,
+        select: { issue: { select: { seriesId: true } } },
+    });
+    return seriesPageFor(distinct(rows.map(r => r.issue.seriesId)), userId, page, size);
+}
+
+/** `/series/ondeck`: the series of the On Deck books, in On Deck order. */
+export async function onDeckSeries(userId: string, libs: AccessibleLibraries, page: number, size: number) {
+    const deck = await onDeckBooks(userId, libs, VIEW_MORE_CAP);
+    return seriesPageFor(distinct(deck.content.map(b => b.seriesId)), userId, page, size);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Paperback 0.9's search API (#206 prep): POST /series/list, POST /books/list, v2 read progress
+// ---------------------------------------------------------------------------------------------
+
+/** Every series the caller has an unfinished book in (search.ts asks for it lazily). */
+async function inProgressSeriesIdList(userId: string, libs: AccessibleLibraries): Promise<string[]> {
+    const rows = await prisma.readProgress.findMany({
+        where: inProgressWhere(userId, libs),
+        orderBy: { updatedAt: 'desc' },
+        take: READ_DATE_CAP,
+        select: { issue: { select: { seriesId: true } } },
+    });
+    return distinct(rows.map(r => r.issue.seriesId));
+}
+
+const NO_FILTERS: SeriesFilters = { search: null, tags: [], genres: [], collectionIds: [], libraryIds: [] };
+
+/** POST /series/list: the body's condition + full text, inside the grants, in the requested order. */
+export async function searchSeries(args: { libs: AccessibleLibraries; userId: string; body: SearchBody; sort: SeriesSort; page: number; size: number }) {
+    const { libs, userId, body, sort, page, size } = args;
+    const extra = await seriesWhereFor(body.condition, { userId, inProgressSeriesIds: () => inProgressSeriesIdList(userId, libs) });
+    return listSeries({ libs, userId, filters: { ...NO_FILTERS, search: body.fullTextSearch }, sort, page, size, extra });
+}
+
+/**
+ * POST /books/list. Pinned to one series (how the 0.9 source lists chapters): that series' books in
+ * reading order with their 1-based numberSort, honouring unpaged — and nothing at all for a series
+ * outside the grants (a search answers empty, it doesn't confirm the series exists). Anything else
+ * is paged like every other list; a library-wide unpaged request would stat every file on disk.
+ */
+export async function searchBooks(args: { libs: AccessibleLibraries; userId: string; body: SearchBody; paging: Paging }) {
+    const { libs, userId, body, paging } = args;
+    const { page, size } = paging;
+    const where: Prisma.IssueWhereInput = {
+        AND: [
+            HAS_FILE,
+            nestedSeriesAccessWhere(libs) as Prisma.IssueWhereInput,
+            bookWhereFor(body.condition, userId),
+            ...(body.fullTextSearch ? [{ name: ciContains(body.fullTextSearch) }] : []),
+        ],
+    };
+
+    const pinned = pinnedSeriesId(body.condition);
+    if (pinned) {
+        const series = await prisma.series.findUnique({ where: { id: pinned }, select: { id: true, name: true, libraryId: true } });
+        if (!series || !canAccessLibraryId(libs, series.libraryId)) return komgaPage([], page, size, 0);
+        const matched = new Set((await prisma.issue.findMany({ where, select: { id: true } })).map(r => r.id));
+        const ordered = (await loadOrderedBooks(pinned)).filter(o => matched.has(o.issue.id));
+        const slice = paging.unpaged ? ordered : ordered.slice(page * size, page * size + size);
+        const content = await bookDtos(slice, series, userId);
+        return paging.unpaged
+            ? komgaPage(content, 0, Math.max(1, content.length), ordered.length)
+            : komgaPage(content, page, size, ordered.length);
+    }
+
+    const [rows, total] = await Promise.all([
+        prisma.issue.findMany({
+            where,
+            include: { series: { select: { id: true, name: true, libraryId: true } }, attachedVolume: { select: { name: true } } },
+            orderBy: [{ seriesId: 'asc' }, { number: 'asc' }, { id: 'asc' }],
+            skip: page * size,
+            take: size,
+        }),
+        prisma.issue.count({ where }),
+    ]);
+    const progress = await progressByIssue(userId, rows.map(r => r.id));
+    const content = await Promise.all(rows.map(r => tileFor(r, progress.get(r.id) ?? null)));
+    return komgaPage(content, page, size, total);
+}
+
+/**
+ * GET /api/v2/series/{id}/read-progress/tachiyomi — Komga's TachiyomiReadProgressV2Dto, which the
+ * 0.9 source reads to know where the reader is up to: the book counts, and the numberSort of the
+ * last book read WITHOUT A GAP from the start (0 when the first book is unread).
+ */
+export async function tachiyomiProgress(seriesId: string, userId: string) {
+    const ordered = await loadOrderedBooks(seriesId);
+    const progress = await progressByIssue(userId, ordered.map(o => o.issue.id));
+    let read = 0, inProgress = 0, lastReadContinuousNumberSort = 0, continuous = true;
+    for (const o of ordered) {
+        const p = progress.get(o.issue.id);
+        if (p?.isCompleted) read++;
+        else if (p && p.currentPage > 0) inProgress++;
+        if (continuous && p?.isCompleted) lastReadContinuousNumberSort = o.position;
+        else continuous = false;
+    }
+    return {
+        booksCount: ordered.length,
+        booksReadCount: read,
+        booksUnreadCount: ordered.length - read - inProgress,
+        booksInProgressCount: inProgress,
+        lastReadContinuousNumberSort,
+        maxNumberSort: ordered.length ? ordered[ordered.length - 1].position : 0,
+    };
 }

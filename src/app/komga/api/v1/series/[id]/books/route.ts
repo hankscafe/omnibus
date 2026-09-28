@@ -2,7 +2,7 @@
 // issues with files, in the series page's default order (the run by number, then the annuals),
 // each with the caller's read progress. Paperback asks for this unpaged
 // (`?unpaged=true&media_status=READY&deleted=false`) and builds its chapter list from it.
-import { authenticateKomga, komgaGuard, komgaJson, komgaText } from '@/lib/komga/auth';
+import { authenticateKomga, komgaGuard, komgaJson, komgaError } from '@/lib/komga/auth';
 import { bookDtos, findAccessibleSeries, loadOrderedBooks } from '@/lib/komga/data';
 import { komgaPage } from '@/lib/komga/dto';
 import { parsePaging } from '@/lib/komga/query';
@@ -15,7 +15,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         if (!auth.ok) return auth.response;
         const { id } = await params;
         const found = await findAccessibleSeries(id, auth.libs);
-        if (!found.ok) return komgaText(found.status, found.status === 404 ? 'Not Found' : 'Forbidden');
+        if (!found.ok) return komgaError(found.status);
 
         const ordered = await loadOrderedBooks(found.series.id);
         const { page, size, unpaged } = parsePaging(new URL(req.url).searchParams, 500);

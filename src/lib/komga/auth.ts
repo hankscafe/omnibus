@@ -19,9 +19,34 @@ export interface KomgaIdentity {
 
 export type KomgaAuthResult = { ok: true } & KomgaIdentity | { ok: false; response: Response };
 
+const REASONS: Record<number, string> = {
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    405: 'Method Not Allowed',
+    413: 'Payload Too Large',
+    500: 'Internal Server Error',
+};
+
+/**
+ * An error as Komga (Spring Boot) sends it: a JSON body, never plain text. Paperback's source
+ * JSON.parses every response it gets — a real Komga's error body parses, `result.content ?? []`
+ * finds nothing and the app shows an empty list; our plain "Not Found" threw `JSON Parse error:
+ * Unexpected identifier "Not"` instead (#206 round 4: the source's View More asks for
+ * /series/<section id> for every homepage section, On Deck and Continue Reading included).
+ */
+export function komgaError(status: number, path?: string, headers: Record<string, string> = {}): Response {
+    const body = { timestamp: new Date().toISOString(), status, error: REASONS[status] ?? 'Error', ...(path ? { path } : {}) };
+    return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers },
+    });
+}
+
 export function unauthorized(): Response {
-    // The source reads only the status: 401 → "Error 401 Unauthorized: Invalid credentials".
-    return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': KOMGA_CHALLENGE } });
+    // The source reads the status: 401 → "Error 401 Unauthorized: Invalid credentials".
+    return komgaError(401, undefined, { 'WWW-Authenticate': KOMGA_CHALLENGE });
 }
 
 export async function authenticateKomga(req: Request): Promise<KomgaAuthResult> {
@@ -38,10 +63,6 @@ export function komgaJson(data: unknown, status = 200): Response {
     });
 }
 
-export function komgaText(status: number, text: string): Response {
-    return new Response(text, { status });
-}
-
 export function noContent(): Response {
     return new Response(null, { status: 204 });
 }
@@ -52,6 +73,6 @@ export async function komgaGuard(name: string, run: () => Promise<Response>): Pr
         return await run();
     } catch (error: unknown) {
         Logger.log(`[Komga ${name}] Error: ${getErrorMessage(error)}`, 'error');
-        return new Response('Internal Server Error', { status: 500 });
+        return komgaError(500);
     }
 }

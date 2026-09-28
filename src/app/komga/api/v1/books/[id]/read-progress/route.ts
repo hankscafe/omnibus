@@ -8,7 +8,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { recordDailyReading } from '@/lib/reading-stats';
 import { evaluateTrophies } from '@/lib/trophy-evaluator';
-import { authenticateKomga, komgaGuard, komgaText, noContent } from '@/lib/komga/auth';
+import { authenticateKomga, komgaGuard, komgaError, noContent } from '@/lib/komga/auth';
 import { findAccessibleIssue } from '@/lib/komga/data';
 
 export const dynamic = 'force-dynamic';
@@ -28,12 +28,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
             body = (await req.json()) as ReadProgressUpdate;
             if (!body || typeof body !== 'object') throw new Error('not an object');
         } catch {
-            return komgaText(400, 'Bad Request');
+            return komgaError(400);
         }
 
         const { id } = await params;
         const found = await findAccessibleIssue(id, auth.libs);
-        if (!found.ok) return komgaText(found.status, found.status === 404 ? 'Not Found' : 'Forbidden');
+        if (!found.ok) return komgaError(found.status);
         const issue = found.issue;
         const userId = auth.user.id;
 

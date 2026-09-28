@@ -312,11 +312,13 @@ Tap **Try settings** to confirm the connection. Series, covers, page streaming (
 Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kindle, Pocketbook). Using our custom KOReader sync endpoints, your eReader will automatically ping Omnibus every time you turn a page, and you can view your real-time progress right on your Omnibus Profile!
 
 **How to Configure KOReader:**
-1. Connect your eReader to Wi-Fi and open the top KOReader menu.
-2. Navigate to **Settings > Progress Sync > Custom sync server**.
-3. Enter your Omnibus URL: `http://<your-omnibus-ip>:3000/api/koreader`
-4. Tap **Register / Login** and use your Omnibus **Username** and an **Omnibus API Key** (generated from your Profile) as the password.
-5. **Crucial Step:** Go to **Progress Sync > Document matching method** and select **Path**. (This ensures Omnibus can perfectly map your device's progress back to your web library).
+1. Create a **new API key** from **Profile → Manage API Keys** (or the admin API-key page). Keys created before KOReader sync support was added cannot be upgraded because their raw values are not stored; create a new key for sync.
+2. Connect your eReader to Wi-Fi and open the top KOReader menu.
+3. Navigate to **Settings → Progress Sync → Custom sync server**.
+4. Enter your Omnibus URL: `http://<your-omnibus-ip>:3000/api/koreader`
+5. Tap **Login** and use your Omnibus **Username** and the new **Omnibus API Key** as the password.
+6. Enable **Progress Sync → Send document metadata**. This is off by default. With it enabled, Omnibus uses the real filename to bind progress to the matching library issue; without it, KOReader device-to-device sync still works but Omnibus cannot bind the progress to an issue. KOReader builds that do not have this option provide device-to-device sync only.
+7. Leave **Document matching method** on its normal **Binary** or **Filename** setting. The old **Path** setting is not required and the document field sent by KOReader is a checksum, not a path.
 
 ### Reading Lists
 Perfect for navigating the complex web of massive comic book crossover events or creating your own curated reading orders.

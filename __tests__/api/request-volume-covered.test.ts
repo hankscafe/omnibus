@@ -69,4 +69,36 @@ describe('API: volume request vs. coverage (POST)', () => {
         expect(filed).toEqual(['Saga #2', 'Saga #3', 'Saga #4']);
         expect(ownedWhere).toEqual(expect.objectContaining({ seriesId: 'series-1', filePath: { not: null }, attachedVolumeId: null, isAnnual: false }));
     });
+
+    it('does not trust a request payload to set or overwrite a series imprint', async () => {
+        (prisma.systemSetting.findMany as any).mockResolvedValue([
+            { key: 'folder_naming_pattern', value: '{Imprint}/{Publisher}/{Series} ({Year})' },
+        ]);
+        (prisma.series.findUnique as any)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({ isManga: false, imprint: 'Vertigo' });
+
+        for (const name of ['New Series', 'Existing Series']) {
+            const res = await POST(new NextRequest('http://localhost/api/request', {
+                method: 'POST',
+                body: JSON.stringify({
+                    type: 'volume',
+                    cvId: name === 'New Series' ? 4242 : 4243,
+                    name,
+                    metadataSource: 'COMICVINE',
+                    year: '2012',
+                    publisher: 'Image',
+                    imprint: 'Spoofed Imprint',
+                    monitorOnly: true,
+                }),
+            }));
+            expect(res.status).toBe(200);
+        }
+
+        const upserts = (prisma.series.upsert as any).mock.calls.map((call: any[]) => call[0]);
+        expect(upserts).toHaveLength(2);
+        expect(upserts[0].create).not.toHaveProperty('imprint');
+        expect(upserts[0].create.folderPath).toBe('/data/comics/Image/Saga (2012)');
+        expect(upserts[1].update).not.toHaveProperty('imprint');
+    });
 });

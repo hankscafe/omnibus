@@ -783,7 +783,7 @@ mod tests {
         let messy_str = messy.to_string_lossy().replace('\\', "/");
 
         sqlx::query(r#"INSERT INTO "Library" (id, path, "isDefault", "isManga") VALUES ('lib_1', $1, 1, 0)"#).bind(&root_str).execute(&db.pool).await.unwrap();
-        sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, imprint, "folderPath", "libraryId", "isManga") VALUES ('s1', 'Batman', 'DC Comics', 2016, 'Absolute', $1, 'lib_1', 0)"#)
+        sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "libraryId", "isManga") VALUES ('s1', 'Batman', 'DC Comics', 2016, $1, 'lib_1', 0)"#)
             .bind(&messy_str).execute(&db.pool).await.unwrap();
         sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", kind, name) VALUES ('att_local', 's1', 'LOCAL', 'COLLECTED', 'Batman Compendium')"#).execute(&db.pool).await.unwrap();
         sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", kind, name) VALUES ('att_cv', 's1', 'COMICVINE', 'COLLECTED', 'Batman')"#).execute(&db.pool).await.unwrap();
@@ -797,16 +797,16 @@ mod tests {
                 .execute(&db.pool).await.unwrap();
         }
 
-        let summary = run_bulk_rename(&db, &["s1".to_string()], "{Imprint}/{Publisher}/{Series} ({Year})", "{Imprint} {Series} #{Issue}", None, Some("{Imprint} {Series} Vol. {Issue} ({IssueYear})")).await.unwrap();
+        let summary = run_bulk_rename(&db, &["s1".to_string()], "{Publisher}/{Series} ({Year})", "{Series} #{Issue}", None, None).await.unwrap();
         assert_eq!((summary.files_renamed, summary.folders_renamed, summary.conflicts), (3, 1, 0));
 
-        let target = root.join("Absolute").join("DC Comics").join("Batman (2016)");
+        let target = root.join("DC Comics").join("Batman (2016)");
         // The local edition's book carries the edition's name — the name rule still claims it.
-        assert!(target.join("Absolute Batman Compendium Vol. 001 (2016).cbz").exists(), "local book named after its edition");
-        assert!(!target.join("Absolute Batman Vol. 001 (2016).cbz").exists(), "never the series name for a local book");
+        assert!(target.join("Batman Compendium Vol. 001 (2016).cbz").exists(), "local book named after its edition");
+        assert!(!target.join("Batman Vol. 001 (2016).cbz").exists(), "never the series name for a local book");
         // The provider trade and the plain issue are unchanged in shape.
-        assert!(target.join("Absolute Batman Vol. 002 (2016).cbz").exists());
-        assert!(target.join("Absolute Batman #003.cbz").exists());
+        assert!(target.join("Batman Vol. 002 (2016).cbz").exists());
+        assert!(target.join("Batman #003.cbz").exists());
 
         let path_of = |id: &str| {
             let db = &db;
@@ -815,9 +815,45 @@ mod tests {
                 sqlx::query(r#"SELECT "filePath" FROM "Issue" WHERE id = $1"#).bind(id).fetch_one(&db.pool).await.unwrap().get::<Option<String>, _>("filePath").unwrap_or_default()
             }
         };
-        assert!(path_of("local_book").await.ends_with("Absolute Batman Compendium Vol. 001 (2016).cbz"));
-        assert!(path_of("cv_book").await.ends_with("Absolute Batman Vol. 002 (2016).cbz"));
-        assert!(path_of("issue_3").await.ends_with("Absolute Batman #003.cbz"));
+        assert!(path_of("local_book").await.ends_with("Batman Compendium Vol. 001 (2016).cbz"));
+        assert!(path_of("cv_book").await.ends_with("Batman Vol. 002 (2016).cbz"));
+        assert!(path_of("issue_3").await.ends_with("Batman #003.cbz"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn bulk_rename_uses_imprint_and_omits_blank_imprint_tier_and_separator() {
+        for (tag, imprint, expected_folder, expected_file) in [
+            ("with_imprint", Some("Absolute"), "Absolute/Batman (2016)", "Absolute - Batman #001.cbz"),
+            ("blank_imprint", None, "Batman (2016)", "Batman #001.cbz"),
+        ] {
+            let (db, root) = rename_fixture(tag).await;
+            let root_str = root.to_string_lossy().replace('\\', "/");
+            let messy = root.join("inbox");
+            fs::create_dir_all(&messy).unwrap();
+            let source = messy.join("Batman 1.cbz");
+            fs::write(&source, b"data").unwrap();
+            let messy_str = messy.to_string_lossy().replace('\\', "/");
+
+            sqlx::query(r#"INSERT INTO "Library" (id, path, "isDefault", "isManga") VALUES ('lib_1', $1, 1, 0)"#)
+                .bind(&root_str).execute(&db.pool).await.unwrap();
+            sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, imprint, "folderPath", "libraryId", "isManga") VALUES ('s1', 'Batman', 'DC Comics', 2016, $1, $2, 'lib_1', 0)"#)
+                .bind(imprint).bind(&messy_str).execute(&db.pool).await.unwrap();
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", name, number, "filePath") VALUES ('i1', 's1', 'Batman #1', '1', $1)"#)
+                .bind(source.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+
+            let summary = run_bulk_rename(
+                &db,
+                &["s1".to_string()],
+                "{Imprint}/{Series} ({Year})",
+                "{Imprint} - {Series} #{Issue}",
+                None,
+                None,
+            ).await.unwrap();
+
+            assert_eq!((summary.files_renamed, summary.folders_renamed, summary.conflicts), (1, 1, 0));
+            assert!(root.join(expected_folder).join(expected_file).exists(), "expected renamed file for {tag}");
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 }

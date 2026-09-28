@@ -163,7 +163,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     <span className="text-primary break-all">
                                         {(config.folder_naming_pattern || "{Publisher}/{Series} ({Year})")
                                             .replace(/{Publisher}/gi, "Marvel")
-                                            .replace(/{Imprint}/gi, "Marvel")
+                                            .replace(/{Imprint}/gi, "Marvel MAX")
                                             .replace(/{Series}/gi, "Amazing Spider-Man")
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
@@ -181,7 +181,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     <span className="text-primary break-all">
                                         {(config.file_naming_pattern || "{Series} #{Issue}")
                                             .replace(/{Publisher}/gi, "Marvel")
-                                            .replace(/{Imprint}/gi, "Marvel")
+                                            .replace(/{Imprint}/gi, "Marvel MAX")
                                             .replace(/{Series}/gi, "Amazing Spider-Man")
                                             .replace(/{Year}/gi, "2022")
                                             .replace(/{VolumeYear}/gi, "2022")
@@ -200,7 +200,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                                     <span className="text-primary break-all">
                                         {(config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
                                             .replace(/{Publisher}/gi, "Shueisha")
-                                            .replace(/{Imprint}/gi, "Shueisha")
+                                            .replace(/{Imprint}/gi, "Jump Comics")
                                             .replace(/{Series}/gi, "Chainsaw Man")
                                             .replace(/{Year}/gi, "2018")
                                             .replace(/{VolumeYear}/gi, "2018")

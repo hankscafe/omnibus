@@ -318,21 +318,19 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 }
 
                 target_lib_id = fallback_lib_id;
-                let series_group_fs = clean_fs_name(&info.series_group.clone().unwrap_or_default());
-                let imprint_fs = crate::renamer::sanitize_component(info.imprint.as_deref().unwrap_or_default().trim());
-                let universe_fs = clean_fs_name(&info.universe.clone().unwrap_or_default());
-                let folder_pattern = crate::renamer::replace_token_ci(&folder_pattern, "{Imprint}", &imprint_fs);
-                let rel_folder = clean_naming_leftovers(&folder_pattern
-                    .replace("{Publisher}", &clean_fs_name(&publisher))
-                    .replace("{Series}", &clean_fs_name(&series_name))
-                    .replace("{Year}", &year_str)
-                    .replace("{VolumeYear}", &year_str)
-                    .replace("{UniverseName}", &universe_fs)
-                    .replace("{SeriesGroup}", &series_group_fs));
-                // Build the path one segment at a time, dropping any that resolved to empty (e.g. a
-                // blank {SeriesGroup}) — a leading "" segment would otherwise make join() absolute on Unix.
+                let folder_segments = expand_folder_pattern(
+                    &folder_pattern,
+                    info.imprint.as_deref(),
+                    &publisher,
+                    &series_name,
+                    &year_str,
+                    info.universe.as_deref().unwrap_or_default(),
+                    info.series_group.as_deref().unwrap_or_default(),
+                );
+                // Build the path one segment at a time, dropping any that resolved to empty — a
+                // leading "" segment would otherwise make join() absolute on Unix.
                 let mut folder = PathBuf::from(&fallback_lib_path);
-                for seg in rel_folder.split(['/', '\\']).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                for seg in folder_segments {
                     folder.push(seg);
                 }
                 dest_folder = folder;
@@ -346,7 +344,6 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 existing_has_custom_metadata,
                 info.imprint.as_deref(),
             );
-            let imprint_fs = crate::renamer::sanitize_component(&effective_imprint);
             let imprint_db = if effective_imprint.is_empty() { None } else { Some(effective_imprint.clone()) };
             let should_adopt_imprint = imprint_db.is_some()
                 && (!had_existing_series || (!existing_has_custom_metadata && existing_imprint.as_deref().map(str::trim).unwrap_or("").is_empty()));
@@ -366,17 +363,21 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 &file_pattern
             };
 
-            let pattern_with_imprint = crate::renamer::replace_token_ci(pattern_to_use, "{Imprint}", &imprint_fs);
-            let new_filename = clean_naming_leftovers(&pattern_with_imprint
-                .replace("{Publisher}", &clean_fs_name(&publisher))
-                .replace("{Series}", &clean_fs_name(&series_name))
-                .replace("{Year}", &year_str)
-                .replace("{VolumeYear}", &year_str)
-                .replace("{IssueYear}", &year_str)
-                .replace("{Issue}", &formatted_num)
-                .replace("{IssueTitle}", &clean_fs_name(&info.title.clone().unwrap_or_default()))
-                .replace("{UniverseName}", &clean_fs_name(&info.universe.clone().unwrap_or_default()))
-                .replace("{SeriesGroup}", &clean_fs_name(&info.series_group.clone().unwrap_or_default())));
+            let new_filename = expand_file_pattern(
+                pattern_to_use,
+                Some(&effective_imprint),
+                &[
+                    ("{Publisher}", publisher.as_str()),
+                    ("{Series}", series_name.as_str()),
+                    ("{Year}", year_str.as_str()),
+                    ("{VolumeYear}", year_str.as_str()),
+                    ("{IssueYear}", year_str.as_str()),
+                    ("{Issue}", formatted_num.as_str()),
+                    ("{IssueTitle}", info.title.as_deref().unwrap_or_default()),
+                    ("{UniverseName}", info.universe.as_deref().unwrap_or_default()),
+                    ("{SeriesGroup}", info.series_group.as_deref().unwrap_or_default()),
+                ],
+            );
 
             // Converted archives (cbr/rar/cb7) and zip/cbz all normalize to .cbz; an .epub is left as
             // .epub so a renamed EPUB isn't mislabeled as a comic archive.
@@ -630,6 +631,53 @@ fn clean_fs_name(input: &str) -> String {
     input.replace(&['<', '>', ':', '"', '/', '\\', '|', '?', '*'][..], "").trim().to_string()
 }
 
+fn replace_imprint_token(pattern: &str, imprint: Option<&str>) -> String {
+    let safe_imprint = crate::renamer::sanitize_component(imprint.unwrap_or_default().trim());
+    crate::renamer::replace_token_ci(pattern, "{Imprint}", &safe_imprint)
+}
+
+fn expand_folder_pattern(
+    pattern: &str,
+    imprint: Option<&str>,
+    publisher: &str,
+    series: &str,
+    year: &str,
+    universe: &str,
+    series_group: &str,
+) -> Vec<String> {
+    let expanded = replace_imprint_token(pattern, imprint)
+        .replace("{Publisher}", &clean_fs_name(publisher))
+        .replace("{Series}", &clean_fs_name(series))
+        .replace("{Year}", year)
+        .replace("{VolumeYear}", year)
+        .replace("{UniverseName}", &clean_fs_name(universe))
+        .replace("{SeriesGroup}", &clean_fs_name(series_group));
+
+    clean_naming_leftovers(&expanded)
+        .split(['/', '\\'])
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn expand_file_pattern(
+    pattern: &str,
+    imprint: Option<&str>,
+    tokens: &[(&str, &str)],
+) -> String {
+    let mut expanded = replace_imprint_token(pattern, imprint);
+    for (token, value) in tokens {
+        let value = match *token {
+            "{Publisher}" | "{Series}" | "{IssueTitle}" | "{UniverseName}" | "{SeriesGroup}" => clean_fs_name(value),
+            _ => value.to_string(),
+        };
+        expanded = expanded.replace(token, &value);
+    }
+
+    clean_naming_leftovers(&expanded)
+}
+
 fn resolve_effective_imprint(
     had_existing_series: bool,
     stored_imprint: Option<&str>,
@@ -699,6 +747,29 @@ mod tests {
         assert_eq!(clean_naming_leftovers("Saga ()"), "Saga");
         assert_eq!(clean_naming_leftovers("Saga [] #01"), "Saga #01");
         assert_eq!(clean_naming_leftovers("Saga  (2014)  #01"), "Saga (2014) #01");
+    }
+
+    #[test]
+    fn imprint_expands_in_watched_folder_and_file_patterns() {
+        let folder_pattern = "{Imprint}/{Series} ({Year})";
+        let file_pattern = "{Imprint} {Series} #{Issue}";
+
+        assert_eq!(
+            expand_folder_pattern(folder_pattern, Some("Absolute"), "DC Comics", "Batman", "2016", "", ""),
+            vec!["Absolute", "Batman (2016)"],
+        );
+        assert_eq!(
+            expand_folder_pattern(folder_pattern, None, "DC Comics", "Batman", "2016", "", ""),
+            vec!["Batman (2016)"],
+        );
+        assert_eq!(
+            expand_file_pattern(file_pattern, Some("Absolute"), &[("{Series}", "Batman"), ("{Issue}", "001")]),
+            "Absolute Batman #001",
+        );
+        assert_eq!(
+            expand_file_pattern(file_pattern, None, &[("{Series}", "Batman"), ("{Issue}", "001")]),
+            "Batman #001",
+        );
     }
 
     #[test]

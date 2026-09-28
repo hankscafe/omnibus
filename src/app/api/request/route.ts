@@ -252,7 +252,7 @@ export async function POST(request: NextRequest) {
 
       const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
       const safePubFolder = safePublisher !== "Unknown" ? safePublisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
-      const safeImprint = sanitizeNamingPart(typeof body.imprint === 'string' ? body.imprint : existingSeries?.imprint || '');
+      const safeImprint = sanitizeNamingPart(existingSeries?.imprint || '');
 
       const settings = await prisma.systemSetting.findMany();
       const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -283,8 +283,7 @@ export async function POST(request: NextRequest) {
               name, 
               cvId: metadataSource === 'COMICVINE' ? parseInt(resolvedCvId.toString()) : null, 
               matchState: 'MATCHED',
-              year: parseInt(year),
-              ...(typeof body.imprint === 'string' ? { imprint: body.imprint.trim() || null } : {})
+              year: parseInt(year)
           },
           create: { 
               cvId: metadataSource === 'COMICVINE' ? parseInt(resolvedCvId.toString()) : null, 
@@ -299,8 +298,7 @@ export async function POST(request: NextRequest) {
               isManga: isManga,
               libraryId: targetLib?.id,
               coverUrl: image,
-              description,
-              ...(typeof body.imprint === 'string' ? { imprint: body.imprint.trim() || null } : {})
+              description
           }
       });
 

@@ -306,4 +306,56 @@ describe('System Health & Diagnostics', () => {
             expect(result.status).toBe('HEALTHY');
         });
     });
+
+    // Metron beta 3 (#216 follow-up): Metron is retiring username/password sign-in for its API in
+    // favour of API tokens, so an install still on a password is told how to switch before it breaks.
+    describe('Metron sign-in', () => {
+        const base = () => [
+            { key: 'cv_api_key', value: 'valid_key' },
+            { key: 'download_path', value: '/downloads' },
+            { key: 'last_backup_sync', value: Date.now().toString() },
+            { key: 'cloudflare_block_time', value: '0' },
+            { key: 'cv_rate_limit_time', value: '0' },
+            { key: 'metron_rate_limit_time', value: '0' },
+        ];
+
+        it('nudges an install signed in with a username and password toward an API token', async () => {
+            mocks.findManySettings.mockResolvedValueOnce([...base(), { key: 'metron_user', value: 'adam' }, { key: 'metron_pass', value: 'pw' }]);
+
+            const result = await runSystemHealthCheck();
+            const auth = result.checks.find(c => c.id === 'metron_auth');
+
+            expect(auth?.status).toBe('warning');
+            expect(auth?.message).toMatch(/API token/);
+            expect(auth?.message).toMatch(/Profile → API Tokens/);
+            expect(auth?.actionLink).toBe('/admin/settings');
+        });
+
+        it('is satisfied by an API token, with or without the old username and password', async () => {
+            mocks.findManySettings.mockResolvedValueOnce([...base(), { key: 'metron_api_token', value: 'tok' }, { key: 'metron_user', value: 'adam' }, { key: 'metron_pass', value: 'pw' }]);
+
+            const result = await runSystemHealthCheck();
+            const auth = result.checks.find(c => c.id === 'metron_auth');
+
+            expect(auth?.status).toBe('ok');
+            expect(auth?.message).toMatch(/API token/);
+        });
+
+        it('hands the modal the Metron state behind the limits line (it counts down from it live)', async () => {
+            mocks.findManySettings.mockResolvedValueOnce([...base(), { key: 'metron_api_usage', value: JSON.stringify({ '/issue': [Date.now() - 1_000] }) }]);
+
+            const result = await runSystemHealthCheck();
+            const limits = result.checks.find(c => c.id === 'metron_limit') as any;
+
+            expect(limits?.metron).toMatchObject({ status: { burst: {}, sustained: {} }, localCalls24h: 1, rateLimitFlagMs: 0 });
+        });
+
+        it('says nothing when Metron isn\'t set up (it is optional)', async () => {
+            mocks.findManySettings.mockResolvedValueOnce(base());
+
+            const result = await runSystemHealthCheck();
+
+            expect(result.checks.find(c => c.id === 'metron_auth')).toBeUndefined();
+        });
+    });
 });

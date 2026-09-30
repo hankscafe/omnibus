@@ -33,6 +33,7 @@ describe('lib: settings per-tab dirty tracking', () => {
 
     it('maps config keys to their owning tab', () => {
         expect(computeDirtyTabs(withConfig({ cv_api_key: 'new' }), withConfig({ cv_api_key: 'old' }))).toEqual(['metadata']);
+        expect(computeDirtyTabs(withConfig({ metron_api_token: 'tok' }), withConfig({}))).toEqual(['metadata']);
         expect(computeDirtyTabs(withConfig({ manga_publishers: 'viz' }), withConfig({}))).toEqual(['discovery']);
         expect(computeDirtyTabs(withConfig({ engine_cpu_cap: '4' }), withConfig({}))).toEqual(['system']);
         expect(computeDirtyTabs(withConfig({ flaresolverr_url: 'http://x' }), withConfig({}))).toEqual(['downloads']);

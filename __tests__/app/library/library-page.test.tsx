@@ -7,8 +7,15 @@
 // after-append re-check (sentinel top < viewport+800) fires naturally after every append and
 // pagination advances without simulating IntersectionObserver crossings (the observer itself is
 // stubbed inert; only the re-check path drives).
+//
+// Both tests render inside an awaited act() instead of polling with findBy*. Every hop in the
+// chain (stubbed fetch → setSeries → re-check effect → page-2 fetch → append) is a microtask or a
+// React flush, and async act() drains both until no React work is left — so both windows have
+// landed when it returns, with no clock involved. The findBy* form flaked under full-suite load:
+// its 1 s budget had to cover whole-page renders of 24 then 26 cards (measured 2026-09-29: page 2
+// requested at ~1.05 s, Series 26 on screen at ~2.9 s — slow, never stuck).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { ok, stubFetchRouter } from '../../helpers/fetch';
 
 const toast = vi.fn();
@@ -45,7 +52,10 @@ const PAGE2 = [makeSeries(24), makeSeries(25), makeSeries(26)];
 
 let listCalls: string[] = [];
 
-describe('LibraryPage grid pagination (scroll-saga client half)', () => {
+// The per-test timeout is the only clock left. A stalled chain can't spend it (act() returns once
+// React work runs out, and the assertions fail in well under a second); it only has to outlast a
+// slow-but-correct drain — up to 2.8 s measured on a loaded full-suite run vs vitest's 5 s default.
+describe('LibraryPage grid pagination (scroll-saga client half)', { timeout: 15_000 }, () => {
     beforeEach(() => {
         listCalls = [];
         toast.mockClear();
@@ -73,26 +83,30 @@ describe('LibraryPage grid pagination (scroll-saga client half)', () => {
     });
 
     it('loads page 1, auto-appends page 2 via the sentinel re-check, and stops at hasMore=false', async () => {
-        render(<LibraryPage />);
+        await act(async () => { render(<LibraryPage />); });
 
-        // Initial window lands…
-        await screen.findByText('Series 01');
-        // …then the after-append re-check advances exactly one page and the hasMore=false stop holds.
-        await screen.findByText('Series 26');
-        await waitFor(() => expect(listCalls).toHaveLength(2));
-
+        // Initial window landed, then the after-append re-check advanced exactly one page (the
+        // observer is inert, so nothing else could have asked for page 2)…
+        expect(listCalls).toHaveLength(2);
         expect(listCalls[0]).toContain('page=1');
         expect(listCalls[1]).toContain('page=2');
-        // A settle pass: series.length changed again after page 2, the re-check ran again — the
-        // hasMore guard must hold the line at two requests (no endReached storm).
+        screen.getByText('Series 01');
+        screen.getByText('Series 26');
+        // …and the hasMore=false stop holds. series.length changed again after page 2, so the
+        // re-check already ran again inside act(); the settle pass also gives any stray async
+        // trigger time to show up — the guard must hold the line at two requests (no endReached storm).
         await new Promise(r => setTimeout(r, 25));
         expect(listCalls).toHaveLength(2);
         expect(toast).not.toHaveBeenCalled();
     });
 
     it('dedupes appended rows by id — an overlapping page window can never render twice', async () => {
-        render(<LibraryPage />);
-        await screen.findByText('Series 26');
+        await act(async () => { render(<LibraryPage />); });
+
+        // Page 2 was requested AND applied — without this the dedupe checks below would be vacuous.
+        expect(listCalls).toHaveLength(2);
+        expect(listCalls[1]).toContain('page=2');
+        screen.getByText('Series 26');
 
         // Series 24 arrived in BOTH windows (the pg tie-order overlap shape); one card, not two.
         expect(screen.getAllByText('Series 24')).toHaveLength(1);

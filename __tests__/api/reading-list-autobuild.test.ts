@@ -11,8 +11,14 @@ const mocks = vi.hoisted(() => ({
     findFirstIssue: vi.fn(),
     createList: vi.fn(),
     createListItems: vi.fn(),
-    log: vi.fn()
+    log: vi.fn(),
+    getMetronAuth: vi.fn(),
+    metronGet: vi.fn()
 }));
+
+// Metron traffic goes through the shared client (its pacing / auth / retries have their own tests in
+// __tests__/lib/metron-client.test.ts); here it is the boundary.
+vi.mock('@/lib/metron/client', () => ({ getMetronAuth: mocks.getMetronAuth, metronGet: mocks.metronGet }));
 
 // 2. Mock Dependencies
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
@@ -98,29 +104,17 @@ describe('Data Processing: Reading List Auto-Builder', () => {
     });
 
     it('should successfully paginate and build a list from Metron data', async () => {
-        // Mock Metron credentials
-        mocks.findUniqueSetting.mockResolvedValue({ value: 'user_or_pass' });
-        
+        // Configured Metron credentials
+        mocks.getMetronAuth.mockResolvedValue({ kind: 'token', token: 'tok' });
+
         // 1st Fetch: Arc Details
-        vi.mocked(axios.get).mockResolvedValueOnce({
-            status: 200,
-            headers: {},
-            data: { name: 'Absolute Carnage', desc: 'Symbiote attack.' }
-        } as any);
+        mocks.metronGet.mockResolvedValueOnce({ status: 200, cached: false, data: { name: 'Absolute Carnage', desc: 'Symbiote attack.' } });
 
         // 2nd Fetch: Issue List (Page 1) - Returns 1 issue and a "next" URL
-        vi.mocked(axios.get).mockResolvedValueOnce({
-            status: 200,
-            headers: {},
-            data: { next: 'page_2', results: [{ id: '200', number: '1', series: { name: 'Venom' } }] }
-        } as any);
+        mocks.metronGet.mockResolvedValueOnce({ status: 200, cached: false, data: { next: 'page_2', results: [{ id: '200', number: '1', series: { name: 'Venom' } }] } });
 
         // 3rd Fetch: Issue List (Page 2) - Returns 1 issue and NO "next" URL
-        vi.mocked(axios.get).mockResolvedValueOnce({
-            status: 200,
-            headers: {},
-            data: { next: null, results: [{ id: '201', number: '2', series: { name: 'Venom' } }] }
-        } as any);
+        mocks.metronGet.mockResolvedValueOnce({ status: 200, cached: false, data: { next: null, results: [{ id: '201', number: '2', series: { name: 'Venom' } }] } });
 
         mocks.findFirstIssue.mockResolvedValue(null); // No local matches
 
@@ -129,7 +123,15 @@ describe('Data Processing: Reading List Auto-Builder', () => {
 
         expect(res.status).toBe(200);
         expect(data.success).toBe(true);
-        
+
+        // Every page went through the shared client, paced as interactive work (someone is waiting).
+        expect(mocks.metronGet.mock.calls.map(c => c[0])).toEqual([
+            'https://metron.cloud/api/arc/31/',
+            'https://metron.cloud/api/arc/31/issue_list/',
+            'page_2',
+        ]);
+        expect(mocks.metronGet.mock.calls.every(c => c[1].pace === 'interactive')).toBe(true);
+
         // Verify it traversed both pages and added 2 issues
         expect(mocks.createListItems).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.arrayContaining([

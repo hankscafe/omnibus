@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { isPathWithinRoots } from '@/lib/utils/paths';
+import { rememberKoreaderDocumentForPath } from '@/lib/koreader-documents';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 
@@ -47,6 +48,10 @@ export async function GET(request: Request) {
 
     const stat = fs.statSync(filePath);
     const fileName = path.basename(filePath);
+
+    // A book downloaded here and copied to a KOReader device syncs to its issue too: record KOReader's
+    // document IDs for these bytes when the path is an issue's file (#211). Never fails the download.
+    await rememberKoreaderDocumentForPath(filePath);
 
     const stream = fs.createReadStream(filePath);
     const readableStream = new ReadableStream({

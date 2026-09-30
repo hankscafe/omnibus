@@ -6,6 +6,7 @@ import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-access';
+import { rememberKoreaderDocument } from '@/lib/koreader-documents';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,6 +44,10 @@ export async function GET(req: Request) {
 
         const stat = fs.statSync(issue.filePath);
         const fileName = path.basename(issue.filePath);
+
+        // KOReader's document IDs for these exact bytes, so the device's progress syncs find this issue
+        // without "Send document metadata" / "Use server filenames" (#211). Twelve 1 KB reads; never fails the download.
+        await rememberKoreaderDocument(issue.id, issue.filePath);
 
         // 3. Stream the file directly to the client app
         const stream = fs.createReadStream(issue.filePath);

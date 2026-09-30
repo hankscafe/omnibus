@@ -4,7 +4,8 @@
 //   v1 (legacy):  `enc:v1:<iv_hex>:<ciphertext_hex>`             — unauthenticated AES-256-CBC, 16-byte IV
 // The key is SHA-256(secret) where the secret is the `DATABASE_ENCRYPTION_KEY` SystemSetting row (else
 // the NEXTAUTH_SECRET env var), exactly mirroring Node's getEncryptionKey(). Node writes v2 now, so the
-// engine MUST read v2 or it loses the cv_api_key / prowlarr_key / metron_pass that Node stores at rest.
+// engine MUST read v2 or it loses the cv_api_key / prowlarr_key / metron_api_token / metron_pass that
+// Node stores at rest.
 use aes::Aes256;
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use base64::Engine as _;
@@ -98,13 +99,6 @@ fn warn_if_undecryptable(decoded: Option<String>) -> Option<String> {
         );
     }
     decoded
-}
-
-/// Convenience wrapper for values pulled from a settings map (returns "" when absent/undecryptable).
-pub async fn decrypt_str(db: &sqlx::AnyPool, value: &str) -> String {
-    decrypt_setting(db, Some(value.to_string()))
-        .await
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

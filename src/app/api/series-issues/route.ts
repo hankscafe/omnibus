@@ -11,6 +11,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { logApiUsage } from '@/lib/utils/system-flags';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
+import { lazyMetronAuth } from '@/lib/metron/client';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
@@ -80,8 +81,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing API Key' }, { status: 500 });
   }
 
-  const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-  const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+  const metronAuth = lazyMetronAuth();
 
   try {
     const allResults: MappedIssueResult[] = []; 
@@ -122,7 +122,7 @@ export async function GET(request: Request) {
         let rawImage = item.image?.medium_url || item.image?.small_url || item.image?.super_url || null;
 
         if (!isReleased && (!rawImage || rawImage.includes('placeholder') || rawImage.includes('default'))) {
-            const fallback = await getMetronCover(item.volume.name, item.issue_number, metronUserSetting?.value, metronPassSetting?.value);
+            const fallback = await getMetronCover(item.volume.name, item.issue_number, await metronAuth());
             if (fallback) rawImage = fallback;
         }
 

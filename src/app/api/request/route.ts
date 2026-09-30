@@ -16,6 +16,7 @@ import { syncSeriesMetadata } from '@/lib/metadata-fetcher';
 import { AuditLogger } from '@/lib/audit-logger';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
+import { lazyMetronAuth } from '@/lib/metron/client';
 import { normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { ownedCoverageBySeries } from '@/lib/coverage-ownership';
 import { omnibusQueue } from '@/lib/queue';
@@ -42,8 +43,7 @@ export async function GET(request: NextRequest) {
         where: { metadataId: { in: volumeIds } } 
     });
 
-    const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-    const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+    const metronAuth = lazyMetronAuth();
 
     const formattedRequests = await Promise.all(requests.map(async req => {
       const series = seriesList.find(s => 
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
       if (req.status === 'UNRELEASED' && (!finalImageUrl || finalImageUrl.includes('placeholder') || finalImageUrl.includes('default'))) {
           const seriesNameStr = series?.name || req.activeDownloadName?.replace(/#.*/, '').trim();
           if (regexMatch && seriesNameStr) {
-              const fallback = await getMetronCover(seriesNameStr, regexMatch[1], metronUserSetting?.value, metronPassSetting?.value);
+              const fallback = await getMetronCover(seriesNameStr, regexMatch[1], await metronAuth());
               if (fallback) {
                   finalImageUrl = fallback;
                   prisma.request.update({ where: { id: req.id }, data: { imageUrl: fallback } }).catch(()=>{});
@@ -114,8 +114,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your session is invalid. Please log out and log back in.' }, { status: 401 });
   }
 
-  const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-  const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+  const metronAuth = lazyMetronAuth();
 
   try {
     const body = await request.json();
@@ -425,7 +424,7 @@ export async function POST(request: NextRequest) {
             let issueImage = issue.image?.medium_url || issue.image?.small_url || image;
             
             if (!isReleased && (!issueImage || issueImage.includes('placeholder') || issueImage.includes('default'))) {
-                const fallback = await getMetronCover(name, issue.issue_number, metronUserSetting?.value, metronPassSetting?.value);
+                const fallback = await getMetronCover(name, issue.issue_number, await metronAuth());
                 if (fallback) issueImage = fallback;
             }
 
@@ -465,7 +464,7 @@ export async function POST(request: NextRequest) {
         ? `${name} #${body.issueNumber}` : name;
 
       if (body.issueNumber && (!image || image.includes('placeholder') || image.includes('default'))) {
-         const fallback = await getMetronCover(name, body.issueNumber, metronUserSetting?.value, metronPassSetting?.value);
+         const fallback = await getMetronCover(name, body.issueNumber, await metronAuth());
          if (fallback) image = fallback;
       }
 

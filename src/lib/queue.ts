@@ -12,6 +12,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 import { processPageSweepChunk } from '@/lib/pages/page-sweep';
+import { SCHEDULE_SEED_KEY, newScheduleSeed, scheduleOffsetMs } from '@/lib/schedule-jitter';
 
 function isNewerVersion(latest: string, current: string): boolean {
     const cleanLatest = latest.replace(/^v/, '');
@@ -88,6 +89,13 @@ export const omnibusQueue = globalForMQ.omnibusQueue || new Queue('omnibus-backg
 
 if (process.env.NODE_ENV !== 'production') globalForMQ.omnibusQueue = omnibusQueue;
 
+// Scheduled jobs that call an outside service (Metron, ComicVine, GitHub). A failed run is not retried
+// by the queue - the next scheduled run is its retry - so a provider having a bad minute doesn't get
+// the same run twice more within seconds (#216). A manual "Run Now" keeps the queue's default retries.
+const NO_RETRY_SCHEDULED_JOBS = new Set([
+    'METADATA_SYNC', 'SERIES_MONITOR', 'DISCOVER_SYNC', 'FOR_YOU_SYNC', 'UNMATCHED_SWEEP', 'UPDATE_CHECK'
+]);
+
 export async function syncSchedules() {
     const settings = await prisma.systemSetting.findMany({
         where: {
@@ -105,27 +113,44 @@ export async function syncSchedules() {
     
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
+    // #216: a legacy `repeat: { every }` lands on multiples of the interval since the Unix epoch, so every
+    // install fired its daily jobs at 00:00 UTC together - a nightly burst against Metron. Schedules now
+    // go through job schedulers with a stable per-install offset (see schedule-jitter.ts). The seed is
+    // created once and never overwritten, so a restart or a settings save keeps every job in its slot.
+    const seedRow = await prisma.systemSetting.upsert({
+        where: { key: SCHEDULE_SEED_KEY },
+        update: {},
+        create: { key: SCHEDULE_SEED_KEY, value: newScheduleSeed() }
+    });
+    const seed = seedRow.value;
+
+    // Clear the legacy repeatables older versions left in Redis. Job schedulers share the same Redis
+    // set, so skip our own (`repeat_<job>`); legacy keys are md5 hashes or `NAME:id:...` strings.
     const repeatableJobs = await omnibusQueue.getRepeatableJobs();
     for (const job of repeatableJobs) {
+        if (job.key.startsWith('repeat_')) continue;
         await omnibusQueue.removeRepeatableByKey(job.key);
     }
 
+    const scheduled = new Set<string>();
     const addJob = async (jobType: string, hoursStr: string | undefined, cronPattern?: string) => {
+        const schedulerId = `repeat_${jobType.toLowerCase()}`;
+        const template = NO_RETRY_SCHEDULED_JOBS.has(jobType)
+            ? { name: jobType, data: { type: jobType }, opts: { attempts: 1 } }
+            : { name: jobType, data: { type: jobType } };
+
         // --- ADDED: If a cron string is passed, use that instead of intervals ---
         if (cronPattern) {
-            await omnibusQueue.add(jobType, { type: jobType }, {
-                repeat: { pattern: cronPattern },
-                jobId: `repeat_${jobType.toLowerCase()}`
-            });
+            await omnibusQueue.upsertJobScheduler(schedulerId, { pattern: cronPattern }, template);
+            scheduled.add(schedulerId);
             return;
         }
 
         const hours = parseFloat(hoursStr || '0');
         if (hours > 0) {
-            await omnibusQueue.add(jobType, { type: jobType }, {
-                repeat: { every: Math.round(hours * 60 * 60 * 1000) }, 
-                jobId: `repeat_${jobType.toLowerCase()}`
-            });
+            const every = Math.round(hours * 60 * 60 * 1000);
+            await omnibusQueue.upsertJobScheduler(schedulerId, { every, offset: scheduleOffsetMs(seed, jobType, every) }, template);
+            scheduled.add(schedulerId);
         }
     };
 
@@ -173,7 +198,14 @@ export async function syncSchedules() {
     await addJob('SYSTEM_HEALTH_CHECK', config.health_check_schedule || '0.25'); 
 
     // Leave the GitHub update checker at 24 hours
-    await omnibusQueue.add('UPDATE_CHECK', { type: 'UPDATE_CHECK' }, { repeat: { every: 24 * 60 * 60 * 1000 }, jobId: 'repeat_update_check' });
+    await addJob('UPDATE_CHECK', '24');
+
+    // A job the admin turned off (0 hours) must stop: drop any scheduler of ours not scheduled above.
+    for (const scheduler of await omnibusQueue.getJobSchedulers()) {
+        if (scheduler.key.startsWith('repeat_') && !scheduled.has(scheduler.key)) {
+            await omnibusQueue.removeJobScheduler(scheduler.key);
+        }
+    }
 
     Logger.log("[BullMQ] Native schedules synchronized with database settings.", "info");
 }
@@ -734,7 +766,9 @@ export function initWorker() {
                             method: 'POST',
                             headers: engineHeaders({ 'Content-Type': 'application/json' }),
                             body: JSON.stringify({
-                                series_ids: isTargeted ? job.data.seriesIds : null
+                                series_ids: isTargeted ? job.data.seriesIds : null,
+                                // A yes to a series' Refresh Metadata per-issue credits ask (Metron beta 4).
+                                ...(isTargeted && job.data.fetchCredits === true ? { fetch_credits: true } : {})
                             })
                         });
 
@@ -850,7 +884,7 @@ export function initWorker() {
 
                     const admin = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
 
-                    // The heavy half (Metron 3000 + ComicVine 25x30 fetch/match/skeleton-upsert) is owned by
+                    // The heavy half (Metron upcoming window + ComicVine 25x30 fetch/match/skeleton-upsert) is owned by
                     // the Rust engine (/api/monitor/sync -> monitor::run_series_monitor). It returns the
                     // skeleton count + the monitored, matched, not-in-library issues as candidates; request
                     // creation + searchAndDownload (BullMQ) stay here. The call is synchronous and can take

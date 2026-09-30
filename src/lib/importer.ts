@@ -518,7 +518,7 @@ export const Importer = {
         try {
             Logger.log(`[Importer] Fetching missing metadata for Metron Series ID: ${req.volumeId}`, 'info');
             const { MetronProvider } = await import('./metadata/providers/metron');
-            const metron = new MetronProvider();
+            const metron = new MetronProvider({ pace: 'background' });
             const details = await metron.getSeriesDetails(req.volumeId);
             if (details) {
                 series = await prisma.series.create({

@@ -8,38 +8,13 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { collectMissingArcSeries, MissingArcSeries } from '@/lib/utils/arc-missing-series';
+import { getMetronAuth, metronGet, MetronAuth } from '@/lib/metron/client';
 
-// Helper function to respect Metron's 20 req/min burst limit
-async function fetchWithBackoff(url: string, auth: any, maxRetries = 3) {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-            const res = await axios.get(url, {
-                auth,
-                headers: { 'User-Agent': 'Omnibus/1.0' },
-                timeout: 10000,
-                validateStatus: (status) => status < 500 // Don't throw on 429 so we can read headers
-            });
-
-            if (res.status === 429) {
-                // DRF sets Retry-After to the number of seconds to wait
-                const retryAfter = parseInt(res.headers['retry-after'] || '60', 10);
-                Logger.log(`[Auto-Build] Metron rate limit hit! Waiting ${retryAfter} seconds before resuming...`, 'warn');
-                await new Promise(resolve => setTimeout(resolve, (retryAfter + 1) * 1000));
-                continue; // Try again
-            }
-
-            if (res.status >= 400) {
-                throw new Error(`HTTP ${res.status}`);
-            }
-
-            return res;
-        } catch (error) {
-            if (attempt === maxRetries - 1) throw error;
-            Logger.log(`[Auto-Build] Metron fetch failed. Retrying attempt ${attempt + 2}/${maxRetries}...`, 'warn');
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Standard fallback delay
-        }
-    }
-    throw new Error('Max retries reached');
+// Metron requests go through the shared client (src/lib/metron/client.ts): pacing from Metron's
+// rate-limit headers, 429s honoured (a long one stops), only 429/5xx retried. Someone is waiting on
+// the build, so it is paced as interactive work.
+function metronFetch(url: string, auth: MetronAuth) {
+    return metronGet(url, { auth, pace: 'interactive', timeoutMs: 10000 });
 }
 
 export async function POST(request: Request) {
@@ -65,18 +40,14 @@ export async function POST(request: Request) {
         let cvApiKey: string | null = null;
 
         if (eventSource === 'METRON') {
-            const metronUser = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-            const metronPass = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
-
-            if (!metronUser?.value || !metronPass?.value) {
+            const auth = await getMetronAuth();
+            if (!auth) {
                 return NextResponse.json({ error: "Metron credentials missing in Settings." }, { status: 400 });
             }
 
-            const auth = { username: metronUser.value, password: metronPass.value };
-
             // 1. Get the Arc Details
             Logger.log(`[Auto-Build] Fetching Metron Arc details...`, 'info');
-            const eventRes = await fetchWithBackoff(`https://metron.cloud/api/arc/${eventId}/`, auth);
+            const eventRes = await metronFetch(`https://metron.cloud/api/arc/${eventId}/`, auth);
             const eventData = eventRes.data;
             
             if (!eventData || !eventData.name) {
@@ -97,7 +68,7 @@ export async function POST(request: Request) {
                 // Safety limit of 30 pages (approx. 3000 issues) to prevent infinite loops
                 while (nextUrl && pageCount < 30) { 
                     Logger.log(`[Auto-Build] Fetching Metron page ${pageCount + 1}...`, 'info');
-                    const issuesRes = await fetchWithBackoff(nextUrl, auth);
+                    const issuesRes = await metronFetch(nextUrl, auth);
                     
                     if (issuesRes.data?.results) {
                         const count = issuesRes.data.results.length;

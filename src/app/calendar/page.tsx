@@ -13,6 +13,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { FollowBell } from "@/components/follow-bell"
+import { hasMetronCredentials } from "@/lib/metron/credentials"
 
 interface UpcomingIssue {
     id: string | number;
@@ -96,9 +97,7 @@ export default function CalendarPage() {
                 .then(res => res.ok ? res.json() : null)
                 .then(data => {
                     if (data?.settings) {
-                        const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
-                        const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
-                        setMetronConfigured(!!(mUser && mPass));
+                        setMetronConfigured(hasMetronCredentials(data.settings));
                     } else {
                         setMetronConfigured(true);
                     }

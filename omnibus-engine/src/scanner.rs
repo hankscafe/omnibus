@@ -1056,22 +1056,15 @@ async fn resolve_dynamic_ids(db: &Db, client: &reqwest::Client, d: &mut DerivedM
         }
         if let Some(auth) = crate::metadata::metron_auth(&db.pool).await {
             let url = format!("{}/api/series/?name={}", metron_base_url(), urlencoding::encode(series_name));
-            let resp = client
-                .get(&url)
-                .basic_auth(&auth.0, Some(&auth.1))
-                .header("User-Agent", "Omnibus/1.0")
-                .timeout(std::time::Duration::from_secs(15))
-                .send()
-                .await;
-            match resp {
-                Ok(r) if r.status().is_success() => {
-                    if let Ok(body) = r.json::<serde_json::Value>().await {
-                        let results = body.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                        if let Some(id) = pick_metron_series(&results, series_name, d.parsed_year) {
-                            log::info!("[Scanner] Resolved Metron Series ID {} from Series Name search (Year Checked: {}).", id, d.parsed_year.map(|y| y.to_string()).unwrap_or_else(|| "None".to_string()));
-                            d.metron_id = Some(id);
-                            resolution_cache_set(metron_key, id).await;
-                        }
+            // Through the shared Metron client: paced from Metron's rate-limit headers, 429s honoured,
+            // counted in the usage panel, cached.
+            match crate::metron_client::metron_get(db, client, &auth, crate::metron_client::MetronRequest::new(&url)).await {
+                Ok((200, body)) => {
+                    let results = body.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    if let Some(id) = pick_metron_series(&results, series_name, d.parsed_year) {
+                        log::info!("[Scanner] Resolved Metron Series ID {} from Series Name search (Year Checked: {}).", id, d.parsed_year.map(|y| y.to_string()).unwrap_or_else(|| "None".to_string()));
+                        d.metron_id = Some(id);
+                        resolution_cache_set(metron_key, id).await;
                     }
                 }
                 _ => log::warn!("[Scanner] Failed to dynamically resolve Metron Series ID for: {}", series_name),
@@ -3866,7 +3859,7 @@ mod tests {
         // ComicInfo.xml injection into the fixture cbz via metadata_writer), and the
         // updatedAt/lastMetadataSync bump through the per-dialect now/now-UTC expressions.
         let series_id_owned: String = row.get("id");
-        crate::metadata::sync_metadata(db.clone(), Some(vec![series_id_owned.clone()]))
+        crate::metadata::sync_metadata(db.clone(), Some(vec![series_id_owned.clone()]), false)
             .await
             .expect("sync_metadata through the Any pool");
 

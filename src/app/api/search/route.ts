@@ -8,7 +8,6 @@ import { ComicVineVolume, FormattedSearchResult } from '@/types';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
-import { logApiUsage } from '@/lib/utils/system-flags';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
@@ -20,6 +19,9 @@ export async function GET(request: Request) {
   
   const page = parseInt(searchParams.get('page') || '1', 10);
   const limit = 40;
+  // covers=none: an automated caller (Smart Match's Auto-Scan) that doesn't show every result's cover.
+  // A Metron cover costs one request per result, so only a search someone is looking at asks for them.
+  const wantCovers = searchParams.get('covers') !== 'none';
 
   if (!rawQuery) {
     return NextResponse.json({ error: 'Query parameter "q" is required' }, { status: 400 });
@@ -43,7 +45,7 @@ export async function GET(request: Request) {
     }
 
     // --- NEW: Robust Database Caching ---
-    const cacheKey = `search_v3_${provider}_${rawQuery.toLowerCase().replace(/[^a-z0-9]/g, '_')}_p${page}`;
+    const cacheKey = `search_v3_${provider}_${rawQuery.toLowerCase().replace(/[^a-z0-9]/g, '_')}_p${page}${wantCovers ? '' : '_nocovers'}`;
     const cachedData = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
     
     if (cachedData?.value) {
@@ -62,12 +64,15 @@ export async function GET(request: Request) {
 
     let finalResults: any[] = [];
     let hasMore = false;
+    // A page whose covers were skipped (Metron busy) isn't cached, so the next look fills them in.
+    let cacheable = true;
 
     if (provider === 'METRON') {
         const metron = new MetronProvider();
-        const mdResults = await metron.searchSeries(query, page);
-        await logApiUsage('metron', '/search');
-        
+        // The shared Metron client counts every request it actually sends (cache hits aren't calls).
+        const mdResults = await metron.searchSeries(query, page, { covers: wantCovers });
+        cacheable = !mdResults.some(r => r.coverPending);
+
         let results = mdResults.map((r: any) => ({
             id: r.sourceId,
             name: r.name,
@@ -152,11 +157,13 @@ export async function GET(request: Request) {
     }
 
     // --- UPSERT CACHE ---
-    await prisma.systemSetting.upsert({
-        where: { key: cacheKey },
-        update: { value: JSON.stringify({ timestamp: Date.now(), results: finalResults, hasMore }) },
-        create: { key: cacheKey, value: JSON.stringify({ timestamp: Date.now(), results: finalResults, hasMore }) }
-    });
+    if (cacheable) {
+        await prisma.systemSetting.upsert({
+            where: { key: cacheKey },
+            update: { value: JSON.stringify({ timestamp: Date.now(), results: finalResults, hasMore }) },
+            create: { key: cacheKey, value: JSON.stringify({ timestamp: Date.now(), results: finalResults, hasMore }) }
+        });
+    }
 
     return NextResponse.json({ results: finalResults, hasMore });
 

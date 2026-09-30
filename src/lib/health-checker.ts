@@ -8,6 +8,9 @@ import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { findDuplicateGroups } from '@/lib/duplicate-detector';
 import { SystemNotifier } from '@/lib/notifications';
 import packageJson from '../../package.json';
+import { readRateStatus } from '@/lib/metron/client';
+import { describeMetronHealth, metronCalls24h, type MetronSnapshot } from '@/lib/metron/health';
+import { metronCredentialKind } from '@/lib/metron/credentials';
 
 export interface HealthCheckResult {
     id: string;
@@ -19,6 +22,9 @@ export interface HealthCheckResult {
     // Actionable request rows (id + label) for checks that support per-item snooze/dismiss in the UI
     // (stalled imports, awaiting-availability). Absent on purely informational checks.
     items?: { id: string; name: string }[];
+    // The Metron limits line only: the state behind it, so the Health modal can show the tier and
+    // count down to the reset live.
+    metron?: MetronSnapshot;
 }
 
 export async function runSystemHealthCheck() {
@@ -241,28 +247,28 @@ export async function runSystemHealthCheck() {
         results.push({ id: 'cv_limit', name: 'ComicVine API', status: 'ok', message: `Status: Normal. Past hour: ${cvCalls} total calls ${cvDetails}` });
     }
 
-    // Parse Metron Rolling Usage
-    let metronCalls = 0;
-    if (config.metron_api_usage) {
-        try {
-            const usage = JSON.parse(config.metron_api_usage);
-            const now = Date.now();
-            for (const ep in usage) {
-                const validTs = usage[ep].filter((ts: number) => now - ts < 86400000); // Past 24 hours
-                if (validTs.length > 0) {
-                    metronCalls += validTs.length;
-                }
-            }
-        } catch (e) {}
-    }
+    // What Metron itself reported (X-RateLimit-Sustained-* - the daily limit depends on the supporter
+    // tier - and the per-minute burst limit), shared by the Node app and the engine; our own 24h count
+    // only when no window has been reported. The modal counts down live from the snapshot.
+    const metronSnapshot: MetronSnapshot = {
+        status: await readRateStatus(),
+        localCalls24h: metronCalls24h(config.metron_api_usage, Date.now()),
+        rateLimitFlagMs: parseInt(config.metron_rate_limit_time || '0') || 0,
+    };
+    const metronHealth = describeMetronHealth(metronSnapshot.status, metronSnapshot.localCalls24h, metronSnapshot.rateLimitFlagMs, Date.now());
+    results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: metronHealth.status, message: metronHealth.message, metron: metronSnapshot });
 
-    const metronLimitTime = parseInt(config.metron_rate_limit_time || '0');
-    if (metronLimitTime > Date.now() - (60 * 60 * 1000)) {
-        results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: 'error', message: `Rate limit reached. Syncing paused. Past 24 hours: ${metronCalls} / 5000 calls.` });
-    } else if (metronCalls > 4000) {
-        results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: 'warning', message: `Approaching daily limit. Past 24 hours: ${metronCalls} / 5000 calls.` });
-    } else {
-        results.push({ id: 'metron_limit', name: 'Metron.Cloud API', status: 'ok', message: `Status: Normal. Past 24 hours: ${metronCalls} / 5000 calls.` });
+    // Metron is retiring username/password sign-in for its API in favour of API tokens, so an install
+    // still on a password is told how to switch before it stops working. Nothing when Metron isn't set
+    // up - it's optional.
+    const metronSignIn = metronCredentialKind(config);
+    if (metronSignIn === 'password') {
+        results.push({
+            id: 'metron_auth', name: 'Metron.Cloud Sign-in', status: 'warning', actionLink: '/admin/settings',
+            message: 'Signed in with a username and password, which Metron is retiring for its API. Create an API token on metron.cloud (Profile → API Tokens) and add it in Settings → Metadata.',
+        });
+    } else if (metronSignIn === 'token') {
+        results.push({ id: 'metron_auth', name: 'Metron.Cloud Sign-in', status: 'ok', message: 'Signed in with an API token' });
     }
 
     const hosterLimitTime = parseInt(config.hoster_rate_limit_time || '0');

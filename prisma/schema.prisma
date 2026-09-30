@@ -307,6 +307,7 @@ model Issue {
   readingListItems ReadingListItem[]
   bookmarks       Bookmark[]
   dailyIssueReads DailyIssueRead[]
+  koreaderDocuments KoreaderDocument[]
 
   @@index([seriesId])
   @@index([metadataId])
@@ -660,6 +661,22 @@ model KoreaderSync {
 
   @@unique([userId, document])
   @@index([userId])
+}
+
+// The document IDs KOReader sends for a file Omnibus served (an OPDS or web download): its "Binary"
+// checksum (a partial MD5 of the bytes - its default) and its "Filename" MD5. A progress sync finds its
+// issue by that ID, so it needs neither "Send document metadata" nor "Use server filenames" (#211).
+// Recorded when the file is served, so the device's copy still binds after the library file is rewritten.
+// Derived data - rebuilt by the next download, so it isn't part of backups.
+model KoreaderDocument {
+  id        String   @id @default(cuid())
+  digest    String
+  method    String   // 'binary' | 'filename'
+  issueId   String
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([digest, issueId])
 }
 
 model JobLock {

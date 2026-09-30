@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import axios from 'axios';
 import { getErrorMessage } from '@/lib/utils/error';
+import { getMetronAuth, metronGet } from '@/lib/metron/client';
 import { Logger } from '@/lib/logger';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
@@ -14,18 +14,12 @@ export async function GET(request: Request) {
 
     try {
         if (provider === 'METRON') {
-            const metronUserSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-            const metronPassSetting = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
+            // Through the shared Metron client (token or Basic auth, pacing, 429 handling). Without
+            // credentials there is nothing to ask - no unauthenticated requests.
+            const auth = await getMetronAuth();
+            if (!auth) return NextResponse.json({ volumeId: 0, year: null });
 
-            const auth = (metronUserSetting?.value && metronPassSetting?.value) 
-                ? { username: metronUserSetting.value, password: metronPassSetting.value }
-                : undefined;
-
-            const res = await axios.get(`https://metron.cloud/api/issue/${issueId}/`, {
-                auth,
-                headers: { 'User-Agent': 'Omnibus/1.0' },
-                timeout: 5000
-            });
+            const res = await metronGet(`https://metron.cloud/api/issue/${issueId}/`, { auth, pace: 'interactive', timeoutMs: 5000 });
 
             const volId = res.data?.series?.id ? parseInt(res.data.series.id) : 0;
             const year = res.data?.cover_date ? res.data.cover_date.split('-')[0] : null;

@@ -36,6 +36,11 @@ describe('db: SystemSetting decrypt-on-read extension', () => {
         expect(mocks.decryptSecret).not.toHaveBeenCalled();
     });
 
+    it('decrypts the Metron API token (Metron beta 3)', async () => {
+        const out = await decryptSettingRow({ key: 'metron_api_token', value: 'enc:v2:iv:tag:ct' });
+        expect(out.value).toBe('PLAIN(enc:v2:iv:tag:ct)');
+    });
+
     it('does not decrypt non-secret keys, even if they look encrypted', async () => {
         const row = { key: 'metron_user', value: 'enc:v2:not-a-secret' };
         expect(await decryptSettingRow(row)).toEqual(row);

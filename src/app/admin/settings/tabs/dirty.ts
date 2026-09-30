@@ -19,7 +19,7 @@ export const SETTINGS_TABS = [
 
 const TAB_CONFIG_KEYS: Record<string, string[]> = {
     metadata: [
-        'primary_metadata_source', 'cv_api_key', 'metron_user', 'metron_pass', 'series_ended_months',
+        'primary_metadata_source', 'cv_api_key', 'metron_api_token', 'metron_user', 'metron_pass', 'series_ended_months',
         'matcher_mode', 'matcher_auto_threshold', 'file_metadata_priority', 'metron_detail_credits',
         'metadata_cache_enabled', 'metadata_cache_detail_days', 'metadata_cache_list_hours', 'metadata_cache_max_mb',
         'export_series_json', 'metadata_write_comicinfo', 'cover_source',

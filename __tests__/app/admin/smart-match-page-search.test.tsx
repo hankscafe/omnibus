@@ -202,3 +202,46 @@ describe('Smart Matcher — Search Match dialog', () => {
         await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'No results' })));
     });
 });
+
+// Metron beta 4 (#216 follow-up): the Auto-Scan searches once per unmatched series and shows one
+// suggestion, but each search paid for up to ten Metron cover requests. It now searches without
+// covers and asks for the cover of the one suggestion it shows.
+describe('Smart Matcher — Auto-Scan covers', () => {
+    let scanSearches: string[] = [];
+    let coverCalls: string[] = [];
+    const PROXIED = `/api/library/cover?path=${encodeURIComponent('https://static.metron.cloud/16180.jpg')}`;
+
+    beforeEach(() => {
+        scanSearches = [];
+        coverCalls = [];
+        toast.mockClear();
+        localStorage.clear();
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([RAW_ITEM])],
+            ['/api/admin/config', () => ok({
+                settings: [
+                    { key: 'metron_user', value: 'u' }, { key: 'metron_pass', value: 'p' },
+                    { key: 'primary_metadata_source', value: 'METRON' },
+                ],
+            })],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/search/cover', (u) => { coverCalls.push(u); return ok({ image: PROXIED }); }],
+            ['/api/search', (u) => { scanSearches.push(u); return ok({ results: [SEARCH_RESULT, { ...SEARCH_RESULT, id: 77, name: 'Dragonero' }], hasMore: false }); }],
+        ]);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('searches without covers, then fetches only the picked suggestion\'s cover', async () => {
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero 001');
+
+        fireEvent.click(screen.getByRole('button', { name: /Start Auto-Scan/ }));
+
+        await waitFor(() => expect(coverCalls).toHaveLength(1));
+        expect(scanSearches).toHaveLength(1);
+        expect(scanSearches[0]).toContain('covers=none');
+        expect(coverCalls[0]).toContain('provider=METRON');
+        expect(coverCalls[0]).toContain('id=16180');
+        await waitFor(() => expect(screen.getByAltText('Suggestion').getAttribute('src')).toBe(PROXIED));
+    });
+});

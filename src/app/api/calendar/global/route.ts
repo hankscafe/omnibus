@@ -7,6 +7,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { findLocalSeriesMatch } from '@/lib/utils/series-match';
+import { getMetronAuth, metronGet, MetronHttpError, MetronRateLimitError } from '@/lib/metron/client';
 
 export async function GET(request: Request) {
     try {
@@ -44,67 +45,33 @@ export async function GET(request: Request) {
             });
         }
 
-        const settings = await prisma.systemSetting.findMany({
-            where: { key: { in: ['metron_user', 'metron_pass'] } }
-        });
-        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-
-        if (!config.metron_user || !config.metron_pass) {
+        const metronAuth = await getMetronAuth();
+        if (!metronAuth) {
             return NextResponse.json({ error: "Metron credentials missing in Settings. Cannot fetch global pull list." }, { status: 400 });
         }
 
-        // --- THE FIX: Native Fetch with Explicit Basic Auth Headers ---
-        const authHeader = `Basic ${Buffer.from(`${config.metron_user}:${config.metron_pass}`).toString('base64')}`;
-        
         let nextUrl: string | null = `https://metron.cloud/api/issue/?store_date_range_after=${startDateStr}&store_date_range_before=${endDateStr}`;
         const allIssues: any[] = [];
 
-        Logger.log(`[Global Calendar] Fetching Metron Releases: ${nextUrl}`, 'info');
+        Logger.log(`[Global Calendar] Fetching Metron releases for ${startDateStr} to ${endDateStr}`, 'info');
 
-        while (nextUrl && allIssues.length < 1000) {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-            // --- FIX: Explicit Type Assignment ---
-            const response: any = await fetch(nextUrl, {
-                method: 'GET',
-                headers: { 
-                    'User-Agent': 'Omnibus/1.0',
-                    'Authorization': authHeader
-                },
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-
-            if (response.status === 429) {
-                const retryAfter = parseInt(response.headers.get('retry-after') || '60', 10);
-                Logger.log(`[Global Calendar] Metron Rate Limit hit (429)! Pausing for ${retryAfter} seconds...`, 'warn');
-                await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
-                continue;
+        // Through the shared Metron client (pacing from Metron's rate-limit headers, 429s honoured - a
+        // long one ends the fetch). A failure is NOT cached: the next view tries again, instead of the
+        // empty week the old loop cached for the rest of the day.
+        try {
+            while (nextUrl && allIssues.length < 1000) {
+                const res = await metronGet(nextUrl, { auth: metronAuth, pace: 'interactive', cache: false });
+                if (res.status !== 200) throw new MetronHttpError(res.status);
+                const data: any = res.data || {};
+                if (Array.isArray(data.results)) allIssues.push(...data.results);
+                nextUrl = data.next || null;
             }
-
-            // --- FIX: Explicit Type Assignment ---
-            const data: any = await response.json().catch(() => ({}));
-
-            if (data && data.results) {
-                allIssues.push(...data.results);
-            }
-            nextUrl = data.next || null;
-            
-            // Proactive Burst Tracking via Fetch Headers
-            const remaining = parseInt(response.headers.get('x-ratelimit-burst-remaining') || '20', 10);
-            if (remaining <= 2) {
-                const reset = parseInt(response.headers.get('x-ratelimit-burst-reset') || '0', 10);
-                if (reset > 0) {
-                    const sleepMs = Math.max(0, (reset * 1000) - Date.now()) + 500;
-                    if (sleepMs > 0) await new Promise(r => setTimeout(r, sleepMs));
-                } else {
-                    await new Promise(r => setTimeout(r, 2000));
-                }
-            } else if (nextUrl) {
-                await new Promise(r => setTimeout(r, 500));
-            }
+        } catch (fetchError) {
+            Logger.log(`[Global Calendar] Metron fetch failed: ${getErrorMessage(fetchError)}`, 'warn');
+            const message = fetchError instanceof MetronRateLimitError
+                ? 'Metron is rate-limiting requests right now. Try again in a little while.'
+                : 'Could not load the global pull list from Metron.';
+            return NextResponse.json({ error: message }, { status: 503 });
         }
 
         const localSeries = await prisma.series.findMany({

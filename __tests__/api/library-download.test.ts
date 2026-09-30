@@ -7,8 +7,11 @@ const mocks = vi.hoisted(() => ({
     findUniqueUser: vi.fn(),
     findManyLibraries: vi.fn(),
     existsSync: vi.fn(),
+    rememberForPath: vi.fn(async () => undefined),
     log: vi.fn()
 }));
+
+vi.mock('@/lib/koreader-documents', () => ({ rememberKoreaderDocumentForPath: mocks.rememberForPath }));
 
 // 2. Mock NextAuth
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
@@ -79,5 +82,21 @@ describe('API Route: Library File Download Permissions', () => {
 
         const res = await GET(createReq('/etc/passwd'));
         expect(res.status).toBe(403);
+    });
+
+    // #211 follow-up: a book downloaded here and copied to a KOReader device by hand syncs to its issue
+    // too - the download records KOReader's document IDs for the file.
+    it('records the KOReader document IDs of the file it serves', async () => {
+        mocks.getServerSession.mockResolvedValueOnce({ user: { id: 'user_2' } });
+        mocks.findUniqueUser.mockResolvedValueOnce({ id: 'user_2', role: 'USER', canDownload: true });
+        mocks.existsSync.mockReturnValueOnce(true);
+        const fs = (await import('fs')).default as any;
+        fs.statSync.mockReturnValueOnce({ size: 1234 });
+        fs.createReadStream.mockReturnValueOnce({ on: vi.fn(), destroy: vi.fn() });
+
+        const res = await GET(createReq('/library/Batman/issue1.cbz'));
+
+        expect(res.status).toBe(200);
+        expect(mocks.rememberForPath).toHaveBeenCalledWith('/library/Batman/issue1.cbz');
     });
 });

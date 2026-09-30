@@ -1,13 +1,16 @@
 // Series-monitor sync (SERIES_MONITOR) — the heavy half. Ported from queue.ts per the roadmap's
 // "partial" split: this engine module does the multi-minute API fetch + match + skeleton-upsert
-// (Phase 1 Metron Oracle ≤3000 upcoming issues, Phase 2 ComicVine 25 oldest-monitored series × 30
+// (Phase 1 Metron Oracle: the upcoming window, in full weekly and incrementally between — #216;
+// Phase 2 ComicVine 25 oldest-monitored series × 30
 // issues), and returns the monitored, matched, not-yet-in-library issues as *candidates*. The Node
 // worker keeps request creation + searchAndDownload (BullMQ) + the Phase 3 UNRELEASED upgrade sweep.
 use anyhow::Result;
 use crate::db::Db;
+use crate::metron_client::MetronAuth;
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::Row;
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -65,6 +68,7 @@ struct IssueRec {
     number: String,
     file_path: Option<String>,
     release_date: Option<String>,
+    cover_url: Option<String>,
 }
 
 /// A file-less, non-lane Issue row the Metron pass created (metadataSource METRON), keyed by its
@@ -238,7 +242,7 @@ async fn heal_stray_skeleton(
                     let pos = b.iter().position(|i| i.id == stray.issue_id)?;
                     Some(b.remove(pos))
                 });
-                let rec = moved.unwrap_or(IssueRec { id: stray.issue_id.clone(), number: stray.number.clone(), file_path: None, release_date: None });
+                let rec = moved.unwrap_or(IssueRec { id: stray.issue_id.clone(), number: stray.number.clone(), file_path: None, release_date: None, cover_url: None });
                 issues.entry(target_series_id.to_string()).or_default().push(rec);
                 if let Some(s) = strays.get_mut(m_id) { s.series_id = target_series_id.to_string(); }
                 log::info!("[Series Monitor] Relocated stray skeleton #{} (Metron issue {}) from series {} to {} (#208).", stray.number, m_id, stray.series_id, target_series_id);
@@ -356,7 +360,7 @@ enum WalkOutcome {
 
 /// Walk a Metron series' issue_list within `budget` calls. OutOfBudget = stopped before the end
 /// (retried next run). Err = the request itself failed; the audit stops for this run.
-async fn walk_volume(db: &Db, client: &Client, auth: &(String, String), msid: &str, budget: usize, tally: &mut AuditTally) -> anyhow::Result<WalkOutcome> {
+async fn walk_volume(db: &Db, client: &Client, auth: &MetronAuth, msid: &str, budget: usize, tally: &mut AuditTally) -> anyhow::Result<WalkOutcome> {
     let mut url = Some(format!("https://metron.cloud/api/series/{}/issue_list/", msid));
     let mut own: HashSet<String> = HashSet::new();
     let (mut used, mut first) = (0usize, true);
@@ -391,7 +395,7 @@ async fn walk_volume(db: &Db, client: &Client, auth: &(String, String), msid: &s
 /// the same answer until the library changes.
 #[allow(clippy::too_many_arguments)]
 async fn audit_single(
-    db: &Db, client: &Client, auth: &(String, String), series: &[SeriesRec],
+    db: &Db, client: &Client, auth: &MetronAuth, series: &[SeriesRec],
     issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap, m_id: &str, host_idx: usize, tally: &mut AuditTally,
 ) -> anyhow::Result<bool> {
     let url = format!("https://metron.cloud/api/issue/{}/", m_id);
@@ -424,7 +428,7 @@ async fn audit_single(
 /// Drain queued single checks within the budget. Err = Metron failed; the audit stops for this run.
 #[allow(clippy::too_many_arguments)]
 async fn drain_singles(
-    db: &Db, client: &Client, auth: &(String, String), series: &[SeriesRec],
+    db: &Db, client: &Client, auth: &MetronAuth, series: &[SeriesRec],
     issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap, checked: &mut HashSet<String>,
     queue: &mut std::collections::VecDeque<(String, usize)>, tally: &mut AuditTally,
 ) -> anyhow::Result<()> {
@@ -443,7 +447,7 @@ async fn drain_singles(
 /// checks first, then Metron-sourced volumes' issue_list walks and the suspects they turn up.
 #[allow(clippy::too_many_arguments)]
 async fn stray_audit(
-    db: &Db, client: &Client, auth: &(String, String),
+    db: &Db, client: &Client, auth: &MetronAuth,
     series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>, strays: &mut StrayMap,
     seen: &HashSet<String>, checked: &mut HashSet<String>, notes: &mut Vec<String>,
 ) {
@@ -561,7 +565,7 @@ async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<Issu
     // provider volume, so an owned "Annual #1" must never satisfy an is_already_in_library
     // check for the regular #1 (nor pair with provider skeletons by number). The same holds for
     // every ATTACHED lane row: an owned trade numbered "3" is not issue #3 (#203 COLLECTED).
-    let issue_rows = sqlx::query(r#"SELECT id, "seriesId", number, "filePath", "releaseDate" FROM "Issue" WHERE "isAnnual" = false AND "attachedVolumeId" IS NULL"#).fetch_all(&db.pool).await?;
+    let issue_rows = sqlx::query(r#"SELECT id, "seriesId", number, "filePath", "releaseDate", "coverUrl" FROM "Issue" WHERE "isAnnual" = false AND "attachedVolumeId" IS NULL"#).fetch_all(&db.pool).await?;
     let mut issues: HashMap<String, Vec<IssueRec>> = HashMap::new();
     for r in &issue_rows {
         let sid: String = r.get("seriesId");
@@ -570,6 +574,7 @@ async fn load_state(db: &Db) -> Result<(Vec<SeriesRec>, HashMap<String, Vec<Issu
             number: r.get("number"),
             file_path: r.get("filePath"),
             release_date: r.get("releaseDate"),
+            cover_url: r.get("coverUrl"),
         });
     }
 
@@ -605,83 +610,242 @@ fn in_library_or_covered(issues: &[IssueRec], covered: Option<&Vec<String>>, num
     is_already_in_library(issues, num) || covered.is_some_and(|c| crate::coverage::is_covered(num, c))
 }
 
-/// Phase 1 — Metron Oracle: paginate global upcoming issues, match to local series, upsert skeletons,
-/// and emit candidates for monitored series. Errors are captured into `notes` (Phase 2 still runs).
+// ==== #216 (bpepple, Metron's maintainer): every install paged Metron's whole upcoming window every
+// night — 806 issues, 9 requests on 2026-09-29, of which 2 had changed in the previous 24 h — and did
+// it even with nothing monitored. The window is now fetched in full once a week; the runs between ask
+// only for what changed since the last fetch (Metron's `modified_gt`) plus the day(s) the window's far
+// edge has moved onto. Candidates come from the local rows those fetches keep current, so an issue
+// that didn't change is still wanted on every run without being fetched again.
+
+/// SystemSetting key: when the window was last fetched in full, and last brought up to date.
+const WINDOW_SYNC_KEY: &str = "monitor_metron_window";
+/// Bump when the window's shape changes, so the next run fetches it in full.
+const WINDOW_SYNC_VERSION: u32 = 1;
+const WINDOW_PAST_DAYS: i64 = 14;
+const WINDOW_FUTURE_DAYS: i64 = 90;
+/// A full fetch at least this often: it catches what the incremental asks can't see (an issue Metron
+/// deleted, or one whose date moved out of the window).
+const FULL_REFRESH_DAYS: i64 = 7;
+/// `modified_gt` reaches this far behind the last fetch — our clock and Metron's needn't agree.
+const MODIFIED_OVERLAP_SECS: i64 = 3600;
+/// Most issues one run takes from Metron.
+const WINDOW_ISSUE_CAP: usize = 3000;
+/// Most list pages one run asks for, whatever they hold (a `next` chain of empty pages ends here).
+const WINDOW_PAGE_GUARD: usize = 100;
+const METRON_ISSUE_LIST: &str = "https://metron.cloud/api/issue/";
+
+/// The window's fetch state (SystemSetting `monitor_metron_window`, camelCase JSON). Written only after
+/// a fetch that finished, so a failed run is asked again from the same point.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowSync {
+    version: u32,
+    /// Start of the last complete full fetch (Unix seconds).
+    full_at: i64,
+    /// Start of the last complete fetch, full or incremental (Unix seconds): the `modified_gt` mark.
+    synced_at: i64,
+    /// The window's far edge that fetch reached (YYYY-MM-DD).
+    through: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WindowMode {
+    Full,
+    Incremental,
+}
+
+/// This run's asks: the list URLs to page through, and the window they serve.
+#[derive(Debug, PartialEq)]
+struct WindowPlan {
+    mode: WindowMode,
+    urls: Vec<String>,
+    from: NaiveDate,
+    to: NaiveDate,
+}
+
+/// The upcoming window around `today`: released in the last two weeks through solicited three months
+/// out, both edges inclusive (Metron's `store_date_range_after`/`_before` are >= / <=).
+fn window_bounds(today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    (today - chrono::Duration::days(WINDOW_PAST_DAYS), today + chrono::Duration::days(WINDOW_FUTURE_DAYS))
+}
+
+/// What to ask Metron this run. The whole window on a first run, a week after the last full fetch, or
+/// when the stored state doesn't add up; otherwise the issues in the window modified since the last
+/// finished fetch (`modified_gt`, an hour early for clock drift), plus the day(s) the far edge has
+/// moved onto since — an issue dated there is new to the window without having changed.
+fn plan_window_fetch(state: Option<&WindowSync>, now: DateTime<Utc>) -> WindowPlan {
+    let (from, to) = window_bounds(now.date_naive());
+    let range = format!("store_date_range_after={}&store_date_range_before={}", from, to);
+    let full = WindowPlan { mode: WindowMode::Full, urls: vec![format!("{}?{}", METRON_ISSUE_LIST, range)], from, to };
+    let Some(st) = state else { return full };
+    let Ok(through) = NaiveDate::parse_from_str(&st.through, "%Y-%m-%d") else { return full };
+    let now_s = now.timestamp();
+    let current = st.version == WINDOW_SYNC_VERSION
+        && st.full_at <= st.synced_at
+        && st.synced_at <= now_s
+        && now_s - st.full_at < FULL_REFRESH_DAYS * 86_400;
+    if !current {
+        return full;
+    }
+    let Some(since) = DateTime::<Utc>::from_timestamp(st.synced_at - MODIFIED_OVERLAP_SECS, 0) else { return full };
+    let mut urls = vec![format!("{}?modified_gt={}&{}", METRON_ISSUE_LIST, since.format("%Y-%m-%dT%H:%M:%SZ"), range)];
+    if through < to {
+        let edge = (through + chrono::Duration::days(1)).max(from);
+        urls.push(format!("{}?store_date_range_after={}&store_date_range_before={}", METRON_ISSUE_LIST, edge, to));
+    }
+    WindowPlan { mode: WindowMode::Incremental, urls, from, to }
+}
+
+/// The state to store after this run's fetch, or None to leave the stored one as it is (the fetch
+/// stopped early, so the next run must ask again from the same point).
+fn next_window_sync(prev: Option<&WindowSync>, plan: &WindowPlan, complete: bool, started: i64) -> Option<WindowSync> {
+    if !complete {
+        return None;
+    }
+    let full_at = match (plan.mode, prev) {
+        (WindowMode::Incremental, Some(p)) => p.full_at,
+        _ => started,
+    };
+    Some(WindowSync { version: WINDOW_SYNC_VERSION, full_at, synced_at: started, through: plan.to.format("%Y-%m-%d").to_string() })
+}
+
+async fn load_window_sync(db: &Db) -> Option<WindowSync> {
+    let raw: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = $1"#)
+        .bind(WINDOW_SYNC_KEY).fetch_optional(&db.pool).await.ok().flatten();
+    raw.and_then(|v| serde_json::from_str(&v).ok())
+}
+
+async fn save_window_sync(db: &Db, state: &WindowSync) {
+    let Ok(value) = serde_json::to_string(state) else { return };
+    if let Err(e) = sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#)
+        .bind(WINDOW_SYNC_KEY).bind(value).execute(&db.pool).await
+    {
+        log::warn!("[Series Monitor] Could not save the Metron window's fetch state: {:?}", e);
+    }
+}
+
+/// A row's release date (`YYYY-MM-DD`, anything after the day ignored).
+fn row_date(row: &IssueRec) -> Option<NaiveDate> {
+    row.release_date.as_deref().and_then(|d| NaiveDate::parse_from_str(d.get(..10)?, "%Y-%m-%d").ok())
+}
+
+/// The strays whose row is dated inside the window. The fetch that last returned such an issue matched
+/// (and healed) it, and any change since would have come back in a `modified_gt` ask — so, like an issue
+/// fetched this run, it's no work for the out-of-window audit (#208).
+fn strays_dated_in_window(strays: &StrayMap, issues: &HashMap<String, Vec<IssueRec>>, from: NaiveDate, to: NaiveDate) -> HashSet<String> {
+    strays.iter()
+        .filter(|(_, st)| {
+            issues.get(&st.series_id)
+                .and_then(|bucket| bucket.iter().find(|row| row.id == st.issue_id))
+                .and_then(row_date)
+                .is_some_and(|d| d >= from && d <= to)
+        })
+        .map(|(m_id, _)| m_id.clone())
+        .collect()
+}
+
+/// Phase 1's candidates: every monitored series' row dated inside the window that isn't on disk or
+/// reprinted in an owned trade — one per issue number, in release order. Built from the local rows, so
+/// an issue Metron didn't send this run (it hadn't changed) is still wanted. A row's date is its store
+/// date when Metron supplied it, so "released" means that date has come.
+fn window_candidates(
+    series: &[SeriesRec], issues: &HashMap<String, Vec<IssueRec>>, coverage: &HashMap<String, Vec<String>>,
+    from: NaiveDate, to: NaiveDate,
+) -> Vec<MonitorCandidate> {
+    let mut dated: Vec<(NaiveDate, MonitorCandidate)> = Vec::new();
+    for s in series.iter().filter(|s| s.monitored) {
+        let Some(bucket) = issues.get(&s.id) else { continue };
+        let mut wanted: Vec<&str> = Vec::new();
+        for row in bucket {
+            let Some(date) = row_date(row).filter(|d| *d >= from && *d <= to) else { continue };
+            if in_library_or_covered(bucket, coverage.get(&s.id), &row.number) || wanted.iter().any(|n| is_same_issue(n, &row.number)) {
+                continue;
+            }
+            wanted.push(&row.number);
+            let day = date.format("%Y-%m-%d").to_string();
+            dated.push((date, MonitorCandidate {
+                volume_id: s.metadata_id.clone().unwrap_or_else(|| s.id.clone()),
+                metadata_source: s.metadata_source.clone(),
+                search_name: format!("{} #{}", s.name, row.number),
+                issue_number: row.number.clone(),
+                issue_year: date.format("%Y").to_string(),
+                is_released: is_released_yet(Some(&day), None),
+                has_date: true,
+                publisher: s.publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
+                is_manga: s.is_manga,
+                // A cached cover is a local path — a request shows the provider's image or the series'.
+                image_url: row.cover_url.clone().filter(|u| u.starts_with("http")).or_else(|| s.cover_url.clone()),
+            }));
+        }
+    }
+    dated.sort_by_key(|(d, _)| *d);
+    dated.into_iter().map(|(_, c)| c).collect()
+}
+
+/// Phase 1 — Metron Oracle: bring the upcoming window up to date (in full once a week, otherwise only
+/// what changed — #216), match what Metron sent to local series, upsert skeletons and heal strays,
+/// then emit candidates for monitored series from the local rows. Returns how many issues Metron sent.
+/// Errors are captured into `notes` (Phase 2 still runs).
 #[allow(clippy::too_many_arguments)]
 async fn phase1_metron(
-    db: &Db, client: &Client, user: &str, pass: &str,
+    db: &Db, client: &Client, auth: &MetronAuth,
     series: &[SeriesRec], issues: &mut HashMap<String, Vec<IssueRec>>, coverage: &HashMap<String, Vec<String>>,
     strays: &mut StrayMap,
     skeletons_created: &mut i32, candidates: &mut Vec<MonitorCandidate>, notes: &mut Vec<String>,
-) {
-    use chrono::{Duration, Utc};
-    let today = Utc::now().date_naive();
-    let past_str = (today - Duration::days(14)).format("%Y-%m-%d").to_string();
-    let future_str = (today + Duration::days(90)).format("%Y-%m-%d").to_string();
+) -> usize {
+    let started = Utc::now();
+    let prev = load_window_sync(db).await;
+    let plan = plan_window_fetch(prev.as_ref(), started);
 
-    let mut next_url = Some(format!("https://metron.cloud/api/issue/?store_date_range_after={}&store_date_range_before={}", past_str, future_str));
+    // Pages go through the shared Metron client (metron_client.rs): paced from Metron's rate-limit
+    // headers, 429s honoured (a long one ends the run), only 429/5xx retried. Uncached — each ask is
+    // today's view of the window.
     let mut metron_issues: Vec<Value> = Vec::new();
-    let mut guard = 0;
-
-    'fetch: while let Some(url) = next_url.clone() {
-        if metron_issues.len() >= 3000 { break; }
-        guard += 1;
-        if guard > 1000 { notes.push("[Phase 1] Metron Oracle aborted: pagination guard tripped.".to_string()); break; }
-
-        let resp = match client.get(&url)
-            .basic_auth(user, Some(pass))
-            .header("User-Agent", "Omnibus/1.0")
-            .timeout(std::time::Duration::from_secs(15))
-            .send().await
-        {
-            Ok(r) => r,
-            Err(e) => { notes.push(format!("[Phase 1] Metron Oracle failed: {}", e)); break 'fetch; }
-        };
-        crate::api_usage::log(&db.pool, "metron", &url).await;
-
-        let status = resp.status();
-        if status.as_u16() == 429 {
-            let retry_after: u64 = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(60);
-            tokio::time::sleep(std::time::Duration::from_millis((retry_after + 1) * 1000)).await;
-            continue;
-        }
-        if status.as_u16() >= 500 {
-            notes.push(format!("[Phase 1] Metron Oracle failed: HTTP {}", status.as_u16()));
-            break 'fetch;
-        }
-
-        // Burst-rate-limit headers (read before consuming the body).
-        let burst_remaining: i64 = resp.headers().get("x-ratelimit-burst-remaining").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(20);
-        let burst_reset: i64 = resp.headers().get("x-ratelimit-burst-reset").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        let data: Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => { notes.push(format!("[Phase 1] Metron Oracle failed: {}", e)); break 'fetch; }
-        };
-        if let Some(results) = data.get("results").and_then(|v| v.as_array()) {
-            metron_issues.extend(results.iter().cloned());
-        }
-        next_url = data.get("next").and_then(|v| v.as_str()).map(|s| s.to_string());
-
-        // Pace to respect the burst budget (parity with the Node sleeps).
-        if burst_remaining <= 2 {
-            if burst_reset > 0 {
-                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-                let sleep_ms = ((burst_reset * 1000) - now_ms).max(0) + 500;
-                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms as u64)).await;
-            } else {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    let mut returned: HashSet<String> = HashSet::new();
+    let mut requests = 0usize;
+    let mut failure: Option<String> = None;
+    'asks: for first_page in &plan.urls {
+        let mut next_url = Some(first_page.clone());
+        while let Some(url) = next_url.take() {
+            if metron_issues.len() >= WINDOW_ISSUE_CAP || requests >= WINDOW_PAGE_GUARD {
+                failure = Some(format!("stopped at {} issues / {} pages", metron_issues.len(), requests));
+                break 'asks;
             }
-        } else if next_url.is_some() {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let mut req = crate::metron_client::MetronRequest::new(&url);
+            req.use_cache = false;
+            let data = match crate::metron_client::metron_get(db, client, auth, req).await {
+                Ok((200, d)) => d,
+                Ok((status, _)) => { failure = Some(format!("HTTP {}", status)); break 'asks; }
+                Err(e) => { failure = Some(e.to_string()); break 'asks; }
+            };
+            requests += 1;
+            for r in data.get("results").and_then(|v| v.as_array()).into_iter().flatten() {
+                // The far-edge slice can repeat an issue the modified ask already returned.
+                if jstr(r.get("id")).is_none_or(|id| returned.insert(id)) {
+                    metron_issues.push(r.clone());
+                }
+            }
+            next_url = data.get("next").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
         }
     }
 
-    notes.push(format!("[Phase 1] Metron Oracle fetched {} global upcoming releases.", metron_issues.len()));
+    let asked = match plan.mode {
+        WindowMode::Full => format!("the full {} to {} window", plan.from, plan.to),
+        WindowMode::Incremental => "changed since the last fetch, or new at the window's far edge".to_string(),
+    };
+    notes.push(format!("[Phase 1] Metron Oracle fetched {} upcoming release(s): {} ({} request(s)).", metron_issues.len(), asked, requests));
+    match &failure {
+        Some(why) => notes.push(format!("[Phase 1] Metron Oracle failed: {} — the next run asks again from the same point.", why)),
+        None => {
+            if let Some(state) = next_window_sync(prev.as_ref(), &plan, true, started.timestamp()) {
+                save_window_sync(db, &state).await;
+            }
+        }
+    }
 
-    // #208 bookkeeping: every Metron issue id this window covered (the family audit skips them),
-    // the same-name families the year couldn't settle (one note per name+year, not per issue),
-    // and what the in-window heal did.
+    // #208 bookkeeping: every Metron issue id this run returned (the audit skips them, and the strays
+    // dated inside the window — added after the loop), the same-name families the year couldn't
+    // settle (one note per name+year, not per issue), and what the in-window heal did.
     let mut seen: HashSet<String> = HashSet::new();
     let mut checked = load_audit_checked(db).await;
     let mut skipped: std::collections::BTreeMap<(String, Option<i32>), (usize, usize)> = std::collections::BTreeMap::new();
@@ -743,7 +907,6 @@ async fn phase1_metron(
         let issue_date = m.get("store_date").and_then(|v| v.as_str()).filter(|x| !x.is_empty())
             .or_else(|| m.get("cover_date").and_then(|v| v.as_str()).filter(|x| !x.is_empty()))
             .map(|x| x.to_string());
-        let is_released = is_released_yet(m.get("store_date").and_then(|v| v.as_str()), m.get("cover_date").and_then(|v| v.as_str()));
 
         // Skeleton upsert (matched series, monitored or not — calendar entries). Find by float equality.
         let bucket = issues.entry(s.id.clone()).or_default();
@@ -754,7 +917,7 @@ async fn phase1_metron(
                 let desc = m.get("desc").and_then(|v| v.as_str()).or_else(|| m.get("description").and_then(|v| v.as_str()));
                 let cover = m.get("image").and_then(|v| v.as_str());
                 if let Some(new_id) = insert_skeleton(db, &s.id, &m_id, "METRON", &m_num_str, name, desc, issue_date.as_deref(), cover).await {
-                    bucket.push(IssueRec { id: new_id, number: m_num_str.clone(), file_path: None, release_date: issue_date.clone() });
+                    bucket.push(IssueRec { id: new_id, number: m_num_str.clone(), file_path: None, release_date: issue_date.clone(), cover_url: cover.map(|c| c.to_string()) });
                     *skeletons_created += 1;
                 }
             }
@@ -767,25 +930,6 @@ async fn phase1_metron(
                     }
                 }
             }
-        }
-
-        // Candidate emission (monitored + not already in library, nor covered by an owned trade).
-        if s.monitored && !in_library_or_covered(bucket, coverage.get(&s.id), &m_num_str) {
-            let issue_year = issue_date.as_deref().and_then(|d| d.split('-').next()).filter(|y| !y.is_empty())
-                .map(|y| y.to_string()).unwrap_or_else(|| s.year.to_string());
-            let image_url = m.get("image").and_then(|v| v.as_str()).map(|s| s.to_string()).or_else(|| s.cover_url.clone());
-            candidates.push(MonitorCandidate {
-                volume_id: s.metadata_id.clone().unwrap_or_else(|| s.id.clone()),
-                metadata_source: s.metadata_source.clone(),
-                search_name: format!("{} #{}", s.name, m_num_str),
-                issue_number: m_num_str.clone(),
-                issue_year,
-                is_released,
-                has_date: issue_date.is_some(),
-                publisher: s.publisher.clone().unwrap_or_else(|| "Unknown".to_string()),
-                is_manga: s.is_manga,
-                image_url,
-            });
         }
     }
 
@@ -801,8 +945,14 @@ async fn phase1_metron(
             relocated, deleted, evicted
         ));
     }
-    stray_audit(db, client, &(user.to_string(), pass.to_string()), series, issues, strays, &seen, &mut checked, notes).await;
+    seen.extend(strays_dated_in_window(strays, issues, plan.from, plan.to));
+    stray_audit(db, client, auth, series, issues, strays, &seen, &mut checked, notes).await;
     save_audit_checked(db, &checked, strays).await;
+
+    // Candidates last, so they see the heal's and the audit's corrections (monitored + not already in
+    // the library, nor covered by an owned trade).
+    candidates.extend(window_candidates(series, issues, coverage, plan.from, plan.to));
+    metron_issues.len()
 }
 
 /// Phase 2 — ComicVine: for the 25 oldest monitored CV series, fetch their latest 30 issues, upsert
@@ -894,7 +1044,7 @@ async fn phase2_comicvine(
                         let cover = cv.pointer("/image/medium_url").and_then(|v| v.as_str()).or_else(|| cv.pointer("/image/small_url").and_then(|v| v.as_str()));
                         let number = jstr(cv.get("issue_number")).unwrap_or_else(|| "0".to_string());
                         if let Some(new_id) = insert_skeleton(db, &series_id, &cv_issue_id, "COMICVINE", &number, name, desc, issue_date.as_deref(), cover).await {
-                            bucket.push(IssueRec { id: new_id, number, file_path: None, release_date: issue_date.clone() });
+                            bucket.push(IssueRec { id: new_id, number, file_path: None, release_date: issue_date.clone(), cover_url: cover.map(|c| c.to_string()) });
                         }
                         *skeletons_created += 1; // parity: Node increments on attempt, not just success
                     }
@@ -945,18 +1095,16 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
     let mut candidates: Vec<MonitorCandidate> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
 
-    // Phase 1 — Metron (only when credentials are present).
-    let creds = sqlx::query(r#"SELECT key, value FROM "SystemSetting" WHERE key IN ('metron_user','metron_pass')"#).fetch_all(&db.pool).await?;
-    let mut metron_user = String::new();
-    let mut metron_pass = String::new();
-    for r in &creds {
-        let k: String = r.get("key");
-        let v: String = r.get("value");
-        if k == "metron_user" { metron_user = v; } else if k == "metron_pass" { metron_pass = v; }
-    }
-    let metron_pass = crate::secret_crypto::decrypt_setting(&db.pool, Some(metron_pass)).await.unwrap_or_default();
-    if !metron_user.is_empty() && !metron_pass.is_empty() {
-        phase1_metron(&db, &client, &metron_user, &metron_pass, &series, &mut issues, &coverage, &mut strays, &mut skeletons_created, &mut candidates, &mut notes).await;
+    // Phase 1 — Metron, when credentials are present (an API token, or username + password) and
+    // something is monitored: the window feeds monitored series' requests and the calendar's tracked
+    // view, and asking Metron for it with nothing to feed only costs Metron (#216).
+    let mut metron_fetched = 0;
+    if let Some(auth) = crate::metron_client::load_auth(&db.pool).await {
+        if series.iter().any(|s| s.monitored) {
+            metron_fetched = phase1_metron(&db, &client, &auth, &series, &mut issues, &coverage, &mut strays, &mut skeletons_created, &mut candidates, &mut notes).await;
+        } else {
+            notes.push("[Phase 1] Nothing is monitored, so Metron wasn't asked for upcoming releases.".to_string());
+        }
     }
 
     // Phase 2 — ComicVine (only when a key is present).
@@ -969,11 +1117,7 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
         }
     }
 
-    let metron_fetched = notes.iter()
-        .find_map(|n| n.strip_prefix("[Phase 1] Metron Oracle fetched ").and_then(|s| s.split(' ').next()).and_then(|s| s.parse().ok()))
-        .unwrap_or(0);
-
-    Ok(MonitorOutput { skeletons_created, metron_fetched, notes, candidates })
+    Ok(MonitorOutput { skeletons_created, metron_fetched: metron_fetched as i32, notes, candidates })
 }
 
 #[cfg(test)]
@@ -988,7 +1132,7 @@ mod tests {
     }
 
     fn issue(number: &str, file_path: Option<&str>) -> IssueRec {
-        IssueRec { id: "i".into(), number: number.into(), file_path: file_path.map(|s| s.into()), release_date: None }
+        IssueRec { id: "i".into(), number: number.into(), file_path: file_path.map(|s| s.into()), release_date: None, cover_url: None }
     }
 
     #[test]
@@ -1034,7 +1178,8 @@ mod tests {
             r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER, "metadataId" TEXT,
                 "metadataSource" TEXT, monitored INTEGER, "isManga" INTEGER DEFAULT 0, "coverUrl" TEXT, "metronId" INTEGER)"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, number TEXT, "filePath" TEXT, "releaseDate" TEXT,
-                "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT, "metadataId" TEXT, "metadataSource" TEXT)"#,
+                "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
+                "coverUrl" TEXT)"#,
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, kind TEXT)"#,
             r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
         ] {
@@ -1387,6 +1532,225 @@ mod tests {
         assert_eq!(kept, 1);
         // No stray for this Metron issue (the common case for the industry-wide list) → nothing.
         assert_eq!(evict_misfiled_stray(&db, &series, &mut issues, &mut strays, "999999", Some("8106"), Some(2024)).await, None);
+    }
+
+    // ==== #216 (bpepple, Metron's maintainer): the monitor paged Metron's whole upcoming window every
+    // night on every install, monitored series or not. The window is now fetched in full once a week,
+    // the runs between ask only for what changed plus the window's new far edge, candidates come from
+    // the local rows, and an install that monitors nothing doesn't ask at all.
+
+    fn at(rfc3339: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(rfc3339).unwrap().with_timezone(&Utc)
+    }
+
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn synced(full_at: &str, synced_at: &str, through: &str) -> WindowSync {
+        WindowSync { version: WINDOW_SYNC_VERSION, full_at: at(full_at).timestamp(), synced_at: at(synced_at).timestamp(), through: through.into() }
+    }
+
+    fn dated(id: &str, number: &str, file: Option<&str>, date: Option<NaiveDate>, cover: Option<&str>) -> IssueRec {
+        IssueRec {
+            id: id.into(), number: number.into(), file_path: file.map(|s| s.into()),
+            release_date: date.map(|d| d.format("%Y-%m-%d").to_string()), cover_url: cover.map(|s| s.into()),
+        }
+    }
+
+    #[test]
+    fn a_first_run_fetches_the_whole_window() {
+        let plan = plan_window_fetch(None, at("2026-09-29T20:00:00Z"));
+        assert_eq!(plan.mode, WindowMode::Full);
+        assert_eq!((plan.from, plan.to), (day("2026-09-15"), day("2026-12-28")));
+        assert_eq!(plan.urls, vec!["https://metron.cloud/api/issue/?store_date_range_after=2026-09-15&store_date_range_before=2026-12-28".to_string()]);
+    }
+
+    #[test]
+    fn the_next_night_asks_only_for_changes_and_the_day_the_far_edge_moved_onto() {
+        let state = synced("2026-09-29T20:00:00Z", "2026-09-29T20:00:00Z", "2026-12-28");
+        let plan = plan_window_fetch(Some(&state), at("2026-09-30T20:00:00Z"));
+        assert_eq!(plan.mode, WindowMode::Incremental);
+        assert_eq!(plan.urls, vec![
+            // Changed since the last fetch (an hour of overlap for clock drift), inside today's window…
+            "https://metron.cloud/api/issue/?modified_gt=2026-09-29T19:00:00Z&store_date_range_after=2026-09-16&store_date_range_before=2026-12-29".to_string(),
+            // …plus the day the far edge moved onto: an issue dated there needn't have changed to be new to us.
+            "https://metron.cloud/api/issue/?store_date_range_after=2026-12-29&store_date_range_before=2026-12-29".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn a_missed_night_widens_the_far_edge_slice_and_a_same_day_rerun_skips_it() {
+        let state = synced("2026-09-29T20:00:00Z", "2026-09-29T20:00:00Z", "2026-12-28");
+        let later = plan_window_fetch(Some(&state), at("2026-10-02T06:00:00Z"));
+        assert_eq!(later.mode, WindowMode::Incremental);
+        assert_eq!(later.urls[1], "https://metron.cloud/api/issue/?store_date_range_after=2026-12-29&store_date_range_before=2026-12-31");
+
+        let rerun = plan_window_fetch(Some(&state), at("2026-09-29T23:30:00Z"));
+        assert_eq!(rerun.urls, vec!["https://metron.cloud/api/issue/?modified_gt=2026-09-29T19:00:00Z&store_date_range_after=2026-09-15&store_date_range_before=2026-12-28".to_string()]);
+    }
+
+    #[test]
+    fn a_week_old_full_fetch_or_a_state_that_makes_no_sense_means_a_full_refresh() {
+        let mode = |s: WindowSync| plan_window_fetch(Some(&s), at("2026-10-06T20:00:00Z")).mode;
+        assert_eq!(mode(synced("2026-09-29T20:00:01Z", "2026-10-05T20:00:00Z", "2027-01-03")), WindowMode::Incremental, "a second short of a week");
+        assert_eq!(mode(synced("2026-09-29T20:00:00Z", "2026-10-05T20:00:00Z", "2027-01-03")), WindowMode::Full, "a week since the full fetch");
+        assert_eq!(mode(WindowSync { version: 0, ..synced("2026-10-05T20:00:00Z", "2026-10-05T20:00:00Z", "2027-01-03") }), WindowMode::Full, "an older state shape");
+        assert_eq!(mode(synced("2026-10-05T20:00:00Z", "2026-10-07T20:00:00Z", "2027-01-03")), WindowMode::Full, "a fetch from the future (the clock moved)");
+        assert_eq!(mode(synced("2026-10-05T20:00:00Z", "2026-10-04T20:00:00Z", "2027-01-03")), WindowMode::Full, "synced before its own full fetch");
+        assert_eq!(mode(synced("2026-10-05T20:00:00Z", "2026-10-05T20:00:00Z", "soon")), WindowMode::Full, "an unreadable far edge");
+    }
+
+    #[test]
+    fn the_state_advances_only_after_a_fetch_that_finished() {
+        let prev = synced("2026-09-29T20:00:00Z", "2026-10-01T20:00:00Z", "2026-12-30");
+        let now = at("2026-10-02T20:00:00Z");
+        let started = now.timestamp();
+
+        let inc = plan_window_fetch(Some(&prev), now);
+        assert_eq!(
+            next_window_sync(Some(&prev), &inc, true, started),
+            Some(WindowSync { version: WINDOW_SYNC_VERSION, full_at: prev.full_at, synced_at: started, through: "2026-12-31".into() }),
+            "an incremental run moves the mark and the far edge, never the full-fetch time"
+        );
+        let full = plan_window_fetch(None, now);
+        assert_eq!(
+            next_window_sync(None, &full, true, started),
+            Some(WindowSync { version: WINDOW_SYNC_VERSION, full_at: started, synced_at: started, through: "2026-12-31".into() })
+        );
+        // Stopped early (a 429, the daily limit, an error, the cap) → nothing written: the next run
+        // asks again from the same point instead of skipping what this one missed.
+        assert_eq!(next_window_sync(Some(&prev), &inc, false, started), None);
+        assert_eq!(next_window_sync(None, &full, false, started), None);
+    }
+
+    #[test]
+    fn candidates_are_every_monitored_series_unowned_row_dated_inside_the_window() {
+        let today = Utc::now().date_naive();
+        let d = |n: i64| Some(today + chrono::Duration::days(n));
+        let (from, to) = window_bounds(today);
+        let mut xmen = rec("x", "X-Men", "Marvel", 2024, "COMICVINE", Some("160511"), None);
+        xmen.cover_url = Some("https://cv/x-men.jpg".into());
+        let mut council = rec("q", "Quiet Council", "Marvel", 2024, "METRON", Some("9000"), None);
+        council.monitored = false;
+        let series = vec![xmen, council];
+        let mut issues: HashMap<String, Vec<IssueRec>> = HashMap::new();
+        issues.insert("x".into(), vec![
+            dated("soon", "6", None, d(20), Some("/app/covers/x6.jpg")),     // not out yet; a cached (local) cover → the series cover
+            dated("out", "5", None, d(-5), Some("https://metron/x5.jpg")),   // out last week
+            dated("twin", "005", None, d(-5), None),                         // the same number again → one candidate
+            dated("owned", "4", Some("/lib/X-Men 004.cbz"), d(-3), None),    // on disk
+            dated("old", "1", None, d(-15), None),                           // left the window
+            dated("far", "9", None, d(91), None),                            // not in it yet
+            dated("undated", "10", None, None, None),                        // no date → not the window's
+            dated("trade", "21", None, d(10), None),                         // reprinted in an owned trade
+            dated("edge-past", "2", None, d(-14), None),                     // both edges are inside
+            dated("edge-far", "8", None, d(90), None),
+        ]);
+        issues.insert("q".into(), vec![dated("qc", "1", None, d(3), None)]); // not monitored
+        let coverage: HashMap<String, Vec<String>> = [("x".to_string(), vec!["21".to_string()])].into_iter().collect();
+
+        let got = window_candidates(&series, &issues, &coverage, from, to);
+
+        let summary: Vec<(&str, bool, bool, &str)> = got.iter()
+            .map(|c| (c.search_name.as_str(), c.is_released, c.has_date, c.image_url.as_deref().unwrap_or(""))).collect();
+        assert_eq!(summary, vec![
+            ("X-Men #2", true, true, "https://cv/x-men.jpg"),
+            ("X-Men #5", true, true, "https://metron/x5.jpg"),
+            ("X-Men #6", false, true, "https://cv/x-men.jpg"),
+            ("X-Men #8", false, true, "https://cv/x-men.jpg"),
+        ], "in date order; #4 owned, #21 covered, #1/#9/#10 outside the window, #005 is #5, the unmonitored series wants nothing");
+        let first = &got[0];
+        assert_eq!(
+            (first.volume_id.as_str(), first.metadata_source.as_str(), first.issue_number.as_str(), first.publisher.as_str()),
+            ("160511", "COMICVINE", "2", "Marvel")
+        );
+        assert_eq!(first.issue_year, (today - chrono::Duration::days(14)).format("%Y").to_string());
+    }
+
+    #[test]
+    fn strays_dated_inside_the_window_count_as_seen() {
+        let today = Utc::now().date_naive();
+        let d = |n: i64| Some(today + chrono::Duration::days(n));
+        let (from, to) = window_bounds(today);
+        let strays: StrayMap = [("100", "i100", "x"), ("200", "i200", "x"), ("300", "i300", "x"), ("400", "i400", "gone")]
+            .iter()
+            .map(|(m, i, s)| (m.to_string(), StraySkeleton { issue_id: i.to_string(), series_id: s.to_string(), number: "1".into() }))
+            .collect();
+        let mut issues: HashMap<String, Vec<IssueRec>> = HashMap::new();
+        issues.insert("x".into(), vec![
+            dated("i100", "1", None, d(30), None),   // inside → the fetch that last returned it matched it
+            dated("i200", "2", None, d(-40), None),  // left the window → the audit's to check
+            dated("i300", "3", None, None, None),    // no date → the audit's to check
+        ]);
+
+        let mut seen: Vec<String> = strays_dated_in_window(&strays, &issues, from, to).into_iter().collect();
+        seen.sort();
+
+        assert_eq!(seen, vec!["100".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn the_window_state_round_trips_and_an_unreadable_value_starts_over() {
+        let db = fixture("window_state").await;
+        assert_eq!(load_window_sync(&db).await, None, "no setting yet → a full fetch");
+
+        let state = synced("2026-09-29T20:00:00Z", "2026-09-30T20:00:00Z", "2026-12-29");
+        save_window_sync(&db, &state).await;
+        assert_eq!(load_window_sync(&db).await, Some(state));
+        let raw: String = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'monitor_metron_window'"#).fetch_one(&db.pool).await.unwrap();
+        assert!(raw.contains(r#""fullAt""#) && raw.contains(r#""syncedAt""#), "camelCase like the other shared settings: {}", raw);
+
+        sqlx::query(r#"UPDATE "SystemSetting" SET value = 'not json' WHERE key = 'monitor_metron_window'"#).execute(&db.pool).await.unwrap();
+        assert_eq!(load_window_sync(&db).await, None, "an unreadable value starts over rather than failing the run");
+    }
+
+    /// Metron credentials plus a shared 429 block an hour long: metron_client refuses any request the
+    /// run makes before sending it, so these runs never reach the network.
+    async fn with_metron_blocked(db: &Db) {
+        let until = Utc::now().timestamp_millis() + 3_600_000;
+        for (key, value) in [
+            ("metron_user", "lab".to_string()),
+            ("metron_pass", "secret".to_string()),
+            ("metron_rate_status", format!(r#"{{"blockedUntil":{}}}"#, until)),
+        ] {
+            sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2)"#).bind(key).bind(value).execute(&db.pool).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn an_install_that_monitors_nothing_never_asks_metron() {
+        let db = fixture("unmonitored").await;
+        with_metron_blocked(&db).await;
+        insert_series(&db, "s1", "Saga", "Image", 2012, "4000", "METRON", 0, None).await;
+
+        let out = run_series_monitor(db.clone()).await.unwrap();
+
+        assert!(out.notes.iter().any(|n| n.contains("Nothing is monitored")), "{:?}", out.notes);
+        assert!(!out.notes.iter().any(|n| n.contains("Metron Oracle")), "no fetch was attempted: {:?}", out.notes);
+        assert_eq!(out.metron_fetched, 0);
+        assert!(out.candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_refused_fetch_still_wants_the_windows_issues_and_keeps_the_old_mark() {
+        let db = fixture("refused").await;
+        with_metron_blocked(&db).await;
+        insert_series(&db, "s1", "Saga", "Image", 2012, "4000", "METRON", 1, None).await;
+        let soon = (Utc::now().date_naive() + chrono::Duration::days(12)).format("%Y-%m-%d").to_string();
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "filePath", "releaseDate", "metadataId", "metadataSource") VALUES ('i67', 's1', '67', NULL, $1, '180000', 'METRON')"#)
+            .bind(&soon).execute(&db.pool).await.unwrap();
+
+        let out = run_series_monitor(db.clone()).await.unwrap();
+
+        assert!(out.notes.iter().any(|n| n.contains("Metron Oracle failed")), "{:?}", out.notes);
+        assert_eq!(
+            out.candidates.iter().map(|c| c.search_name.as_str()).collect::<Vec<_>>(), vec!["Saga #67"],
+            "an upcoming issue that didn't change is still wanted — from the local row"
+        );
+        assert!(!out.candidates[0].is_released);
+        assert!(!out.notes.iter().any(|n| n.contains("#208 audit")), "an in-window stray costs the audit nothing: {:?}", out.notes);
+        assert_eq!(load_window_sync(&db).await, None, "a fetch that didn't finish writes no state");
     }
 
     #[test]

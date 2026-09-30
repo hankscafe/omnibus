@@ -8,9 +8,17 @@ export interface MetadataSeries {
     universe?: string | null;
     description: string | null;
     coverUrl: string | null;
+    /** The cover was asked for but skipped (the provider was busy, or the request failed) - unlike a
+     *  null coverUrl on its own, which means the series has no cover. A page carrying one isn't cached. */
+    coverPending?: boolean;
     status: 'Ongoing' | 'Ended';
     issueCount?: number;
     bookType?: 'Print' | 'OneShot' | 'TPB' | 'GN' | null;
+}
+
+export interface SearchSeriesOptions {
+    /** Fetch a cover per result - only for a search someone is looking at (it costs a request each on Metron). */
+    covers?: boolean;
 }
 
 export interface MetadataIssue {
@@ -43,7 +51,7 @@ export interface MetadataIssue {
 
 export interface IMetadataProvider {
     // --- FIX: Added optional page parameter ---
-    searchSeries(query: string, page?: number): Promise<MetadataSeries[]>;
+    searchSeries(query: string, page?: number, opts?: SearchSeriesOptions): Promise<MetadataSeries[]>;
     getSeriesDetails(id: string, lastModified?: Date): Promise<MetadataSeries | null>;
     getSeriesIssues(id: string): Promise<MetadataIssue[]>;
     getIssueDetails(id: string): Promise<MetadataIssue>;

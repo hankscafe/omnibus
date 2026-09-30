@@ -16,6 +16,7 @@ mod diagnostics;
 mod manga_detector;
 mod matcher;
 mod metadata_cache;
+mod metron_client;
 mod engine_config;
 mod discover;
 mod recommendations;
@@ -74,6 +75,9 @@ struct ScanRequest {
 #[derive(Deserialize)]
 struct MetadataRequest {
     series_ids: Option<Vec<String>>,
+    /// A person asked for per-issue Metron credits on this refresh (the Refresh button's ask).
+    #[serde(default)]
+    fetch_credits: bool,
 }
 
 #[derive(Deserialize)]
@@ -544,13 +548,13 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
 /// vars into the container definition and then freeze them, silently pinning a stale version across
 /// image updates. A baked file can't be overridden that way, so the engine always reports the version
 /// it was actually built with.
-const VERSION_FILE: &str = "/etc/omnibus-version";
+pub(crate) const VERSION_FILE: &str = "/etc/omnibus-version";
 
 /// Resolves the reported (version, is_release) from the baked version file's contents. A present,
 /// non-blank value is a real release; missing/blank (a local `cargo run`, or an image built without the
 /// build-arg) falls back to the crate version, flagged as a dev build so the Node health check skips the
 /// drift warning.
-fn resolve_version(baked: Option<String>) -> (String, bool) {
+pub(crate) fn resolve_version(baked: Option<String>) -> (String, bool) {
     match baked.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(v) => (v.to_string(), true),
         None => (env!("CARGO_PKG_VERSION").to_string(), false),
@@ -1273,7 +1277,7 @@ async fn handle_metadata_sync(
     tokio::spawn(async move {
         let db = state.db.clone();
         let start_time = std::time::Instant::now();
-        match metadata::sync_metadata(state.db.clone(), payload.series_ids).await {
+        match metadata::sync_metadata(state.db.clone(), payload.series_ids, payload.fetch_credits).await {
             Ok(_) => notify_node("job_metadata_sync", "Metadata synchronization completed.").await,
             Err(e) => {
                 log::error!("❌ Background Metadata Synchronization failed: {:?}", e);

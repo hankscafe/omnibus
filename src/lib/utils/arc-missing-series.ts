@@ -35,7 +35,7 @@ export async function collectMissingArcSeries(
             const name = byId.get(String(id))?.series?.name;
             if (name) names.add(name);
         }
-        const metron = new MetronProvider();
+        const metron = new MetronProvider({ pace: 'background' });
         for (const name of Array.from(names)) {
             try {
                 const results = await metron.searchSeries(name);

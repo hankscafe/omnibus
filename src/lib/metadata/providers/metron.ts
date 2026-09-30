@@ -1,9 +1,12 @@
 // src/lib/metadata/providers/metron.ts
-import { IMetadataProvider, MetadataSeries, MetadataIssue } from '../provider';
-import { prisma } from '@/lib/db';
+import { IMetadataProvider, MetadataSeries, MetadataIssue, SearchSeriesOptions } from '../provider';
 import { Logger } from '@/lib/logger';
-import { logApiUsage } from '@/lib/utils/system-flags';
-import { getCachedResponse, putCachedResponse } from '@/lib/metadata/metadata-cache';
+import { getMetronAuth, metronGet, MetronHttpError, MetronPace, MetronResponse } from '@/lib/metron/client';
+
+/** Results per Metron list page (their API's page size). */
+const METRON_PAGE_SIZE = 100;
+/** Results per Omnibus search page. */
+const UI_PAGE_SIZE = 10;
 
 const extractName = (obj: any): string => {
     if (!obj) return '';
@@ -32,135 +35,79 @@ const mapSeriesType = (seriesType: any): 'Print' | 'OneShot' | 'TPB' | 'GN' | nu
 
 export class MetronProvider implements IMetadataProvider {
     private readonly baseUrl = 'https://metron.cloud/api';
-    private readonly requestHeaders = { 'User-Agent': 'Omnibus/1.0' };
+    private readonly pace: MetronPace;
 
-    private async getAuth() {
-        const settings = await prisma.systemSetting.findMany({
-            where: { key: { in: ['metron_user', 'metron_pass'] } }
-        });
-        const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
-        
-        if (!config.metron_user || !config.metron_pass || config.metron_pass === '********') {
+    /**
+     * Every request goes through the shared Metron client (src/lib/metron/client.ts): token or Basic
+     * auth, pacing from Metron's rate-limit headers, retries only on 429/5xx, usage counting, the
+     * response cache. `pace`: 'interactive' (the default) for someone waiting on a page, 'background'
+     * for sync/import work.
+     */
+    constructor(opts: { pace?: MetronPace } = {}) {
+        this.pace = opts.pace ?? 'interactive';
+    }
+
+    private get(url: string, extra: { ifModifiedSince?: string; timeoutMs?: number } = {}): Promise<MetronResponse> {
+        return metronGet(url, { pace: this.pace, ...extra });
+    }
+
+    /**
+     * A series' first-issue cover (Metron's series payloads carry no image, so it costs an issue_list
+     * request): the URL, null when the series has none, or undefined when the request was skipped -
+     * a nice-to-have is never waited for - or failed.
+     */
+    private async tryFirstIssueCover(seriesId: string | number): Promise<string | null | undefined> {
+        try {
+            const res = await metronGet(`${this.baseUrl}/series/${seriesId}/issue_list/`, { pace: this.pace, optional: true, maxAttempts: 1, timeoutMs: 5000 });
+            return res.data?.results?.[0]?.image || null;
+        } catch {
             return undefined;
         }
-        
-        return { username: config.metron_user, password: config.metron_pass };
     }
 
-    private async fetchWithBackoff(url: string, config: any, maxRetries = 3): Promise<any> {
-        const headers: Record<string, string> = { ...config.headers };
-
-        if (config.auth) {
-            headers['Authorization'] = `Basic ${Buffer.from(`${config.auth.username}:${config.auth.password}`).toString('base64')}`;
-        }
-
-        // Shared response cache (metadata_cache_enabled): conditional (If-Modified-Since) requests
-        // bypass it — their whole point is asking Metron "did this change", which the cache can't
-        // answer. Callers check `cached` before logging API usage (a hit is not an upstream call).
-        const conditional = !!headers['If-Modified-Since'];
-        if (!conditional) {
-            const hit = await getCachedResponse('metron', url);
-            if (hit !== null) return { status: 200, data: hit, cached: true };
-        }
-
-        Logger.log(`[Metron Debug] Executing Fetch: ${url}`, 'debug');
-
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), config.timeout || 15000);
-
-                const response = await fetch(url, { method: 'GET', headers, signal: controller.signal });
-                clearTimeout(timeoutId);
-
-                const remaining = parseInt(response.headers.get('x-ratelimit-burst-remaining') || '20', 10);
-                Logger.log(`[Metron Debug] Rate Limit Status -> Burst Remaining: ${remaining}`, 'debug');
-
-                if (remaining <= 2) {
-                    const reset = parseInt(response.headers.get('x-ratelimit-burst-reset') || '0', 10);
-                    if (reset > 0) {
-                        const sleepMs = Math.max(0, (reset * 1000) - Date.now()) + 500;
-                        if (sleepMs > 0) await new Promise(r => setTimeout(r, sleepMs));
-                    }
-                }
-
-                if (response.status === 429) {
-                    const retryAfter = parseInt(response.headers.get('retry-after') || '60', 10);
-                    
-                    // --- NEW: Circuit Breaker for Severe Bans ---
-                    if (retryAfter > 60) {
-                        Logger.log(`[Metron] FATAL Rate Limit Hit. IP blocked for ${retryAfter}s.`, 'error');
-                        throw new Error("FATAL_RATE_LIMIT");
-                    }
-                    
-                    Logger.log(`[Metron] Rate Limit Hit. Waiting ${retryAfter}s before retrying...`, 'warn');
-                    await new Promise(resolve => setTimeout(resolve, (retryAfter + 1) * 1000));
-                    continue; 
-                }
-
-                const isValid = (response.status >= 200 && response.status < 300) || response.status === 304 || response.status === 404;
-                if (!isValid) throw new Error(`HTTP Error: ${response.status}`);
-
-                let data = {};
-                if (response.status !== 204 && response.status !== 304) {
-                    try {
-                        data = await response.json();
-                    } catch(e) {
-                        Logger.log(`[Metron Debug] Failed to parse JSON response from ${url}`, 'error');
-                    }
-                }
-
-                if (!conditional && response.status === 200 && data && Object.keys(data).length > 0) {
-                    await putCachedResponse('metron', url, data);
-                }
-                return { status: response.status, data, cached: false };
-
-            } catch (error: any) {
-                Logger.log(`[Metron Debug] Fetch Attempt ${attempt + 1} Failed: ${error.message}`, 'debug');
-                if (attempt === maxRetries - 1) throw error;
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-        }
-        throw new Error('Max retries reached');
+    private async firstIssueCover(seriesId: string | number): Promise<string | null> {
+        return (await this.tryFirstIssueCover(seriesId)) ?? null;
     }
 
-    async searchSeries(query: string, page: number = 1): Promise<MetadataSeries[]> {
-        const auth = await this.getAuth();
-        if (!auth) return [];
-        
-        const metronPage = Math.floor((page - 1) / 5) + 1;
-        const startIndex = ((page - 1) % 5) * 10;
-        const endIndex = startIndex + 10;
+    /** One series' cover, for a result someone is about to look at (see /api/search/cover). */
+    async seriesCover(seriesId: string): Promise<string | null> {
+        if (!(await getMetronAuth())) return null;
+        return this.firstIssueCover(seriesId);
+    }
 
-        const res = await this.fetchWithBackoff(`${this.baseUrl}/series/?name=${encodeURIComponent(query)}&page=${metronPage}`, { headers: this.requestHeaders, auth, timeout: 10000 });
-        if (!res.cached) await logApiUsage('metron', '/series');
-        
+    /**
+     * Series search, ten results per page. `covers` fetches a first-issue cover per result - one
+     * Metron request each - so only a search someone is looking at asks for them (Metron beta 4).
+     */
+    async searchSeries(query: string, page: number = 1, opts: SearchSeriesOptions = {}): Promise<MetadataSeries[]> {
+        if (!(await getMetronAuth())) return [];
+
+        // Metron pages hold 100 results (checked 2026-09-30; this assumed 50, so results 51-100 of
+        // every page were unreachable): ten of our pages per Metron page.
+        const perMetronPage = METRON_PAGE_SIZE / UI_PAGE_SIZE;
+        const metronPage = Math.floor((page - 1) / perMetronPage) + 1;
+        const startIndex = ((page - 1) % perMetronPage) * UI_PAGE_SIZE;
+        const endIndex = startIndex + UI_PAGE_SIZE;
+
+        const res = await this.get(`${this.baseUrl}/series/?name=${encodeURIComponent(query)}&page=${metronPage}`, { timeoutMs: 10000 });
+
         const rawList = res.data?.results || [];
         Logger.log(`[Metron Debug] Search returning ${rawList.length} total items. Slicing indexes ${startIndex} to ${endIndex}.`, 'debug');
-        
+
         const seriesList = rawList.slice(startIndex, endIndex);
         const mapped: MetadataSeries[] = [];
-        let rateLimitHit = false;
 
         for (let i = 0; i < seriesList.length; i++) {
             const series = seriesList[i];
-            let coverUrl = null; 
-            
+
             let realPublisher = "Unknown";
             if (series.publisher) {
                 realPublisher = typeof series.publisher === 'string' ? series.publisher : (series.publisher.name || "Unknown");
             }
-            
-            if (!rateLimitHit) { 
-                try {
-                    const issueRes = await this.fetchWithBackoff(`${this.baseUrl}/series/${series.id}/issue_list/`, { headers: this.requestHeaders, auth, timeout: 3000 }, 1);
-                    if (issueRes.data?.results?.length > 0) coverUrl = issueRes.data.results[0].image || null;
-                } catch(e: any) {
-                    // fetchWithBackoff throws 'FATAL_RATE_LIMIT' (or 'HTTP Error: 429'), never 'RATE_LIMIT' —
-                    // the old check never tripped, leaving this per-page cover circuit-breaker dead.
-                    if (e.message === 'FATAL_RATE_LIMIT' || (e.message || '').includes('429')) rateLimitHit = true;
-                }
-            }
+
+            // Covers are optional: skipped the moment Metron's burst window has no free slot, so a
+            // search page never waits on them (the page is then left uncached - see /api/search).
+            const cover = opts.covers ? await this.tryFirstIssueCover(series.id) : null;
 
             mapped.push({
                 sourceId: series.id.toString(),
@@ -170,7 +117,8 @@ export class MetronProvider implements IMetadataProvider {
                 publisher: realPublisher,
                 universe: series.universe?.name || null,
                 description: series.desc || null,
-                coverUrl: coverUrl,
+                coverUrl: cover ?? null,
+                ...(cover === undefined ? { coverPending: true } : {}),
                 status: series.status?.name === 'Ended' ? 'Ended' : 'Ongoing',
                 issueCount: series.issue_count || 0
             });
@@ -179,20 +127,15 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async getSeriesByCvId(cvId: string): Promise<MetadataSeries | null> {
-        const auth = await this.getAuth();
-        if (!auth) return null;
-        
-        const res = await this.fetchWithBackoff(`${this.baseUrl}/series/?cv_id=${cvId}`, { headers: this.requestHeaders, auth, timeout: 10000 });
+        if (!(await getMetronAuth())) return null;
+
+        const res = await this.get(`${this.baseUrl}/series/?cv_id=${cvId}`, { timeoutMs: 10000 });
         if (res.status === 404) return null;
-        
+
         const results = res.data?.results || [];
         if (results.length > 0) {
             const series = results[0];
-            let coverUrl = null;
-            try {
-                const issueRes = await this.fetchWithBackoff(`${this.baseUrl}/series/${series.id}/issue_list/`, { headers: this.requestHeaders, auth, timeout: 5000 }, 1);
-                if (issueRes.data?.results?.length > 0) coverUrl = issueRes.data.results[0].image || null;
-            } catch(e) {}
+            const coverUrl = await this.firstIssueCover(series.id);
 
             return {
                 sourceId: series.id.toString(),
@@ -210,18 +153,14 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async getSeriesDetails(id: string, lastModified?: Date): Promise<MetadataSeries | null> {
-        const auth = await this.getAuth();
-        const headers: any = { ...this.requestHeaders };
-        if (lastModified) headers['If-Modified-Since'] = lastModified.toUTCString();
-
         let targetEndpoint = `${this.baseUrl}/series/${id}/`;
-        
+
         // FIX: If the ID is a slug (Not a Number), we MUST use the query endpoint to resolve it
         if (isNaN(Number(id))) {
             targetEndpoint = `${this.baseUrl}/series/?name=${encodeURIComponent(id)}`;
         }
 
-        const res = await this.fetchWithBackoff(targetEndpoint, { headers, auth, timeout: 10000 });
+        const res = await this.get(targetEndpoint, { timeoutMs: 10000, ifModifiedSince: lastModified?.toUTCString() });
         if (res.status === 304) return null;
         if (res.status === 404) throw new Error(`Series ${id} not found on Metron.`);
 
@@ -233,15 +172,9 @@ export class MetronProvider implements IMetadataProvider {
             series = res.data.results[0];
         }
 
-        if (!res.cached) await logApiUsage('metron', `/series/${series.id}`);
         Logger.log(`[Metron Debug] Raw Series Details Payload: ${JSON.stringify(series).substring(0, 150)}...`, 'debug');
 
-        let coverUrl = null;
-
-        try {
-            const issueRes = await this.fetchWithBackoff(`${this.baseUrl}/series/${series.id}/issue_list/`, { headers: this.requestHeaders, auth, timeout: 5000 }, 1);
-            if (issueRes.data?.results?.length > 0) coverUrl = issueRes.data.results[0].image || null;
-        } catch(e) {}
+        const coverUrl = await this.firstIssueCover(series.id);
 
         return {
             sourceId: series.id.toString(),
@@ -258,19 +191,15 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async getSeriesIssues(id: string): Promise<MetadataIssue[]> {
-        const auth = await this.getAuth();
         let allIssues: any[] = [];
         let nextUrl: string | null = `${this.baseUrl}/series/${id}/issue_list/`;
-        let callsMade = 0;
 
+        // Pages are walked one after another (Metron's best practices: sequential, never in parallel).
         while (nextUrl) {
-            const res = await this.fetchWithBackoff(nextUrl, { headers: this.requestHeaders, auth, timeout: 15000 });
-            if (!res.cached) callsMade++;
+            const res: MetronResponse = await this.get(nextUrl, { timeoutMs: 15000 });
             allIssues = allIssues.concat(res.data?.results || []);
             nextUrl = res.data?.next || null;
         }
-
-        if (callsMade > 0) await logApiUsage('metron', '/issue', callsMade);
 
         return allIssues.map((issue: any) => {
             const seriesName = typeof issue.series === 'string' ? issue.series : (issue.series?.name || '');
@@ -298,10 +227,8 @@ export class MetronProvider implements IMetadataProvider {
     }
 
     async getIssueDetails(id: string): Promise<MetadataIssue> {
-        const auth = await this.getAuth();
-        const res = await this.fetchWithBackoff(`${this.baseUrl}/issue/${id}/`, { headers: this.requestHeaders, auth, timeout: 10000 });
-
-        if (!res.cached) await logApiUsage('metron', `/issue/${id}`);
+        const res = await this.get(`${this.baseUrl}/issue/${id}/`, { timeoutMs: 10000 });
+        if (res.status === 404) throw new MetronHttpError(404, `Issue ${id} not found on Metron.`);
         const issue = res.data;
         Logger.log(`[Metron Debug] Raw Issue Details Payload: ${JSON.stringify(issue).substring(0, 150)}...`, 'debug');
         
@@ -343,8 +270,8 @@ export class MetronProvider implements IMetadataProvider {
         if ((!parsedSeriesId || isNaN(parsedSeriesId)) && seriesName) {
             try {
                 const cleanName = seriesName.replace(/\(\d{4}\)/g, '').trim();
-                const searchRes = await this.fetchWithBackoff(`${this.baseUrl}/series/?name=${encodeURIComponent(cleanName)}`, { headers: this.requestHeaders, auth, timeout: 5000 }, 1);
-                
+                const searchRes = await metronGet(`${this.baseUrl}/series/?name=${encodeURIComponent(cleanName)}`, { pace: this.pace, optional: true, maxAttempts: 1, timeoutMs: 5000 });
+
                 if (searchRes.data?.results?.length > 0) {
                     const exact = searchRes.data.results.find((s: any) => (s.name || s.series)?.toLowerCase() === cleanName.toLowerCase());
                     if (exact) {

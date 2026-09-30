@@ -9,6 +9,7 @@ import { Mailer } from '@/lib/mailer';
 import { testAnnasArchiveKey } from '@/lib/annas-test';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { authFromSettings, metronGet } from '@/lib/metron/client';
 
 export async function POST(request: Request) {
   let type = 'unknown';
@@ -421,16 +422,18 @@ export async function POST(request: Request) {
 
     // --- METRON.CLOUD ---
     if (type === 'metron') {
-      const user = config.metron_user;
-      const pass = await getRealValue('metron_pass', config.metron_pass);
+      // The values on the form (a masked field falls back to the saved one): an API token wins, else
+      // username + password - the same rule every Metron request uses.
+      const auth = authFromSettings(
+        await getRealValue('metron_api_token', config.metron_api_token ?? ''),
+        config.metron_user,
+        await getRealValue('metron_pass', config.metron_pass ?? '')
+      );
+      if (!auth) return NextResponse.json({ success: false, message: 'Missing API token, or Username and Password' });
 
-      if (!user || !pass) return NextResponse.json({ success: false, message: 'Missing Username or Password' });
-      
-      await axios.get(`https://metron.cloud/api/series/`, {
-        headers, // <-- FIX: Injected headers (includes 'User-Agent': 'Omnibus/1.0')
-        auth: { username: user, password: pass },
-        timeout: 10000
-      });
+      // Through the shared Metron client: only Metron's own headers go to metron.cloud (never the
+      // admin's custom headers), one attempt, uncached - a test must reach the server.
+      await metronGet('https://metron.cloud/api/series/', { auth, pace: 'interactive', cache: false, maxAttempts: 1, timeoutMs: 10000 });
       return NextResponse.json({ success: true, message: 'Metron.Cloud Connected!' });
     }
 
@@ -441,7 +444,7 @@ export async function POST(request: Request) {
     // --- UPDATED: Include the test type in the terminal output ---
     Logger.log(`[Test API] ${type.toUpperCase()} Test Error: ${msg}`, 'error');
     
-    if ((error as any)?.response?.status === 401 && type === 'metron') {
+    if (type === 'metron' && ((error as any)?.status === 401 || (error as any)?.response?.status === 401)) {
         return NextResponse.json({ success: false, message: "Invalid Metron.Cloud credentials.", code: "UNAUTHORIZED" });
     }
     return NextResponse.json({ success: false, message: msg, code: "CONNECTION_ERROR" });

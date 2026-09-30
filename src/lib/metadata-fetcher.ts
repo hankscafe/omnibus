@@ -9,6 +9,8 @@ import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
 import { markSystemFlag, countApiUsage } from './utils/system-flags';
+import { metronOptionalBudgetExhausted } from '@/lib/metron/client';
+import { metronCreditCandidatesWhere, metronDetailCreditsEnabled } from '@/lib/metron/credit-candidates';
 import { cachedCvGet } from './metadata/metadata-cache';
 import { isSameIssue } from '@/lib/utils/issue-parser';
 import { resolveSyncedName, detailNameWrite } from '@/lib/utils/synced-name';
@@ -45,7 +47,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
     if (metadataSource === 'METRON') {
         try {
-            const metron = new MetronProvider();
+            const metron = new MetronProvider({ pace: 'background' });
             const details = await metron.getSeriesDetails(metadataId);
             
             if (!details) {
@@ -219,26 +221,15 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
 
             // Per-issue title + credit enrichment: the issue_list carries no credits and no story
-            // titles, so each not-yet-deep-synced issue costs one /issue/{id}/ detail call. Budgeted
-            // against Metron's 5,000/day window with a reserve — leftovers stay non-DEEP_SYNCED and
-            // resume on the next sync. Engine parity: metadata.rs metron_detail_credit_pass. Runs
-            // before the EMBED_METADATA queue below so the fetched values reach the archives too.
-            // #199 round 3: no metron_detail_credits gate here — every Node caller is a targeted
-            // match-time sync (match/request/import; the scheduled sweep is engine-only), and the
-            // matcher's contract is that a corrected issue ID brings the issue's real title and
-            // credits on its own. The opt-in still governs the engine's scheduled sweep.
-            {
-                // Locked (hasCustomMetadata) issues are excluded outright: the merge policy would
-                // keep every existing column anyway, so the detail call would be a pure quota burn.
-                const candidates = await prisma.issue.findMany({
-                    where: {
-                        seriesId: series.id,
-                        metadataSource: 'METRON',
-                        metadataId: { not: null },
-                        matchState: { not: 'DEEP_SYNCED' },
-                        hasCustomMetadata: false
-                    }
-                });
+            // titles, so each issue costs one /issue/{id}/ detail call. Budgeted against the account's
+            // daily Metron window with a reserve — leftovers stay non-DEEP_SYNCED and resume on the next
+            // sync. Engine parity: metadata.rs metron_detail_credit_pass. Runs before the EMBED_METADATA
+            // queue below so the fetched values reach the archives too. Metron beta 4: only with the
+            // "per-issue credits" setting on (this request-time sync used to run it every time - #199
+            // round 3), and only for issues on disk (metronCreditCandidatesWhere); a new request's
+            // missing issues get their details when they're downloaded or opened.
+            if (await metronDetailCreditsEnabled()) {
+                const candidates = await prisma.issue.findMany({ where: metronCreditCandidatesWhere(series.id) });
                 // Never-wipe merge (issue #179): undefined = leave the column untouched. An empty
                 // provider list never overwrites; file_metadata_priority only fills blanks.
                 const mergeCredits = (existing: string | null, fetched: string[] | undefined): string | undefined => {
@@ -248,9 +239,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 };
                 let enriched = 0;
                 for (const candidate of candidates) {
-                    const used = await countApiUsage('metron');
-                    if (used + 500 >= 5000) {
-                        Logger.log(`[Metadata] Metron daily budget reached (${used} calls) — deferring credit enrichment for ${candidates.length - enriched} issue(s) of "${series.name}" to the next sync.`, 'info');
+                    // The account's real daily window (Metron's Sustained headers - the limit varies by
+                    // donor tier), keeping a reserve for normal syncing; our own count only as a fallback.
+                    if (await metronOptionalBudgetExhausted(await countApiUsage('metron'))) {
+                        Logger.log(`[Metadata] Metron daily budget nearly used — deferring credit enrichment for ${candidates.length - enriched} issue(s) of "${series.name}" to the next sync.`, 'info');
                         break;
                     }
                     try {
@@ -277,7 +269,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                         });
                         enriched++;
                     } catch (e: any) {
-                        if (e.response?.status === 404) {
+                        if (e.status === 404 || e.response?.status === 404) {
                             // Gone from Metron — promote anyway so we never re-pay for the lookup.
                             await prisma.issue.update({ where: { id: candidate.id }, data: { matchState: 'DEEP_SYNCED' } }).catch(() => {});
                             continue;

@@ -35,6 +35,8 @@ import { FolderCollisionDialog, type FolderCollision, type CollisionResolution }
 import { CoverageField } from "@/components/coverage-field"
 import { CoveredIssuesSection } from "@/components/covered-issues-section"
 import { requestNameFor } from "@/lib/utils/request-name"
+import { hasMetronCredentials } from "@/lib/metron/credentials"
+import { RefreshMetadataButton } from "@/components/refresh-metadata-button"
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -107,7 +109,6 @@ function SeriesContent() {
   const [metronConfigured, setMetronConfigured] = useState(false);
   
   const [copied, setCopied] = useState(false);
-  const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
   const [isScanningDirectory, setIsScanningDirectory] = useState(false);
 
   const [matchModalOpen, setMatchModalOpen] = useState(false);
@@ -268,11 +269,7 @@ function SeriesContent() {
         fetch('/api/admin/config')
             .then(res => res.ok ? res.json() : null)
             .then(data => {
-                if (data?.settings) {
-                    const mUser = data.settings.find((s: any) => s.key === 'metron_user')?.value;
-                    const mPass = data.settings.find((s: any) => s.key === 'metron_pass')?.value;
-                    if (mUser && mPass) setMetronConfigured(true);
-                }
+                if (data?.settings && hasMetronCredentials(data.settings)) setMetronConfigured(true);
             })
             .catch(() => {});
     }
@@ -555,32 +552,6 @@ function SeriesContent() {
       setIsMoving(false);
     }
   };
-
-  const handleRefreshMetadata = async () => {
-    if (!seriesInfo.metadataId && !seriesInfo.cvId) return;
-    setIsRefreshingMetadata(true);
-    toast({ title: "Sync Queued", description: "Metadata is being refreshed in the background." });
-    
-    try {
-        const targetId = seriesInfo.metadataId || seriesInfo.cvId?.toString();
-        const res = await fetch('/api/library/refresh-metadata', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ metadataId: targetId, metadataSource: seriesInfo.metadataSource || 'COMICVINE', folderPath: folderPath })
-        });
-        
-        if (res.ok) {
-            toast({ title: "Task Queued", description: "You will receive a notification when the sync is complete." });
-        } else {
-            const err = await res.json();
-            toast({ title: "Refresh Failed", description: err.error, variant: "destructive" });
-        }
-    } catch (e: any) {
-        toast({ title: "Error", description: e.message, variant: "destructive" });
-    } finally {
-        setIsRefreshingMetadata(false);
-    }
-  }
 
   const handleRequestMissing = async (issue: any) => {
         if (!canRequest) {
@@ -1431,16 +1402,13 @@ function SeriesContent() {
         </Link>
       </Button>
                         
-                        {isAdmin && (
-                            <Button 
-                                variant="secondary" 
-                                className="w-full transition-all shadow-sm active:scale-95 border-border hover:bg-muted text-foreground font-bold" 
-                                disabled={isRefreshingMetadata} 
-                                onClick={handleRefreshMetadata}
-                            >
-                                {isRefreshingMetadata ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                                Refresh Metadata
-                            </Button>
+                        {/* Asks before fetching per-issue Metron credits while that setting is off (Metron beta 4). */}
+                        {isAdmin && (seriesInfo.metadataId || seriesInfo.cvId) && (
+                            <RefreshMetadataButton
+                                metadataId={seriesInfo.metadataId || seriesInfo.cvId?.toString() || ''}
+                                metadataSource={seriesInfo.metadataSource || 'COMICVINE'}
+                                folderPath={folderPath}
+                            />
                         )}
 
                         {isAdmin && (

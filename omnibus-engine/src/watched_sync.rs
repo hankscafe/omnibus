@@ -560,7 +560,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
         let series_list: Vec<String> = synced_series_ids.into_iter().collect();
         let db_clone = db.clone();
         tokio::spawn(async move {
-            let _ = crate::metadata::sync_metadata(db_clone, Some(series_list)).await;
+            // An automatic import never asks for per-issue Metron credits: the setting decides.
+            let _ = crate::metadata::sync_metadata(db_clone, Some(series_list), false).await;
         });
     }
 

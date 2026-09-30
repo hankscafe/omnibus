@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { RECOMMENDED_PUBLISHERS, RECOMMENDED_KEYWORDS } from "@/lib/filter-defaults"
+import { hasMetronCredentials } from "@/lib/metron/credentials"
 
 const DISCORD_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
@@ -73,7 +74,7 @@ export default function SetupWizard() {
   // --- THE FIX: Change default from "7030, 8030" to strictly "7030" ---
   const [formData, setFormData] = useState({
     username: '', email: '', password: '', confirmPassword: '',
-    cv_api_key: '', metron_user: '', metron_pass: '',
+    cv_api_key: '', metron_api_token: '', metron_user: '', metron_pass: '',
     download_path: '',
     prowlarr_url: '', prowlarr_key: '', prowlarr_categories: '7030',
     flaresolverr_url: '',
@@ -426,6 +427,7 @@ export default function SetupWizard() {
       const finalPayload = {
           settings: {
               cv_api_key: formData.cv_api_key,
+              metron_api_token: formData.metron_api_token,
               metron_user: formData.metron_user,
               metron_pass: formData.metron_pass,
               download_path: formData.download_path,
@@ -630,6 +632,11 @@ export default function SetupWizard() {
                     <div className="space-y-4 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border dark:border-slate-800">
                         <h3 className="text-sm font-bold text-foreground flex items-center gap-2 border-b border-border pb-2 uppercase tracking-widest text-muted-foreground">Metron.Cloud (Optional)</h3>
                         <p className="text-[11px] text-muted-foreground">Metron is an open-source alternative to ComicVine.</p>
+                        <div className="grid gap-2">
+                            <Label htmlFor="setup_metron_api_token">API Token</Label>
+                            <Input id="setup_metron_api_token" type="password" value={formData.metron_api_token} onChange={e => updateForm('metron_api_token', e.target.value)} className="h-12 bg-white dark:bg-slate-900"/>
+                            <p className="text-[11px] text-muted-foreground">Create one on <a href="https://metron.cloud/" target="_blank" rel="noreferrer" className="underline text-primary">metron.cloud</a> under Profile → API Tokens. Metron is retiring username and password sign-in for its API, so a token is the way to connect; the username and password below are only needed without one.</p>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="grid gap-2">
                                 <Label>Username</Label>
@@ -640,7 +647,7 @@ export default function SetupWizard() {
                                 <Input type="password" value={formData.metron_pass} onChange={e => updateForm('metron_pass', e.target.value)} className="h-12 bg-white dark:bg-slate-900"/>
                             </div>
                         </div>
-                        <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('metron')}`} disabled={!formData.metron_user || !formData.metron_pass || isTesting === 'metron'} onClick={() => handleTestConnection('metron', { metron_user: formData.metron_user, metron_pass: formData.metron_pass }, 'metron')}>
+                        <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('metron')}`} disabled={!hasMetronCredentials({ metron_api_token: formData.metron_api_token, metron_user: formData.metron_user, metron_pass: formData.metron_pass }) || isTesting === 'metron'} onClick={() => handleTestConnection('metron', { metron_api_token: formData.metron_api_token, metron_user: formData.metron_user, metron_pass: formData.metron_pass }, 'metron')}>
                             {isTesting === 'metron' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['metron'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
                             {testStates['metron'] === 'success' ? "Connection Verified!" : "Test Connection"}
                         </Button>

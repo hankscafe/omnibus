@@ -23,6 +23,8 @@ vi.mock('@/lib/db', () => ({
         apiKey: { findUnique: mocks.findUniqueApi, update: mocks.updateApi },
         koreaderSync: { upsert: mocks.koreaderUpsert },
         issue: { findMany: mocks.findManyIssue },
+        // No served-document IDs recorded: these syncs bind through metadata.filename.
+        koreaderDocument: { findMany: async () => [] },
         readProgress: { upsert: mocks.readProgressUpsert, findUnique: mocks.readProgressFindUnique },
         dailyReadingStat: { upsert: mocks.upsertDailyStat },
         dailyIssueRead: { upsert: mocks.upsertDailyIssueRead }

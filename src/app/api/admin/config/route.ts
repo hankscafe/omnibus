@@ -12,18 +12,14 @@ import { encryptSecret, decryptSecret } from '@/lib/encryption';
 import { SECRET_SETTING_KEYS } from '@/lib/secret-keys';
 import { testAnnasArchiveKey } from '@/lib/annas-test';
 
-const SENSITIVE_KEYS = [
-    'cv_api_key', 
-    'prowlarr_key', 
-    'oidc_client_secret', 
-    'discord_webhooks', 
-    'omnibus_api_key',  
-    'smtp_pass',
-    'metron_pass',
-    'pushover_token',
-    'telegram_bot_token',
-    'apprise_url' // <-- ADDED: Masks basic auth inside Apprise URLs
-];
+// Masked on the way out: every credential stored encrypted (apprise_url included - it can carry basic
+// auth), plus two that aren't encrypted but still mustn't reach the browser. Derived from
+// SECRET_SETTING_KEYS so a new secret can't be encrypted yet shown in the clear.
+const SENSITIVE_KEYS = new Set<string>([
+    ...SECRET_SETTING_KEYS,
+    'discord_webhooks',
+    'omnibus_api_key',
+]);
 
 export async function GET(request: Request) {
   const authOptions = await getAuthOptions();
@@ -36,7 +32,7 @@ export async function GET(request: Request) {
   // 1. Fetch flat settings and securely obfuscate tokens
   const rawSettings = await prisma.systemSetting.findMany();
   const settings = rawSettings.map(s => {
-      if (SENSITIVE_KEYS.includes(s.key) && s.value) {
+      if (SENSITIVE_KEYS.has(s.key) && s.value) {
           return { ...s, value: '********' };
       }
       return s;

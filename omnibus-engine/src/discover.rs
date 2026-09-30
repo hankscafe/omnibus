@@ -388,29 +388,28 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
     let filter_enabled = cfg.filter_enabled;
     let manga_filter_mode = cfg.manga_filter_mode.clone();
 
-    let client = Client::builder().user_agent("Omnibus/1.0").build()?;
+    let client = Client::builder().user_agent(crate::metron_client::user_agent()).build()?;
 
     let (new_releases, popular): (Vec<Value>, Vec<Value>) = if primary_source == "METRON" {
-        let metron_user = config.get("metron_user").cloned().unwrap_or_default();
-        let metron_pass = crate::secret_crypto::decrypt_str(&db.pool, config.get("metron_pass").map(|s| s.as_str()).unwrap_or("")).await;
-        if metron_user.is_empty() || metron_pass.is_empty() {
+        let Some(auth) = crate::metron_client::load_auth(&db.pool).await else {
             anyhow::bail!("Metron credentials missing for Discover Sync");
-        }
+        };
 
         let thirty_days_ago = (chrono::Utc::now().date_naive() - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
         let mut next_url: Option<String> = Some(format!("https://metron.cloud/api/issue/?store_date_range_after={}", thirty_days_ago));
         let mut releases: Vec<Value> = Vec::new();
         let mut series_name_cache: HashMap<String, i64> = HashMap::new();
 
+        // Every request goes through the shared Metron client, which paces from Metron's rate-limit
+        // headers — no fixed sleeps here.
         while let Some(url) = next_url.clone() {
             if releases.len() >= 50 { break; }
-            let res: Value = client.get(&url)
-                .basic_auth(&metron_user, Some(&metron_pass))
-                .header("User-Agent", "Omnibus/1.0")
-                .send().await?
-                .error_for_status()?
-                .json().await?;
-            crate::api_usage::log(&db.pool, "metron", &url).await;
+            let mut list_req = crate::metron_client::MetronRequest::new(&url);
+            list_req.use_cache = false;
+            let res = match crate::metron_client::metron_get(&db, &client, &auth, list_req).await? {
+                (200, body) => body,
+                (status, _) => anyhow::bail!("Metron returned HTTP {} for the Discover list", status),
+            };
 
             for item in res.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
                 // Series id: prefer the nested object / series_id field.
@@ -436,43 +435,32 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
                             parsed_series_id = if *cached == 0 { None } else { Some(*cached) };
                         } else {
                             let search_url = format!("https://metron.cloud/api/series/?name={}", urlencoding::encode(&clean_name));
-                            // validateStatus:()=>true in Node → don't error on non-2xx; inspect the status.
-                            if let Ok(sr) = client.get(&search_url)
-                                .basic_auth(&metron_user, Some(&metron_pass))
-                                .header("User-Agent", "Omnibus/1.0")
-                                .send().await
-                            {
-                                crate::api_usage::log(&db.pool, "metron", &search_url).await;
-                                let status = sr.status();
-                                if status.as_u16() == 429 {
-                                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                                } else if status.is_success() {
-                                    if let Ok(sd) = sr.json::<Value>().await {
-                                        let results = sd.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                                        if !results.is_empty() {
-                                            let exact = results.iter().find(|s| {
-                                                let n = s.get("name").or_else(|| s.get("series")).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-                                                n == clean_name.to_lowercase()
-                                            });
-                                            let chosen = exact.or_else(|| results.first());
-                                            if let Some(c) = chosen {
-                                                let id = c.get("id").and_then(|v| v.as_i64())
-                                                    .or_else(|| c.get("id").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()));
-                                                if let Some(idv) = id {
-                                                    parsed_series_id = Some(idv);
-                                                    series_name_cache.insert(clean_name.clone(), idv);
-                                                }
+                            match crate::metron_client::metron_get(&db, &client, &auth, crate::metron_client::MetronRequest::new(&search_url)).await {
+                                Ok((200, sd)) => {
+                                    let results = sd.get("results").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                                    if !results.is_empty() {
+                                        let exact = results.iter().find(|s| {
+                                            let n = s.get("name").or_else(|| s.get("series")).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                                            n == clean_name.to_lowercase()
+                                        });
+                                        let chosen = exact.or_else(|| results.first());
+                                        if let Some(c) = chosen {
+                                            let id = c.get("id").and_then(|v| v.as_i64())
+                                                .or_else(|| c.get("id").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()));
+                                            if let Some(idv) = id {
+                                                parsed_series_id = Some(idv);
+                                                series_name_cache.insert(clean_name.clone(), idv);
                                             }
-                                        } else {
-                                            // Cache the miss so we don't re-query a bad name.
-                                            series_name_cache.insert(clean_name.clone(), 0);
                                         }
+                                    } else {
+                                        // Cache the miss so we don't re-query a bad name.
+                                        series_name_cache.insert(clean_name.clone(), 0);
                                     }
-                                } else {
-                                    series_name_cache.insert(clean_name.clone(), 0);
                                 }
+                                // Metron has blocked us (a long 429, or the daily limit): stop the run.
+                                Err(e) if e.to_string().contains("FATAL_RATE_LIMIT") => return Err(e),
+                                _ => { series_name_cache.insert(clean_name.clone(), 0); }
                             }
-                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                         }
                     }
                 }
@@ -516,7 +504,6 @@ pub async fn run_discover_sync(db: Db) -> Result<(i32, String)> {
             }
 
             next_url = res.get("next").and_then(|v| v.as_str()).map(|s| s.to_string());
-            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         }
 
         (releases, Vec::new())

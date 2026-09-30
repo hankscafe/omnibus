@@ -24,6 +24,7 @@ import { getErrorMessage } from "@/lib/utils/error"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
 import { ManualUploadDialog } from "@/components/manual-upload-dialog"
+import { MetronLimitsRow } from "@/components/metron-limits-row"
 
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
@@ -1189,6 +1190,8 @@ const mappedRequests = requests.map(req => {
                 <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
             ) : (
                 healthData.checks.map((check: any) => {
+                    // Metron's limits get their own row: tier, daily and per-minute windows, live countdowns.
+                    if (check.id === 'metron_limit') return <MetronLimitsRow key={check.id} check={check} />;
                     const isUpdateAvailable = check.id === 'system_update' && check.status === 'warning';
                     return (
                     <div key={check.id} className={`flex items-start gap-3 p-3 rounded-lg border ${isUpdateAvailable ? 'border-primary/50 bg-primary/10 shadow-sm' : 'border-border bg-muted/30'}`}>

@@ -121,17 +121,14 @@ export async function parseComicInfo(filePath: string) {
                 metronId = volumeResolutionCache.get(metronCacheKey)!.cvId as number;
             } else {
                 try {
-                    const { prisma } = await import('@/lib/db');
-                    const metronUser = await prisma.systemSetting.findUnique({ where: { key: 'metron_user' } });
-                    const metronPass = await prisma.systemSetting.findUnique({ where: { key: 'metron_pass' } });
-                    
-                    if (metronUser?.value && metronPass?.value) {
-                        const { apiClient } = await import('@/lib/api-client');
-                        const auth = { username: metronUser.value, password: metronPass.value };
-                        
-                        // Query Metron using the clean Series Name from the XML
-                        const metronRes = await apiClient.get(`https://metron.cloud/api/series/?name=${encodeURIComponent(seriesName)}`, { auth });
-                        
+                    const { getMetronAuth, metronGet } = await import('@/lib/metron/client');
+                    const auth = await getMetronAuth();
+
+                    if (auth) {
+                        // Query Metron using the clean Series Name from the XML (through the shared
+                        // client: pacing from Metron's rate-limit headers, 429s honoured, counted).
+                        const metronRes = await metronGet(`https://metron.cloud/api/series/?name=${encodeURIComponent(seriesName)}`, { auth, pace: 'background' });
+
                         if (metronRes.data?.results?.length > 0) {
                             // Look for an exact match on BOTH the Name and the Year
                             const exactMatch = metronRes.data.results.find((s: any) => {

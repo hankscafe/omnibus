@@ -342,9 +342,9 @@ async fn cv_search_best(db: &Db, client: &reqwest::Client, api_key: &str, name: 
         None => {
             let resp = client.execute(req).await?;
             crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/search/").await;
-            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            if crate::metadata::is_cv_rate_limited(resp.status()) {
                 crate::metadata::mark_flag(db, "cv_rate_limit_time").await;
-                anyhow::bail!("ComicVine rate limited (429) on matcher search");
+                anyhow::bail!("ComicVine rate limited (429/420) on matcher search");
             }
             let j: serde_json::Value = resp.json().await?;
             crate::metadata_cache::put(db, "comicvine", &full_url, &j).await;

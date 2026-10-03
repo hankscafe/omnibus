@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { syncSeriesMetadata } from '@/lib/metadata-fetcher';
+import { syncSeriesMetadata, isCvRateLimited } from '@/lib/metadata-fetcher';
 import path from 'path';
 
 // 1. Hoist our mocks
@@ -355,5 +355,12 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
         expect(mocks.transaction).not.toHaveBeenCalled();
         expect(mocks.creditDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('isCvRateLimited treats ComicVine\'s 420 velocity block the same as a 429', () => {
+        expect(isCvRateLimited(429)).toBe(true);
+        expect(isCvRateLimited(420)).toBe(true);
+        expect(isCvRateLimited(200)).toBe(false);
+        expect(isCvRateLimited(undefined)).toBe(false);
     });
 });

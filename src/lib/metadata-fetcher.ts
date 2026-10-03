@@ -17,6 +17,13 @@ import { resolveSyncedName, detailNameWrite } from '@/lib/utils/synced-name';
 import { findLocalCoverBasename, providerCoverBlocked } from '@/lib/utils/cover-plan';
 import { CV_VOLUME_CREDIT_FIELDS, parseVolumeCredits, persistSeriesCredits } from '@/lib/utils/volume-credits';
 
+// ComicVine signals its velocity/burst block with HTTP 420 (not 429) -- a separate throttle from
+// the documented 200/hr quota that can trip even well under it. Engine parity: metadata.rs
+// is_cv_rate_limited.
+export function isCvRateLimited(status: number | undefined): boolean {
+    return status === 429 || status === 420;
+}
+
 // Providers rarely report when a series ends, so Omnibus guesses: no new issue
 // within the admin-configured window (months) = Ended. Returns null when the
 // guess is disabled (window of 0 / "Never").
@@ -325,7 +332,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             timeout: 15000
         });
     } catch (e: any) {
-        if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
+        if (isCvRateLimited(e.response?.status)) await markSystemFlag('cv_rate_limit_time');
         throw e;
     }
 
@@ -446,7 +453,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             });
             issuesCallsMade++;
         } catch (e: any) {
-            if (e.response?.status === 429) await markSystemFlag('cv_rate_limit_time');
+            if (isCvRateLimited(e.response?.status)) await markSystemFlag('cv_rate_limit_time');
             throw e;
         }
 

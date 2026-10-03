@@ -14,9 +14,9 @@
 
 use crate::db::Db;
 use crate::metadata::{
-    cv_issue_credits, is_same_issue, json_num_string, merge_credit_json, metron_auth, metron_fetch,
-    metron_issue_credits, metron_issue_name, next_match_state, parse_date_ms, prefer_existing,
-    resolve_synced_name,
+    cv_issue_credits, is_cv_rate_limited, is_same_issue, json_num_string, merge_credit_json,
+    metron_auth, metron_fetch, metron_issue_credits, metron_issue_name, next_match_state,
+    parse_date_ms, prefer_existing, resolve_synced_name,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -728,8 +728,8 @@ async fn fetch_comicvine_lane(db: &Db, client: &Client, volume_id: &str) -> anyh
         None => {
             let resp = client.execute(vol_req).await?;
             crate::api_usage::log(&db.pool, "comicvine", &vol_url).await;
-            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                anyhow::bail!("ComicVine rate limited (429) on the attached volume fetch");
+            if is_cv_rate_limited(resp.status()) {
+                anyhow::bail!("ComicVine rate limited (429/420) on the attached volume fetch");
             }
             let j: serde_json::Value = resp.json().await?;
             crate::metadata_cache::put(db, "comicvine", &vol_full_url, &j).await;
@@ -772,8 +772,8 @@ async fn fetch_comicvine_lane(db: &Db, client: &Client, volume_id: &str) -> anyh
             None => {
                 let resp = client.execute(req).await?;
                 crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
-                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    anyhow::bail!("ComicVine rate limited (429) on the attached issues fetch");
+                if is_cv_rate_limited(resp.status()) {
+                    anyhow::bail!("ComicVine rate limited (429/420) on the attached issues fetch");
                 }
                 let j: serde_json::Value = resp.json().await?;
                 crate::metadata_cache::put(db, "comicvine", &full_url, &j).await;

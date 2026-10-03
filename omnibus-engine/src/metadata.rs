@@ -173,9 +173,9 @@ async fn fetch_cv_volume(db: &Db, client: &Client, api_key: &str, metadata_id: &
         None => {
             let vol_resp = client.execute(vol_req).await?;
             crate::api_usage::log(&db.pool, "comicvine", &vol_url).await;
-            if vol_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            if is_cv_rate_limited(vol_resp.status()) {
                 mark_flag(db, "cv_rate_limit_time").await;
-                anyhow::bail!("ComicVine rate limited (429) on volume fetch");
+                anyhow::bail!("ComicVine rate limited (429/420) on volume fetch");
             }
             let j: serde_json::Value = vol_resp.json().await?;
             crate::metadata_cache::put(db, "comicvine", &vol_full_url, &j).await;
@@ -801,9 +801,9 @@ async fn fetch_comicvine(
             None => {
                 let issue_resp = client.execute(issue_req).await?;
                 crate::api_usage::log(&db.pool, "comicvine", "https://comicvine.gamespot.com/api/issues/").await;
-                if issue_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                if is_cv_rate_limited(issue_resp.status()) {
                     mark_flag(db, "cv_rate_limit_time").await;
-                    anyhow::bail!("ComicVine rate limited (429) on issues fetch");
+                    anyhow::bail!("ComicVine rate limited (429/420) on issues fetch");
                 }
                 let j: serde_json::Value = issue_resp.json().await?;
                 crate::metadata_cache::put(db, "comicvine", &issue_full_url, &j).await;
@@ -1919,6 +1919,15 @@ pub(crate) fn resolve_pair_target(
     PairTarget::Insert
 }
 
+/// ComicVine signals its velocity/burst block with HTTP 420 (not 429) -- a separate throttle from
+/// the documented 200/hr quota that can trip even well under it. Treating only 429 as a rate limit
+/// let a 420 fall through to a JSON-parse error at every one of these call sites, counted as a
+/// plain per-request failure instead of the rate-limit halt it actually is, and kept hammering the
+/// just-blocked API instead of backing off.
+pub(crate) fn is_cv_rate_limited(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 420
+}
+
 /// Match-state a sync upsert should write: an issue the view-time lazy enrichment already deep-
 /// fetched keeps DEEP_SYNCED (so it is never redundantly re-fetched); everything else lands on
 /// MATCHED as before (issue #179).
@@ -2141,6 +2150,13 @@ pub(crate) fn is_same_issue(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cv_velocity_block_420_counts_as_rate_limited() {
+        assert!(is_cv_rate_limited(reqwest::StatusCode::from_u16(420).unwrap()));
+        assert!(is_cv_rate_limited(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(!is_cv_rate_limited(reqwest::StatusCode::OK));
+    }
 
     // ==== Issue #194: two concurrent syncs of the same series interleave non-idempotent issue
     // upserts and can cross-pair rows — the in-flight claim makes the later trigger skip. ====

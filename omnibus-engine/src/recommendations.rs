@@ -342,9 +342,9 @@ async fn cv_get(db: &Db, client: &Client, api_key: &str, url: &str, query: &[(&s
     }
     let resp = client.execute(req).await?;
     crate::api_usage::log(&db.pool, "comicvine", url).await;
-    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+    if crate::metadata::is_cv_rate_limited(resp.status()) {
         crate::metadata::mark_flag(db, "cv_rate_limit_time").await;
-        anyhow::bail!("ComicVine rate limited (429) on {}", url);
+        anyhow::bail!("ComicVine rate limited (429/420) on {}", url);
     }
     let j: Value = resp.error_for_status()?.json().await?;
     crate::metadata_cache::put(db, "comicvine", &full, &j).await;

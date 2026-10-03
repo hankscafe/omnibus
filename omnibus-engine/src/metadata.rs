@@ -643,7 +643,7 @@ async fn fetch_comicvine(
     if let Some(arr) = vol_data["concepts"].as_array() {
         for c in arr {
             if let Some(n) = c["name"].as_str() {
-                if !n.is_empty() && !vol_genres.contains(&n.to_string()) {
+                if is_real_genre(n) && !vol_genres.contains(&n.to_string()) {
                     vol_genres.push(n.to_string());
                 }
             }
@@ -1919,6 +1919,20 @@ pub(crate) fn resolve_pair_target(
     PairTarget::Insert
 }
 
+/// ComicVine "concepts" are a free-form tag cloud ("Variant Cover: Action Figure", "Homage Covers",
+/// event and character-trait tags), not genres. Only a concept that is a recognised genre name is
+/// promoted to Series/Issue genres; everything else would pollute <Genre> in every embedded file.
+/// EXACT twin: src/lib/utils.ts isRealGenre.
+pub(crate) fn is_real_genre(name: &str) -> bool {
+    const GENRES: &[&str] = &[
+        "action", "adventure", "alternate history", "anthology", "biography", "comedy", "crime",
+        "cyberpunk", "drama", "espionage", "fantasy", "historical", "horror", "humor", "mystery",
+        "noir", "post-apocalyptic", "romance", "satire", "science fiction", "slice of life",
+        "sports", "superhero", "supernatural", "survival", "thriller", "war", "western", "zombies",
+    ];
+    GENRES.contains(&name.trim().to_ascii_lowercase().as_str())
+}
+
 /// Match-state a sync upsert should write: an issue the view-time lazy enrichment already deep-
 /// fetched keeps DEEP_SYNCED (so it is never redundantly re-fetched); everything else lands on
 /// MATCHED as before (issue #179).
@@ -2141,6 +2155,15 @@ pub(crate) fn is_same_issue(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_real_genre_rejects_cv_concept_noise() {
+        assert!(is_real_genre("Superhero"));
+        assert!(is_real_genre(" science fiction "));
+        assert!(!is_real_genre("Variant Cover: Action Figure"));
+        assert!(!is_real_genre("Homage Covers"));
+        assert!(!is_real_genre(""));
+    }
 
     // ==== Issue #194: two concurrent syncs of the same series interleave non-idempotent issue
     // upserts and can cross-pair rows — the in-flight claim makes the later trigger skip. ====

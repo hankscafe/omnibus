@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseComicVineCredits } from '../../src/lib/utils';
+import { parseComicVineCredits, isRealGenre } from '../../src/lib/utils';
 
 describe('Utility: ComicVine Credit Parser', () => {
     it('should parse and categorize a standard list of creators', () => {
@@ -61,5 +61,23 @@ describe('ComicVine Credit Parser: inker/editor/translator split (#199 Call-3 Be
         expect(result.translators).toEqual(['Anna Rossi']);
         expect(result.artists).toHaveLength(0);
         expect(result.writers).toHaveLength(0);
+    });
+
+    it('promotes only recognised genres from ComicVine concepts, not the whole tag cloud', () => {
+        // ComicVine's "concepts" mix real genres in with variant-cover/event/character-trait noise.
+        const concepts = [
+            { name: 'Superhero' }, { name: 'Variant Cover: Action Figure' },
+            { name: 'Homage Covers' }, { name: 'Science Fiction' },
+        ] as any;
+        const result = parseComicVineCredits(undefined, undefined, concepts);
+        expect(result.genres).toEqual(['Superhero', 'Science Fiction']);
+    });
+
+    it('isRealGenre is case/whitespace-insensitive and rejects concept noise', () => {
+        expect(isRealGenre('Superhero')).toBe(true);
+        expect(isRealGenre(' science fiction ')).toBe(true);
+        expect(isRealGenre('Variant Cover: Action Figure')).toBe(false);
+        expect(isRealGenre('Homage Covers')).toBe(false);
+        expect(isRealGenre('')).toBe(false);
     });
 });

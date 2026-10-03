@@ -20,6 +20,20 @@ export function isReleasedYet(storeDate: string | null, coverDate: string | null
   return true; // If CV has no date, assume it's out
 }
 
+// ComicVine "concepts" are a free-form tag cloud ("Variant Cover: Action Figure", "Homage Covers",
+// event and character-trait tags), not genres. Only a concept that is a recognised genre name is
+// promoted to a genre; everything else would pollute <Genre> in every embedded file.
+// EXACT twin: omnibus-engine/src/metadata.rs is_real_genre.
+const REAL_GENRES = new Set([
+  "action", "adventure", "alternate history", "anthology", "biography", "comedy", "crime",
+  "cyberpunk", "drama", "espionage", "fantasy", "historical", "horror", "humor", "mystery",
+  "noir", "post-apocalyptic", "romance", "satire", "science fiction", "slice of life",
+  "sports", "superhero", "supernatural", "survival", "thriller", "war", "western", "zombies",
+]);
+export function isRealGenre(name: string): boolean {
+  return REAL_GENRES.has(name.trim().toLowerCase());
+}
+
 // --- Shared ComicVine Metadata Parser ---
 export function parseComicVineCredits(
   person_credits?: ComicVineCredit[], 
@@ -68,7 +82,7 @@ export function parseComicVineCredits(
 
   if (concept_credits) {
     concept_credits.forEach(c => {
-      if (c.name) genres.push(c.name);
+      if (c.name && isRealGenre(c.name)) genres.push(c.name);
     });
   }
 

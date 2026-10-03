@@ -780,7 +780,15 @@ fn read_comicinfo_from_zip(path: &Path) -> anyhow::Result<Option<String>> {
 /// Rewrites the ZIP to include the new ComicInfo.xml, preserving the source compression of every entry.
 fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
     let path = Path::new(file_path);
-    if !path.exists() { return false; }
+    if !path.exists() {
+        // FIX (comicinfo-embed-logging): this used to be a silent `return false` -- a stale DB
+        // filePath (e.g. from a folder relocate that didn't update every Issue row) hit this branch
+        // for every affected file with zero trace anywhere, making the failure invisible short of
+        // RUST_LOG=debug plus manual DB/disk cross-checking. Always worth a log line: it's cheap and
+        // this path should be rare in normal operation.
+        log::warn!("[Writer] Embed skipped -- file does not exist at recorded path: {}", file_path);
+        return false;
+    }
 
     // Skip the full repack when the archive already holds byte-identical ComicInfo.xml. A metadata
     // sync re-embeds unchanged data every run; rewriting every page entry just to write the same XML
@@ -821,9 +829,21 @@ fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
     })();
 
     match result {
-        Ok(_) => std::fs::rename(&tmp_path, path).is_ok(),
+        Ok(_) => {
+            // FIX (comicinfo-embed-logging): the rename result was silently discarded via .is_ok() --
+            // a failure here (e.g. cross-device rename, permissions) left the .tmp file orphaned on
+            // disk with no trace in any log.
+            match std::fs::rename(&tmp_path, path) {
+                Ok(_) => true,
+                Err(e) => {
+                    log::error!("[Writer] Failed to rename {} into place over {}: {}", tmp_path.display(), file_path, e);
+                    let _ = std::fs::remove_file(&tmp_path);
+                    false
+                }
+            }
+        }
         Err(e) => {
-            log::error!("Failed to inject XML into {}: {}", file_path, e);
+            log::error!("[Writer] Failed to inject XML into {}: {}", file_path, e);
             let _ = std::fs::remove_file(&tmp_path);
             false
         }

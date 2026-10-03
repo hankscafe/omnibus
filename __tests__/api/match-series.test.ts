@@ -331,6 +331,92 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(data.conflicts).toBe(2);
     });
 
+    describe('repointing Issue.filePath after a folder relocate (comicinfo-embed-stale-path)', () => {
+        // Every variant matches into the SAME existing series (triggers the update, not create, branch)
+        // at the SAME computed destination, "/comics/DC Comics/Batman (2016)" (default naming pattern).
+        const NEW_FOLDER = '/comics/DC Comics/Batman (2016)';
+        const matchReq = () => createReq({
+            oldFolderPath: '/unmatched/Batman',
+            metadataId: '4050-1234',
+            name: 'Batman',
+            year: 2016,
+            publisher: 'DC Comics',
+        });
+
+        beforeEach(() => {
+            mocks.findUniqueSeries.mockResolvedValue({ id: 'series_123', year: 2016, isManga: false });
+            mocks.updateSeries.mockResolvedValue({ id: 'series_123', folderPath: NEW_FOLDER });
+            mocks.transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+        });
+
+        it('repoints every sibling issue under the relocated folder, in one transaction', async () => {
+            const issues = [
+                { id: 'i1', filePath: '/unmatched/Batman/Batman 001.cbz' },
+                { id: 'i2', filePath: '/unmatched/Batman/Batman 002.cbz' },
+            ];
+            mocks.findManyIssues.mockImplementation(({ where }: any) =>
+                Promise.resolve(issues.filter(i => i.filePath.startsWith(where.filePath.startsWith)))
+            );
+            // The physical move already happened (safeRelocateFolder's job) -- new paths exist, old ones
+            // don't, except the matched folder itself which the route's own precondition check requires.
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+                const s = String(p);
+                return s === '/unmatched/Batman' || s.startsWith(NEW_FOLDER);
+            });
+
+            const res = await POST(matchReq());
+            expect(res.status).toBe(200);
+
+            // Queried with a trailing separator, not a bare prefix.
+            expect(mocks.findManyIssues).toHaveBeenCalledWith(expect.objectContaining({
+                where: expect.objectContaining({ filePath: { startsWith: '/unmatched/Batman/' } })
+            }));
+            expect(mocks.transaction).toHaveBeenCalledTimes(1);
+            expect(mocks.updateIssue).toHaveBeenCalledWith({ where: { id: 'i1' }, data: { filePath: `${NEW_FOLDER}/Batman 001.cbz` } });
+            expect(mocks.updateIssue).toHaveBeenCalledWith({ where: { id: 'i2' }, data: { filePath: `${NEW_FOLDER}/Batman 002.cbz` } });
+        });
+
+        it('leaves an unrelated sibling series ("Batman" vs "Batman Family") untouched', async () => {
+            // "Batman Family"'s own issue starts with the bare string "/unmatched/Batman" but is NOT
+            // under "/unmatched/Batman/" -- a startsWith with no trailing separator would have caught it.
+            const siblingIssue = { id: 'sibling_1', filePath: '/unmatched/Batman Family/Annual 001.cbz' };
+            mocks.findManyIssues.mockImplementation(({ where }: any) =>
+                Promise.resolve([siblingIssue].filter(i => i.filePath.startsWith(where.filePath.startsWith)))
+            );
+            vi.mocked(fs.existsSync).mockReturnValue(true);
+
+            const res = await POST(matchReq());
+            expect(res.status).toBe(200);
+
+            expect(mocks.updateIssue).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'sibling_1' } }));
+        });
+
+        it('leaves a row pointing at a name-collision file in place (safeRelocateFolder left it at the old path)', async () => {
+            const issues = [
+                { id: 'moved', filePath: '/unmatched/Batman/Batman 001.cbz' },
+                { id: 'collided', filePath: '/unmatched/Batman/Batman 002.cbz' },
+            ];
+            mocks.findManyIssues.mockImplementation(({ where }: any) =>
+                Promise.resolve(issues.filter(i => i.filePath.startsWith(where.filePath.startsWith)))
+            );
+            // "001" moved cleanly (new exists, old doesn't). "002" collided with a same-named file
+            // already at the destination -- safeRelocateFolder left the source file in place, so
+            // BOTH the old and new paths exist, and this row must not be repointed.
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+                const s = String(p);
+                if (s === `${NEW_FOLDER}/Batman 001.cbz`) return true;
+                if (s === '/unmatched/Batman/Batman 001.cbz') return false;
+                return true; // both paths exist for 002 (and everything else probed)
+            });
+
+            const res = await POST(matchReq());
+            expect(res.status).toBe(200);
+
+            expect(mocks.updateIssue).toHaveBeenCalledWith({ where: { id: 'moved' }, data: { filePath: `${NEW_FOLDER}/Batman 001.cbz` } });
+            expect(mocks.updateIssue).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'collided' } }));
+        });
+    });
+
     it('should preserve a custom cover on re-match (no cover.jpg write, no coverUrl override)', async () => {
         mocks.getSeriesDetails.mockResolvedValueOnce({ name: 'Batman', year: 2020, publisher: 'DC Comics', coverUrl: 'http://cover/img.jpg', status: 'Ongoing' });
         // The series already has an admin-uploaded cover — a manual re-match must not clobber it.

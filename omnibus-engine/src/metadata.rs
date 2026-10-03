@@ -529,8 +529,18 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
         // Embed the (now-refreshed) DB values into the archives via the full-tag writer
         // (unified on metadata_writer::process_embed_job — no more duplicate 4-tag writer).
         let embed_payload = crate::metadata_writer::EmbedRequest { series_id: Some(series_id.clone()), issue_ids: None };
-        if let Err(e) = crate::metadata_writer::process_embed_job(db.clone(), embed_payload).await {
-            log::error!("[Metadata] Embed failed for {}: {:?}", series_name, e);
+        match crate::metadata_writer::process_embed_job(db.clone(), embed_payload).await {
+            // FIX (comicinfo-embed-logging): this call's (success, fail, json_count) result used to be
+            // discarded entirely on the Ok path -- only the outer Err (a hard query/DB failure) ever
+            // got logged, so a batch that ran fine but embedded 0 of N files (e.g. every file's path
+            // was stale) looked identical in the log to one that embedded all of them.
+            Ok((success, fail, _json_count)) if fail > 0 => {
+                log::warn!("[Metadata] Embed for {} completed with failures: {} succeeded, {} failed.", series_name, success, fail);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("[Metadata] Embed failed for {}: {:?}", series_name, e);
+            }
         }
 
         if let Err(e) = sqlx::query(&format!(

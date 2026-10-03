@@ -7,7 +7,7 @@
 // number), Load more pagination, and the fallback ID path routing through the same resolver.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { ok, stubFetchRouter } from '../../helpers/fetch';
+import { ok, err, stubFetchRouter } from '../../helpers/fetch';
 
 const toast = vi.fn();
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
@@ -244,4 +244,73 @@ describe('Smart Matcher — Auto-Scan covers', () => {
         expect(coverCalls[0]).toContain('id=16180');
         await waitFor(() => expect(screen.getByAltText('Suggestion').getAttribute('src')).toBe(PROXIED));
     });
+});
+
+describe('Smart Matcher — Start Auto-Scan error handling (review of #231)', () => {
+    beforeEach(() => {
+        toast.mockClear();
+        localStorage.clear();
+        // The scan cache is session-scoped: a suggestion an earlier test cached for this same
+        // series would make the scan skip it, so this test would never reach the search.
+        sessionStorage.clear();
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('records a server error as ERROR, not NOT_FOUND, so it gets retried on the next scan', async () => {
+        // FIX (review of #231): a 500 from /api/search used to fall through to `data.results || []`
+        // — an empty list, identical to a genuine no-match — and get recorded as NOT_FOUND, which the
+        // scan never retries. Routing a non-ok response through the catch block instead records
+        // ERROR, which the next scan retries.
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([RAW_ITEM])],
+            ['/api/admin/config', () => ok({
+                settings: [{ key: 'primary_metadata_source', value: 'METRON' }],
+            })],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/search', () => err(500, { error: 'Failed to fetch data' })],
+        ]);
+
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero 001');
+        fireEvent.click(screen.getByRole('button', { name: /Start Auto-Scan/ }));
+
+        await screen.findByText('Search failed. Rate limit hit?');
+        expect(screen.queryByText('No confident match found.')).toBeNull();
+    });
+
+    it('retries an ERROR row on the next scan, but not a NOT_FOUND row', async () => {
+        const OTHER = { ...RAW_ITEM, id: 'raw_WmFnb3I', name: 'Zagor 001', folderPath: '/unmatched/Zagor 001.cbz' };
+        const searches: string[] = [];
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([RAW_ITEM, OTHER])],
+            ['/api/admin/config', () => ok({
+                settings: [{ key: 'primary_metadata_source', value: 'METRON' }],
+            })],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/search', (u) => {
+                searches.push(u);
+                // Conan errors; Zagor genuinely has nothing on the provider.
+                return u.includes('Conan') ? err(500, { error: 'Failed to fetch data' }) : ok({ results: [], hasMore: false });
+            }],
+        ]);
+
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero 001');
+        const start = () => fireEvent.click(screen.getByRole('button', { name: /Start Auto-Scan/ }));
+
+        start();
+        // The scan pauses 1.5 s between rows, so these waits outlast the default 1 s.
+        const slow = { timeout: 5000 };
+        await screen.findByText('Search failed. Rate limit hit?', {}, slow);
+        await screen.findByText('No confident match found.', {}, slow);
+        await screen.findByRole('button', { name: /Start Auto-Scan/ }, slow);
+        expect(searches).toHaveLength(2);
+
+        searches.length = 0;
+        start();
+        await waitFor(() => expect(searches).toHaveLength(1), slow);
+        await screen.findByRole('button', { name: /Start Auto-Scan/ }, slow);
+        expect(searches).toHaveLength(1);
+        expect(searches[0]).toContain('Conan');
+    }, 15000);
 });

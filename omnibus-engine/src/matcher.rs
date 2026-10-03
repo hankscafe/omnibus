@@ -107,11 +107,78 @@ pub async fn record_sweep_result(db: &Db, value: serde_json::Value) {
 /// said "I curated this by hand, stop offering to match it" — but such a series still has a null or
 /// placeholder metadataId, so without this clause the very next sweep would pick it up and
 /// auto-match it anyway, which is precisely the nagging the state exists to end.
+///
+/// FIX (sweep-tiebreak-stall): a bulk operation (an import, a mass re-scan) can leave hundreds or
+/// thousands of rows sharing the exact same "updatedAt". With no secondary sort key, ORDER BY
+/// "updatedAt" ASC LIMIT 100 was resampling an arbitrary, inconsistent slice of that tied group
+/// every run instead of deterministically working through it -- "id" is stable and arbitrary but
+/// consistent, which is all a tiebreaker needs to be.
+///
+/// FIX (sweep-cursor-stall, review of #231): the tiebreaker alone doesn't stop a real stall —
+/// the sweep never writes anything back for a row it couldn't resolve (left `for_admin`, or
+/// `deferred` on a budget hit), so that row's "updatedAt" never moves and it's back in the next
+/// run's oldest-100 every time. In `confirm` mode specifically (no auto-accept search), nearly
+/// every row some run doesn't resolve via free file evidence takes that path, so once the oldest
+/// 100 are all such rows, the sweep loops that same 100 forever and nothing behind them ever gets
+/// a turn. $1/$2 are an explicit cursor (the last (updatedAt, id) this sweep looked at, persisted
+/// in SystemSetting) instead of relying on the rows' own state to move forward: NULL means "start
+/// from the beginning" (first run, or the previous run reached the end and wrapped).
 pub(crate) fn unmatched_candidates_sql() -> &'static str {
-    r#"SELECT id, name, year, "folderPath" FROM "Series"
+    r#"SELECT id, name, year, "folderPath", "updatedAt" FROM "Series"
        WHERE ("matchState" IS NULL OR "matchState" <> 'IGNORED')
          AND ("matchState" = 'UNMATCHED' OR "metadataId" IS NULL OR "metadataId" LIKE 'unmatched%')
-       ORDER BY "updatedAt" ASC LIMIT 100"#
+         AND ($1 IS NULL OR "updatedAt" > $1 OR ("updatedAt" = $1 AND "id" > $2))
+       ORDER BY "updatedAt" ASC, "id" ASC LIMIT 100"#
+}
+
+const SWEEP_CURSOR_KEY: &str = "unmatched_sweep_cursor";
+
+/// The sweep's own cursor: (updatedAt, id) of the last candidate row the previous run looked at,
+/// regardless of whether it resolved. Stored as `"updatedAt|id"` in one SystemSetting row.
+async fn get_sweep_cursor(db: &Db) -> Option<(String, String)> {
+    let raw: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = $1"#)
+        .bind(SWEEP_CURSOR_KEY)
+        .fetch_optional(&db.pool)
+        .await
+        .ok()
+        .flatten();
+    raw.and_then(|v| v.split_once('|').map(|(ts, id)| (ts.to_string(), id.to_string())))
+}
+
+async fn set_sweep_cursor(db: &Db, updated_at: &str, id: &str) {
+    let value = format!("{updated_at}|{id}");
+    if let Err(e) = sqlx::query(
+        r#"INSERT INTO "SystemSetting" (key, value) VALUES ($1, $2)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"#,
+    )
+    .bind(SWEEP_CURSOR_KEY)
+    .bind(value)
+    .execute(&db.pool)
+    .await
+    {
+        log::warn!("[Matcher] Could not persist the sweep cursor: {:?}", e);
+    }
+}
+
+/// Reached the end of the unmatched set this pass — clear the cursor so the next run wraps back
+/// to the start instead of permanently returning zero rows once nothing is left ahead of it.
+async fn clear_sweep_cursor(db: &Db) {
+    let _ = sqlx::query(r#"DELETE FROM "SystemSetting" WHERE key = $1"#)
+        .bind(SWEEP_CURSOR_KEY)
+        .execute(&db.pool)
+        .await;
+}
+
+async fn fetch_unmatched_candidates(db: &Db, cursor: Option<&(String, String)>) -> anyhow::Result<Vec<sqlx::any::AnyRow>> {
+    let (ts, id) = match cursor {
+        Some((ts, id)) => (Some(ts.clone()), Some(id.clone())),
+        None => (None, None),
+    };
+    Ok(sqlx::query(unmatched_candidates_sql())
+        .bind(ts)
+        .bind(id)
+        .fetch_all(&db.pool)
+        .await?)
 }
 
 pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
@@ -143,9 +210,14 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
     let cv_key = crate::secret_crypto::decrypt_setting(&db.pool, get_setting("cv_api_key").await).await
         .filter(|k| !k.trim().is_empty());
 
-    let rows = sqlx::query(unmatched_candidates_sql())
-    .fetch_all(&db.pool)
-    .await?;
+    let cursor = get_sweep_cursor(&db).await;
+    let mut rows = fetch_unmatched_candidates(&db, cursor.as_ref()).await?;
+    // The cursor was sitting at (or past) the end of the set — wrap back to the start rather than
+    // reporting "nothing to do" for the rest of this run just because of where we'd gotten to.
+    if rows.is_empty() && cursor.is_some() {
+        clear_sweep_cursor(&db).await;
+        rows = fetch_unmatched_candidates(&db, None).await?;
+    }
 
     let total = rows.len();
     if total == 0 {
@@ -262,6 +334,17 @@ pub async fn run_unmatched_sweep(db: Db) -> anyhow::Result<SweepOutcome> {
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    }
+
+    // Advance the cursor to the last candidate this run looked at — resolved or not — so the next
+    // run continues from here instead of resampling the same unresolved rows. A short page (fewer
+    // than the LIMIT) means we reached the true end of the set; clear it so the next run wraps.
+    if rows.len() < 100 {
+        clear_sweep_cursor(&db).await;
+    } else if let Some(last) = rows.last() {
+        let last_updated_at: String = last.try_get("updatedAt").unwrap_or_default();
+        let last_id: String = last.get("id");
+        set_sweep_cursor(&db, &last_updated_at, &last_id).await;
     }
 
     // Tier-2 history lands before the summary so Job History shows the per-series rows the
@@ -474,6 +557,58 @@ mod tests {
         ids.sort();
         assert_eq!(ids, vec!["s_null_id", "s_placeholder", "s_unmatched"]);
         assert!(!ids.contains(&"s_ignored".to_string()), "an ignored series must never be swept");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Review of #231: 150 unmatched rows sharing one "updatedAt" (the tied-timestamp shape that
+    /// motivated the id tiebreaker), no file evidence, confirm mode (so every row lands on
+    /// for_admin and nothing is ever written back for it). Without a cursor, a second run would
+    /// just resample the same oldest 100 rows 1-100; with it, the second run reaches 101-150.
+    #[tokio::test]
+    async fn sweep_cursor_reaches_the_back_half_on_a_second_run_with_a_shared_timestamp() {
+        let base = std::env::temp_dir().join(format!("omnibus_matchsweep_cursor_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create fixture dir");
+        let db_file = base.join("sweep.db");
+        std::fs::File::create(&db_file).expect("pre-create sqlite file");
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+
+        sqlx::query(
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, year INTEGER, "folderPath" TEXT,
+               "matchState" TEXT, "metadataId" TEXT, "updatedAt" TEXT)"#,
+        )
+        .execute(&db.pool).await.expect("create Series schema");
+        sqlx::query(r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#)
+            .execute(&db.pool).await.expect("create SystemSetting schema");
+        sqlx::query(r#"CREATE TABLE "JobLog" (id TEXT PRIMARY KEY, "jobType" TEXT, status TEXT, "durationMs" INTEGER, message TEXT, "relatedItem" TEXT, "createdAt" INTEGER, attempts INTEGER)"#)
+            .execute(&db.pool).await.expect("create JobLog schema");
+
+        sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('matcher_mode', 'confirm')"#)
+            .execute(&db.pool).await.expect("seed matcher_mode");
+
+        // ids sort predictably as text ("row000".."row149") so the tiebreaker's own ordering is
+        // deterministic to assert against -- every row shares the exact same "updatedAt".
+        for i in 0..150 {
+            let id = format!("row{i:03}");
+            sqlx::query(r#"INSERT INTO "Series" (id, name, year, "folderPath", "matchState", "metadataId", "updatedAt") VALUES ($1, $1, 2024, '', 'UNMATCHED', NULL, '2026-08-27T00:00:00Z')"#)
+                .bind(&id)
+                .execute(&db.pool).await.expect("seed series");
+        }
+
+        let outcome1 = run_unmatched_sweep(db.clone()).await.expect("first sweep run");
+        assert_eq!(outcome1.matched, 0, "no file evidence and confirm mode auto-accepts nothing");
+
+        let cursor_after_1 = get_sweep_cursor(&db).await.expect("cursor set after a full 100-row page");
+        assert_eq!(cursor_after_1.1, "row099", "cursor parks on the last (id-ordered) row of the first page");
+
+        let outcome2 = run_unmatched_sweep(db.clone()).await.expect("second sweep run");
+        assert!(outcome2.summary.contains("50 left for the Smart Matcher"), "{}", outcome2.summary);
+
+        // The cursor landed past row149 and the set only has 150 rows, so this run's page was the
+        // tail (<100 rows) and the cursor must have been cleared, ready to wrap on the next run.
+        assert!(get_sweep_cursor(&db).await.is_none(), "cursor clears once the tail of the set is reached");
 
         let _ = std::fs::remove_dir_all(&base);
     }

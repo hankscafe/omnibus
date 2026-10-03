@@ -35,6 +35,14 @@ describe('parseSeriesJson (engine twin)', () => {
         expect(parseSeriesJson(JSON.stringify({ name: 'no wrapper' }))).toBe(null);
         expect(parseSeriesJson(JSON.stringify({ metadata: 'not an object' }))).toBe(null);
     });
+
+    it('skips a booktype the engine marked as its own guess', () => {
+        const guessed = { metadata: { name: 'Saga', booktype: 'Print' }, omnibus: { booktype_guessed: true } };
+        expect(parseSeriesJson(JSON.stringify(guessed))?.booktype).toBe(null);
+        // A real value from our writer, and a foreign (unmarked) file, are kept.
+        expect(parseSeriesJson(JSON.stringify({ metadata: { booktype: 'TPB' }, omnibus: {} }))?.booktype).toBe('TPB');
+        expect(parseSeriesJson(JSON.stringify({ metadata: { booktype: 'Print' } }))?.booktype).toBe('Print');
+    });
 });
 
 describe('notesIssueIds (engine twin)', () => {

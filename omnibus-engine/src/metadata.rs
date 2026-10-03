@@ -835,7 +835,7 @@ async fn fetch_comicvine(
         // annual's numbers belong to a DIFFERENT provider volume; without this, the parent volume's
         // "#1" data lands on "Annual #1" via the number-only heal.
         let existing_issues = sqlx::query(
-            r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
+            r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
         )
         .bind(series_id)
         .fetch_all(&db.pool)
@@ -927,6 +927,13 @@ async fn fetch_comicvine(
             let is_locked = target_row
                 .map(|r| r.try_get::<i64, _>("hasCustomMetadata").map(|v| v != 0).unwrap_or(false))
                 .unwrap_or(false);
+            // Review of #232: the release-date fill-only guard only makes sense for a row that HAS
+            // a file -- a WANTED placeholder with no file yet has no cover date to protect, and
+            // needs the provider's store date to keep moving as the real release date becomes
+            // known (a delayed issue shifting on the release calendar).
+            let has_file = target_row
+                .and_then(|r| r.try_get::<Option<String>, _>("filePath").unwrap_or(None))
+                .is_some_and(|p| !p.trim().is_empty());
             let reset_stale = heal_id && !is_locked;
             let (existing_name, existing_release, existing_genres, existing_desc, has_custom_cover, existing_cover) = if let Some(r) = target_row {
                 (
@@ -944,7 +951,10 @@ async fn fetch_comicvine(
             // #199 round 3: shared resolver — a null/generic provider name can no longer wipe a
             // real story title; lock + file-priority semantics unchanged (Node parity).
             let name_val = resolve_synced_name(existing_name, cv_name, &issue_num, is_locked, file_priority);
-            let release_val = if is_locked { existing_release } else { issue_date.clone() };
+            // file_metadata_priority: a release date already on the row (read from ComicInfo.xml at scan)
+            // is kept; the provider only fills a blank. ComicVine's store date otherwise silently
+            // replaces the file's cover date, shifting Month/Day (and Year across a year boundary).
+            let release_val = prefer_existing(existing_release, issue_date.clone(), is_locked, file_priority && has_file);
             // A locked (manually edited) issue keeps its description; file-priority keeps a non-empty
             // ComicInfo-derived one; otherwise take the provider's.
             let desc_val = prefer_existing(existing_desc, cv_desc.clone(), is_locked, file_priority);
@@ -1321,7 +1331,7 @@ async fn fetch_metron(
     // #203: annual rows are EXCLUDED outright — their numbers belong to a different provider
     // volume, and the number-only heal would otherwise stamp the parent volume's data onto them.
     let existing_issues = sqlx::query(
-        r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
+        r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
     )
     .bind(series_id)
     .fetch_all(&db.pool)
@@ -1423,6 +1433,9 @@ async fn fetch_metron(
             (None, None, false, None)
         };
 
+        let has_file = target_row
+            .and_then(|r| r.try_get::<Option<String>, _>("filePath").unwrap_or(None))
+            .is_some_and(|p| !p.trim().is_empty());
         let metron_existing_state: Option<String> = if reset_stale { None } else {
             target_row.and_then(|r| r.try_get::<Option<String>, _>("matchState").unwrap_or(None))
         };
@@ -1446,7 +1459,7 @@ async fn fetch_metron(
         // resolver lets them fill blanks but never clobber a real story title that the detail
         // pass (or a ComicInfo read) already landed. Lock + file priority unchanged.
         let name_val: Option<String> = resolve_synced_name(existing_name, Some(issue_name), &issue_num, is_locked, file_priority);
-        let release_val: Option<String> = if is_locked { existing_release } else { issue_date.clone() };
+        let release_val: Option<String> = prefer_existing(existing_release, issue_date.clone(), is_locked, file_priority && has_file);
         // A custom issue cover (set in the Smart Matcher) survives every sync; else the provider's wins.
         let cover_val: Option<String> = if has_custom_cover { existing_cover } else { issue_cover.clone() };
 
@@ -2597,6 +2610,15 @@ mod tests {
         assert_eq!(next_match_state(Some("MATCHED".to_string())), "MATCHED");
         assert_eq!(next_match_state(Some("UNMATCHED".to_string())), "MATCHED");
         assert_eq!(next_match_state(None), "MATCHED");
+    }
+
+    #[test]
+    fn release_date_is_fill_only_under_file_priority() {
+        let file = Some("2017-06-30".to_string());
+        let provider = Some("2017-04-19".to_string());
+        assert_eq!(prefer_existing(file.clone(), provider.clone(), false, true), file);
+        assert_eq!(prefer_existing(None, provider.clone(), false, true), provider);
+        assert_eq!(prefer_existing(file.clone(), provider.clone(), false, false), provider);
     }
 
     #[test]

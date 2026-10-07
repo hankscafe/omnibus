@@ -592,14 +592,26 @@ fn robust_move(src: &Path, dest: &Path) -> Result<()> {
     if std::fs::rename(src, dest).is_ok() {
         return Ok(());
     }
+    copy_then_replace(src, dest)
+}
 
-    let tmp_dest = dest.with_extension("tmp_move");
-    std::fs::copy(src, &tmp_dest)?;
-
-    if cfg!(target_os = "windows") && dest.exists() {
-        let _ = std::fs::remove_file(dest);
+/// The cross-device fallback of `robust_move` (a plain rename can't cross mounts): copy beside the
+/// destination under a temp name of its own, swap it into place, then remove the source. A failed
+/// copy or swap removes the staged copy and keeps the source.
+fn copy_then_replace(src: &Path, dest: &Path) -> Result<()> {
+    let tmp_dest = crate::converter::temp_sibling(dest, "move");
+    let staged = (|| -> Result<()> {
+        std::fs::copy(src, &tmp_dest)?;
+        if cfg!(target_os = "windows") && dest.exists() {
+            let _ = std::fs::remove_file(dest);
+        }
+        std::fs::rename(&tmp_dest, dest)?;
+        Ok(())
+    })();
+    if let Err(e) = staged {
+        let _ = std::fs::remove_file(&tmp_dest);
+        return Err(e);
     }
-    std::fs::rename(&tmp_dest, dest)?;
     std::fs::remove_file(src)?;
 
     Ok(())
@@ -745,6 +757,58 @@ pub(crate) fn split_to_json(s: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==== Unique temp files: the cross-device move used to stage every copy as
+    // `dest.with_extension("tmp_move")` - shared by any two moves of the same name (and by
+    // "X.cbr" / "X.cbz", which both become "X.tmp_move"), and left behind when the swap failed.
+
+    fn move_fixture() -> (PathBuf, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("omnibus_move_{}", uuid::Uuid::new_v4()));
+        let (from, to) = (base.join("watched"), base.join("unmatched"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        let src = from.join("Batman 001.cbz");
+        std::fs::write(&src, b"the comic").unwrap();
+        (base, src, to)
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn copy_then_replace_never_touches_another_movers_temp_file() {
+        let (base, src, to) = move_fixture();
+        // Another move into the same folder is mid-copy under the name every move used to share.
+        let theirs = to.join("Batman 001.tmp_move");
+        std::fs::write(&theirs, b"another mover's bytes").unwrap();
+        let dest = to.join("Batman 001.cbz");
+
+        copy_then_replace(&src, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"the comic");
+        assert!(!src.exists(), "the source is removed after the move");
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"another mover's bytes", "another move's temp file is untouched");
+        assert_eq!(names_in(&to), vec!["Batman 001.cbz", "Batman 001.tmp_move"], "no temp file of ours left behind");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn copy_then_replace_cleans_up_when_the_final_swap_fails() {
+        let (base, src, to) = move_fixture();
+        // The destination name is taken by a non-empty folder: the copy succeeds, the swap can't.
+        let dest = to.join("Batman 001.cbz");
+        std::fs::create_dir_all(dest.join("inner")).unwrap();
+
+        assert!(copy_then_replace(&src, &dest).is_err());
+
+        assert!(src.exists(), "a failed move keeps the source");
+        assert_eq!(names_in(&to), vec!["Batman 001.cbz"], "the staged copy is removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn comicinfo_imprint_deserializes() {

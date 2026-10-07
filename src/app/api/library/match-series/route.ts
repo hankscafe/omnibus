@@ -807,9 +807,10 @@ export async function POST(request: Request) {
 
         // FIX (comicinfo-embed-race): this used to also queue a standalone EMBED_METADATA job here,
         // alongside the METADATA_SYNC job queued a few lines above for the same series. The engine
-        // can run both at once, and both embed jobs write through the SAME temp file for a given
-        // archive (path.with_extension("cbz.tmp") in metadata_writer.rs) -- two writers racing that
-        // path can clobber or corrupt each other's output. METADATA_SYNC already embeds on its own,
+        // can run both at once. Until v1.4.7-beta.003 both embed jobs wrote through the SAME temp file
+        // for a given archive ("X.cbz.tmp") and could corrupt each other's output; temp files are now
+        // unique per write (temp_sibling in converter.rs), but two concurrent embeds still race for
+        // the final rename and the last one wins. METADATA_SYNC already embeds on its own,
         // synchronously, right after its fetch completes, so the standalone job was never adding
         // anything; it only added a second writer to race against. Removed rather than locked.
         //

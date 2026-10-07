@@ -801,7 +801,7 @@ fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
         }
     }
 
-    let tmp_path = path.with_extension("cbz.tmp");
+    let tmp_path = crate::converter::temp_sibling(path, "embed");
 
     let result = (|| -> anyhow::Result<()> {
         let file = File::open(path)?;
@@ -888,6 +888,35 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // Unique temp files: every embed of "X.cbz" used to build its new archive at the one shared
+    // "X.cbz.tmp" - two embeds of the same file (a sync's embed and a standalone one, or a convert
+    // of "X.cbr", which targets the same name) truncated and renamed each other's half-built archive.
+    #[test]
+    fn embed_never_touches_another_writers_temp_file() {
+        let dir = std::env::temp_dir().join(format!("omnibus_embed_tmp_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cbz = dir.join("Batman 001.cbz");
+        {
+            let mut zw = ZipWriter::new(File::create(&cbz).unwrap());
+            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.write_all(b"page").unwrap();
+            zw.finish().unwrap();
+        }
+        // Another writer of the same file is mid-build under the name every writer used to share.
+        let theirs = dir.join("Batman 001.cbz.tmp");
+        std::fs::write(&theirs, b"another writer's half-built archive").unwrap();
+
+        assert!(inject_xml_into_zip(cbz.to_str().unwrap(), "<ComicInfo>NEW</ComicInfo>"));
+
+        assert_eq!(read_comicinfo_from_zip(&cbz).unwrap().as_deref(), Some("<ComicInfo>NEW</ComicInfo>"));
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"another writer's half-built archive", "the other writer's temp file is untouched");
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, vec!["Batman 001.cbz", "Batman 001.cbz.tmp"], "no temp file of ours left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // #199: the full ComicInfo default set — issue-wins pairing, series-only tags, and the B&W

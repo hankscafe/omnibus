@@ -277,6 +277,47 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         expect(mocks.issueCreate).not.toHaveBeenCalled();
     });
 
+    it('strips stored genre noise from the series and unlocked issues in one re-sync', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({
+            id: 'series_1', metadataId: '4050-123', folderPath: '/comics/Batman', metadataSource: 'COMICVINE', year: 2016,
+            genres: '["Superhero","Variant Cover: Photo","Time Travel"]',
+        });
+        mocks.issueFindMany.mockResolvedValue([
+            { id: 'r1', number: '1', metadataId: '901', matchState: 'MATCHED', hasCustomMetadata: false, genres: '["Horror","Homage Covers"]' },
+            { id: 'r2', number: '2', metadataId: '902', matchState: 'MATCHED', hasCustomMetadata: true, genres: '["Variant Theme: Civil War"]' },
+            { id: 'r3', number: '3', metadataId: '903', matchState: 'MATCHED', hasCustomMetadata: false, genres: '["Variant Theme: Civil War"]' },
+        ]);
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) {
+                return { data: { results: { name: 'Batman', start_year: '2016', publisher: { name: 'DC Comics' }, image: null,
+                    concepts: [{ name: 'Superhero' }, { name: 'Variant Cover: Action Figure' }] } } };
+            }
+            if (url.includes('/issues/')) {
+                return { data: { number_of_total_results: 3, results: [
+                    { id: 901, issue_number: '1', name: 'One', store_date: '2016-06-01' },
+                    { id: 902, issue_number: '2', name: 'Two', store_date: '2016-07-01' },
+                    { id: 903, issue_number: '3', name: 'Three', store_date: '2016-08-01' },
+                ] } };
+            }
+            return { data: Buffer.from('img') };
+        });
+        mocks.existsSync.mockReturnValue(false);
+
+        const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(result.success).toBe(true);
+
+        expect(mocks.seriesUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ genres: '["Superhero","Time Travel"]' })
+        }));
+        const updates = mocks.issueUpdate.mock.calls.map(c => c[0]);
+        const byId = (id: string) => updates.find(u => u.where.id === id);
+        expect(byId('r1').data.genres).toBe('["Horror"]');
+        // A locked issue keeps its curated value, noise and all.
+        expect('genres' in byId('r2').data).toBe(false);
+        // All noise reads as blank, so the filtered volume list fills it.
+        expect(byId('r3').data.genres).toBe('["Superhero"]');
+    });
+
     it('never pairs a parent-volume issue with an annual row (#203 safety rule)', async () => {
         // "Batman Annual #1" sits in the parent folder. The parent volume's own #1 must land on a
         // NEW row — pairing it with the annual would steal the annual's identity, which is exactly

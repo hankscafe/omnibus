@@ -20,6 +20,29 @@ export function isReleasedYet(storeDate: string | null, coverDate: string | null
   return true; // If CV has no date, assume it's out
 }
 
+// ComicVine "concepts" mix real genres and useful non-genre concepts (Time Travel, Martial Arts)
+// with cover/variant tags ("Variant Cover: Action Figure", "Variant Theme: Civil War", "Homage
+// Covers", "Marvel 25th Anniversary Frame Covers") that have no business in <Genre>. Those
+// families are dropped; every other concept is kept. EXACT twin: omnibus-engine/src/metadata.rs
+// is_genre_noise.
+export function isGenreNoise(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n.startsWith('variant ') || n.endsWith(' cover') || n.endsWith(' covers');
+}
+
+// A stored genres JSON array with the noise entries removed; null when nothing else is left. A
+// value that isn't a JSON string array, or holds no noise, comes back unchanged.
+// EXACT twin: omnibus-engine/src/metadata.rs strip_genre_noise_json.
+export function stripGenreNoise(stored: string | null | undefined): string | null {
+  if (stored == null) return null;
+  let list: unknown;
+  try { list = JSON.parse(stored); } catch { return stored; }
+  if (!Array.isArray(list) || !list.every((g) => typeof g === 'string')) return stored;
+  if (!list.some((g) => isGenreNoise(g))) return stored;
+  const kept = list.filter((g) => !isGenreNoise(g));
+  return kept.length > 0 ? JSON.stringify(kept) : null;
+}
+
 // --- Shared ComicVine Metadata Parser ---
 export function parseComicVineCredits(
   person_credits?: ComicVineCredit[], 
@@ -68,7 +91,7 @@ export function parseComicVineCredits(
 
   if (concept_credits) {
     concept_credits.forEach(c => {
-      if (c.name) genres.push(c.name);
+      if (c.name && !isGenreNoise(c.name)) genres.push(c.name);
     });
   }
 

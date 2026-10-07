@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseComicVineCredits } from '../../src/lib/utils';
+import { parseComicVineCredits, isGenreNoise, stripGenreNoise } from '../../src/lib/utils';
 
 describe('Utility: ComicVine Credit Parser', () => {
     it('should parse and categorize a standard list of creators', () => {
@@ -61,5 +61,33 @@ describe('ComicVine Credit Parser: inker/editor/translator split (#199 Call-3 Be
         expect(result.translators).toEqual(['Anna Rossi']);
         expect(result.artists).toHaveLength(0);
         expect(result.writers).toHaveLength(0);
+    });
+
+    it('drops the cover/variant concept families and keeps every other concept', () => {
+        // Useful non-genre concepts (Time Travel) feed the Genres & Concepts panel and recommendations.
+        const concepts = [
+            { name: 'Superhero' }, { name: 'Variant Cover: Action Figure' },
+            { name: 'Homage Covers' }, { name: 'Time Travel' }, { name: 'Science Fiction' },
+        ] as any;
+        const result = parseComicVineCredits(undefined, undefined, concepts);
+        expect(result.genres).toEqual(['Superhero', 'Time Travel', 'Science Fiction']);
+    });
+
+    it('isGenreNoise matches only the cover/variant families (engine twin)', () => {
+        for (const noise of ['Variant Cover: Action Figure', 'Variant Theme: Civil War', 'Variant Exclusive: Marvel Unlimited',
+            ' variant artist: x ', 'Homage Cover', 'Homage Covers', 'Marvel 25th Anniversary Frame Covers']) {
+            expect(isGenreNoise(noise)).toBe(true);
+        }
+        for (const keep of ['Superhero', 'Science Fiction', 'Time Travel', 'Alternate Reality', 'Martial Arts', 'Variants', 'Undercover', '']) {
+            expect(isGenreNoise(keep)).toBe(false);
+        }
+    });
+
+    it('stripGenreNoise cleans a stored list (engine twin)', () => {
+        expect(stripGenreNoise('["Superhero","Variant Cover: Photo","Time Travel","Homage Covers"]')).toBe('["Superhero","Time Travel"]');
+        expect(stripGenreNoise('["Variant Theme: Civil War"]')).toBe(null);
+        expect(stripGenreNoise('["Horror", "Crime"]')).toBe('["Horror", "Crime"]');
+        expect(stripGenreNoise('Horror, Crime')).toBe('Horror, Crime');
+        expect(stripGenreNoise(null)).toBe(null);
     });
 });

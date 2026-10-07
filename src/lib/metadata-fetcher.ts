@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db';
 import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from './logger';
-import { parseComicVineCredits } from '@/lib/utils';
+import { parseComicVineCredits, stripGenreNoise } from '@/lib/utils';
 import { getErrorMessage } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
@@ -405,6 +405,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             ...(imageUrl ? { remoteCoverUrl: imageUrl } : {}),
             // Heuristic only fills a blank — never clobber a manual categorization
             ...(guessedBookType && !series.bookType ? { bookType: guessedBookType } : {}),
+            // Genre noise an earlier sync stored stays forever otherwise; removing it only takes
+            // junk out, so it applies to a locked series too (engine parity).
+            ...(stripGenreNoise(series.genres) !== (series.genres ?? null) ? { genres: stripGenreNoise(series.genres) } : {}),
             status: volData.end_year ? 'Ended' : 'Ongoing'
         }
     });
@@ -515,7 +518,12 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             };
 
             const dynamicPayload: any = { ...issueDataPayload };
-            if (volGenres.length > 0 && (!targetRecord || !(targetRecord as any).genres || healId)) {
+            // An unlocked issue sheds stored genre noise; a list that was all noise counts as blank
+            // and refills from the filtered volume list below (engine parity).
+            const storedGenres: string | null = (targetRecord as any)?.genres ?? null;
+            const keptGenres = isLocked ? storedGenres : stripGenreNoise(storedGenres);
+            if (keptGenres !== storedGenres) dynamicPayload.genres = keptGenres;
+            if (volGenres.length > 0 && (!targetRecord || !keptGenres || healId)) {
                 dynamicPayload.genres = JSON.stringify(volGenres);
             }
             // A healed row's enrichment-era fields belonged to the WRONG issue — reset the credit

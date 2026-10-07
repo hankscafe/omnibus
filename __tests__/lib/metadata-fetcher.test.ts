@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { syncSeriesMetadata, isCvRateLimited } from '@/lib/metadata-fetcher';
+import { syncSeriesMetadata, isCvRateLimited, guessBookTypeFromCvVolume } from '@/lib/metadata-fetcher';
 import path from 'path';
 
 // 1. Hoist our mocks
@@ -362,5 +362,23 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         expect(isCvRateLimited(420)).toBe(true);
         expect(isCvRateLimited(200)).toBe(false);
         expect(isCvRateLimited(undefined)).toBe(false);
+    });
+});
+
+describe('guessBookTypeFromCvVolume (engine twin)', () => {
+    it('guesses OneShot for a single-issue volume that started two or more calendar years back, end_year or not', () => {
+        expect(guessBookTypeFromCvVolume({ name: 'Batman: The Killing Joke', count_of_issues: 1, start_year: '1988' }, 2026)).toBe('OneShot');
+    });
+    it('leaves a single-issue volume from this year unset: #2 may simply not be out yet', () => {
+        expect(guessBookTypeFromCvVolume({ name: 'New Launch', count_of_issues: 1, start_year: '2026' }, 2026)).toBe(null);
+        // Last calendar year is still too recent (a December launch synced in January); two back clears it.
+        expect(guessBookTypeFromCvVolume({ name: 'Last Year', count_of_issues: 1, start_year: '2025' }, 2026)).toBe(null);
+        expect(guessBookTypeFromCvVolume({ name: 'Two Back', count_of_issues: 1, start_year: '2024' }, 2026)).toBe('OneShot');
+        expect(guessBookTypeFromCvVolume({ name: 'No Year', count_of_issues: 1, start_year: null }, 2026)).toBe(null);
+    });
+    it('reads explicit format words in the name first, and guesses nothing otherwise', () => {
+        expect(guessBookTypeFromCvVolume({ name: 'Saga Graphic Novel', count_of_issues: 1, start_year: '2012' }, 2026)).toBe('GN');
+        expect(guessBookTypeFromCvVolume({ name: 'Batman HC', count_of_issues: 3, start_year: '2012' }, 2026)).toBe('TPB');
+        expect(guessBookTypeFromCvVolume({ name: 'Batman', count_of_issues: 52, start_year: '2011' }, 2026)).toBe(null);
     });
 });

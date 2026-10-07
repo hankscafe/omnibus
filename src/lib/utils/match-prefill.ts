@@ -41,13 +41,16 @@ export function parseSeriesJson(content: string): SeriesJsonInfo | null {
     const comicid = (() => { const n = num(m.comicid); return n && n > 0 ? n : null; })();
     const year = (() => { const n = num(m.year); return n && n !== 0 ? n : null; })();
     const rawStatus = getStr('status');
+    // The engine exports "Print" for an unclassified series (Komga rejects a null booktype) and
+    // marks it omnibus.booktype_guessed — a guess, not curation, so it's never read back.
+    const booktypeGuessed = v?.omnibus?.booktype_guessed === true;
     return {
         comicid,
         name: getStr('name'),
         publisher: getStr('publisher'),
         year,
         description: getStr('description_text'),
-        booktype: getStr('booktype'),
+        booktype: booktypeGuessed ? null : getStr('booktype'),
         status: rawStatus ? (rawStatus.toLowerCase() === 'ended' ? 'Ended' : 'Ongoing') : null,
     };
 }

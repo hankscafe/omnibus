@@ -614,7 +614,11 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
     });
 
     let publisher: Option<String> = series.try_get::<Option<String>, _>("publisher").unwrap_or(None).filter(|s| !s.is_empty());
-    let book_type: Option<String> = series.try_get("bookType").unwrap_or(None);
+    // Komga's MylarMetadata declares `booktype` a non-null String — a null makes it reject the whole
+    // file — so an unclassified series still exports "Print". That value is our guess, not a fact:
+    // `omnibus.booktype_guessed` marks it so the scanner doesn't read it back in as a real bookType.
+    let book_type: Option<String> = series.try_get::<Option<String>, _>("bookType").unwrap_or(None).filter(|s| !s.is_empty());
+    let booktype_guessed = book_type.is_none();
     // #199: the Mylar 1.0.2 spec has always had these slots; now the Series columns can fill them.
     let imprint: Option<String> = series.try_get::<Option<String>, _>("imprint").unwrap_or(None).filter(|s| !s.is_empty());
     let age_rating: Option<String> = series.try_get::<Option<String>, _>("ageRating").unwrap_or(None).filter(|s| !s.is_empty());
@@ -690,7 +694,7 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
             "description_text": Some(description_text).filter(|s| !s.is_empty()),
             "description_formatted": Some(description_formatted).filter(|s| !s.is_empty()),
             "volume": serde_json::Value::Null,
-            "booktype": book_type.filter(|s| !s.is_empty()).unwrap_or_else(|| "Print".to_string()),
+            "booktype": book_type.unwrap_or_else(|| "Print".to_string()),
             "age_rating": age_rating,
             "collects": serde_json::Value::Null,
             "comic_image": comic_image,
@@ -699,10 +703,17 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
             "status": if is_ended { "Ended" } else { "Continuing" }
         }
     });
-    // Only present when there IS something to record — an unattached series' file is byte-identical
-    // to what it was before Phase 1.
+    // Only present when there IS something to record — an unattached, classified series' file is
+    // byte-identical to what it was before Phase 1.
+    let mut omnibus_block = serde_json::Map::new();
     if !attached_volumes.is_empty() {
-        series_json["omnibus"] = serde_json::json!({ "attached_volumes": attached_volumes });
+        omnibus_block.insert("attached_volumes".to_string(), serde_json::Value::Array(attached_volumes));
+    }
+    if booktype_guessed {
+        omnibus_block.insert("booktype_guessed".to_string(), serde_json::Value::Bool(true));
+    }
+    if !omnibus_block.is_empty() {
+        series_json["omnibus"] = serde_json::Value::Object(omnibus_block);
     }
 
     log::debug!("[Metadata Writer Debug] Exporting Mylar-spec series.json to: {:?}", json_path);
@@ -1161,6 +1172,19 @@ mod tests {
         assert_eq!(annual["source"], "COMICVINE");
         assert_eq!(annual["kind"], "ANNUAL");
         assert_eq!(annual["start_year"], 2012);
+
+        // No bookType on the row: Komga needs a non-null booktype, so "Print" goes out — marked as
+        // our guess so the next scan doesn't read it back in as a real classification.
+        assert_eq!(parsed["metadata"]["booktype"], "Print");
+        assert_eq!(parsed["omnibus"]["booktype_guessed"], true);
+        // A real bookType is exported as-is, with no guess mark.
+        sqlx::query(r#"UPDATE "Series" SET "bookType" = 'TPB' WHERE id = 's203'"#).execute(&db.pool).await.unwrap();
+        assert!(write_series_json(&db, "s203").await, "series.json rewrites with the real bookType");
+        let raw_bt = std::fs::read_to_string(folder.join("series.json")).expect("series.json");
+        let parsed_bt: serde_json::Value = serde_json::from_str(&raw_bt).expect("valid json");
+        assert_eq!(parsed_bt["metadata"]["booktype"], "TPB");
+        assert!(parsed_bt["omnibus"].get("booktype_guessed").is_none(), "a real bookType is not a guess:
+{raw_bt}");
 
         // #203 LOCAL: a local edition's books are recorded by NUMBER ("local:1"), never by a
         // provider id they don't have — that is what the local sync restores them from.

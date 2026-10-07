@@ -662,23 +662,11 @@ async fn fetch_comicvine(
     let vol_genres_json = if vol_genres.is_empty() { None } else { serde_json::to_string(&vol_genres).ok() };
 
     // ComicVine has no format field, so book type is a conservative guess (beta.032): explicit
-    // format hints in the volume name, or a finished single-issue volume = one-shot.
-    let guessed_book_type: Option<&str> = {
-        static RE_GN: OnceLock<Regex> = OnceLock::new();
-        static RE_TPB: OnceLock<Regex> = OnceLock::new();
-        let re_gn = RE_GN.get_or_init(|| Regex::new(r"(?i)graphic novel|\bOGN\b").unwrap());
-        let re_tpb = RE_TPB.get_or_init(|| Regex::new(r"(?i)\bTPB\b|trade paperback|\bHC\b|hardcover").unwrap());
-        let vol_name = vol_data["name"].as_str().unwrap_or("");
-        if re_gn.is_match(vol_name) {
-            Some("GN")
-        } else if re_tpb.is_match(vol_name) {
-            Some("TPB")
-        } else if vol_data["count_of_issues"].as_i64() == Some(1) && cv_is_ended(&vol_data["end_year"]) {
-            Some("OneShot")
-        } else {
-            None
-        }
-    };
+    // format hints in the volume name, or a single-issue volume at least two calendar years old.
+    // NOTE: this function's own `current_year` parameter is actually the series' prior/fallback
+    // year (see its use above), not today's date -- the age gate needs the real wall-clock year.
+    let today_year: i32 = chrono::Utc::now().format("%Y").to_string().parse().unwrap_or(0);
+    let guessed_book_type: Option<&'static str> = guess_book_type_from_cv_volume(vol_data, today_year);
 
     let final_cover = resolve_cover(client, image_url.as_deref(), folder_path, current_cover, has_custom_cover, cover_source).await;
 
@@ -1945,6 +1933,36 @@ pub(crate) fn next_match_state(existing: Option<String>) -> &'static str {
     if existing.as_deref() == Some("DEEP_SYNCED") { "DEEP_SYNCED" } else { "MATCHED" }
 }
 
+/// ComicVine has no format field, so the Mylar-spec bookType (Print/OneShot/TPB/GN -- what the
+/// admin UI's book-type filter queries) is a conservative guess from the volume itself: an
+/// explicit format word in its title, or ComicVine's own count_of_issues == 1 claiming it's a
+/// one-shot. NOT gated on end_year being set: checked every cached volume response from the
+/// 2026-09 deep sync (4,764 of them) and end_year was null on all of them, so a prior version of
+/// this guess that additionally required an "ended" signal from end_year could never produce
+/// OneShot at all -- ComicVine simply doesn't populate that field for this library's volumes.
+/// Review of #233: count_of_issues == 1 alone isn't enough either -- a series that just launched
+/// has one issue because #2 hasn't been solicited yet, not because it's a one-shot, and since
+/// bookType is fill-blank-only that guess is permanent. `current_year` gates it to a volume whose
+/// start_year is at least two calendar years back: one year would pass a volume that launched in
+/// December and syncs in January. Leaving it unset costs nothing, since every later sync re-checks
+/// a blank.
+pub(crate) fn guess_book_type_from_cv_volume(vol_data: &serde_json::Value, current_year: i32) -> Option<&'static str> {
+    static RE_GN: OnceLock<Regex> = OnceLock::new();
+    static RE_TPB: OnceLock<Regex> = OnceLock::new();
+    let re_gn = RE_GN.get_or_init(|| Regex::new(r"(?i)graphic novel|\bOGN\b").unwrap());
+    let re_tpb = RE_TPB.get_or_init(|| Regex::new(r"(?i)\bTPB\b|trade paperback|\bHC\b|hardcover").unwrap());
+    let vol_name = vol_data["name"].as_str().unwrap_or("");
+    if re_gn.is_match(vol_name) {
+        Some("GN")
+    } else if re_tpb.is_match(vol_name) {
+        Some("TPB")
+    } else if vol_data["count_of_issues"].as_i64() == Some(1) {
+        let start_year = vol_data["start_year"].as_str().and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
+        if start_year > 0 && start_year <= current_year - 2 { Some("OneShot") } else { None }
+    } else {
+        None
+    }
+}
 /// Column-write policy for provider credit syncs (issue #179): a locked (hasCustomMetadata) issue
 /// keeps its value; an unlocked issue takes the provider's list only when the provider actually
 /// supplied one. An empty fetch NEVER overwrites existing data — the literal-'[]' writes this
@@ -2623,6 +2641,38 @@ mod tests {
         assert_eq!(next_match_state(Some("MATCHED".to_string())), "MATCHED");
         assert_eq!(next_match_state(Some("UNMATCHED".to_string())), "MATCHED");
         assert_eq!(next_match_state(None), "MATCHED");
+    }
+
+    #[test]
+    fn guesses_one_shot_from_count_of_issues_and_an_age_gate() {
+        // This is the real cached-response shape in this library (see the doc comment on
+        // guess_book_type_from_cv_volume) -- end_year null, count_of_issues 1. start_year 2017,
+        // evaluated as of 2026, clears the age gate.
+        let vol = serde_json::json!({"name": "Winter Soldier: Winter Kills", "count_of_issues": 1, "start_year": "2017", "end_year": null});
+        assert_eq!(guess_book_type_from_cv_volume(&vol, 2026), Some("OneShot"));
+    }
+
+    #[test]
+    fn a_recently_launched_single_issue_volume_is_not_yet_a_one_shot() {
+        // Review of #233: a series that launched THIS year has one issue because #2 hasn't been
+        // solicited yet, not because it's a one-shot -- and since bookType only ever fills a
+        // blank, a wrong guess here is permanent.
+        let vol = serde_json::json!({"name": "Brand New Series", "count_of_issues": 1, "start_year": "2026"});
+        assert_eq!(guess_book_type_from_cv_volume(&vol, 2026), None);
+        // Last calendar year is still too recent: a December launch synced in January.
+        let vol2 = serde_json::json!({"name": "Brand New Series", "count_of_issues": 1, "start_year": "2025"});
+        assert_eq!(guess_book_type_from_cv_volume(&vol2, 2026), None);
+        // Two calendar years back clears the gate.
+        let vol3 = serde_json::json!({"name": "Brand New Series", "count_of_issues": 1, "start_year": "2024"});
+        assert_eq!(guess_book_type_from_cv_volume(&vol3, 2026), Some("OneShot"));
+    }
+
+    #[test]
+    fn guesses_title_hints_before_falling_back_to_issue_count() {
+        assert_eq!(guess_book_type_from_cv_volume(&serde_json::json!({"name": "Batman: Graphic Novel", "count_of_issues": 1}), 2026), Some("GN"));
+        assert_eq!(guess_book_type_from_cv_volume(&serde_json::json!({"name": "Batman TPB", "count_of_issues": 12}), 2026), Some("TPB"));
+        assert_eq!(guess_book_type_from_cv_volume(&serde_json::json!({"name": "Batman", "count_of_issues": 700}), 2026), None);
+        assert_eq!(guess_book_type_from_cv_volume(&serde_json::json!({"name": "Batman"}), 2026), None, "missing count_of_issues must not be mistaken for 1");
     }
 
     #[test]

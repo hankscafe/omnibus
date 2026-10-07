@@ -421,10 +421,13 @@ export default function SmartMatchPage() {
         let matchCount = 0;
 
         for (const series of visibleUnmatched) {
-            if (suggestions[series.id]) continue;
             // An ignored series is visible only while the toggle is on; scanning it would put a
             // suggestion back on a row the admin has already dealt with.
             if (series.isIgnored) continue;
+            // Only an ERROR is retried. A suggestion is already handled, and a NOT_FOUND would come
+            // back the same: /api/search caches every result list for 12 hours, empty ones included,
+            // so retrying it only adds the per-row pause below.
+            if (suggestions[series.id] && suggestions[series.id] !== 'ERROR') continue;
 
             try {
                 // The search term is the SERIES, not the file: a loose file arrives as its filename
@@ -443,6 +446,16 @@ export default function SmartMatchPage() {
                 
                 if (res.status === 429) {
                     throw new Error("FATAL_RATE_LIMIT");
+                }
+                // FIX (review of #231): a non-OK response (e.g. a 500 from the search route) used to
+                // fall straight into `data.results || []` below -- an empty list, same as a genuine
+                // no-match -- and get recorded as NOT_FOUND. A transient server hiccup then looked
+                // exactly like "nothing on the provider", and NOT_FOUND isn't retried (the provider
+                // genuinely has nothing new to say), so the series was stuck until a manual re-scan.
+                // Routing it through the catch block below records ERROR instead, which the retry-gap
+                // fix above DOES revisit on the next scan.
+                if (!res.ok) {
+                    throw new Error(`Search request failed with status ${res.status}`);
                 }
 
                 const data = await res.json();

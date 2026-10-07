@@ -166,13 +166,21 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 }
                 const healId = !!targetRecord && targetRecord.metadataId !== issue.sourceId;
                 const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
+                // file_metadata_priority: a release date already on the row is kept ONLY when this
+                // issue actually has a file — a WANTED placeholder has no cover date to protect, and
+                // needs the provider's store date to keep moving as a delayed issue's real release
+                // date becomes known (engine parity, review of #232).
+                const hasFile = !!(targetRecord as any)?.filePath;
+                const releaseVal = isLocked
+                    ? targetRecord!.releaseDate
+                    : (fillOnly && hasFile && targetRecord?.releaseDate) ? targetRecord.releaseDate : issue.releaseDate;
 
                 const issueDataPayload = {
                     // #199 round 3: Metron list names are composites ("X-Men (1991) #154") — the
                     // shared resolver lets them fill blanks but never clobber a real story title
                     // (detail-fetched or ComicInfo-read), and honors lock + file priority.
                     name: resolveSyncedName(targetRecord?.name, issue.name, issueNumStr, isLocked, fillOnly),
-                    releaseDate: isLocked ? targetRecord!.releaseDate : issue.releaseDate,
+                    releaseDate: releaseVal,
                     description: issue.description,
                     coverUrl: issue.coverUrl,
                     // Metron's issue_list carries no per-issue credits — the old unconditional
@@ -503,12 +511,20 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             }
             const healId = !!targetRecord && targetRecord.metadataId !== cvIdStr;
             const isLocked = (targetRecord as any)?.hasCustomMetadata || false;
+            // file_metadata_priority: a release date already on the row is kept ONLY when this
+            // issue actually has a file — a WANTED placeholder has no cover date to protect, and
+            // needs the provider's store date to keep moving as a delayed issue's real release
+            // date becomes known (engine parity, review of #232).
+            const hasFile = !!(targetRecord as any)?.filePath;
+            const releaseVal = isLocked
+                ? targetRecord!.releaseDate
+                : (fillOnly && hasFile && targetRecord?.releaseDate) ? targetRecord.releaseDate : (cvIssue.store_date || cvIssue.cover_date || null);
 
             const issueDataPayload = {
                 // Shared resolver (#199 round 3): keeps lock + file-priority semantics and stops a
                 // null/generic provider name from wiping a real story title (engine parity).
                 name: resolveSyncedName(targetRecord?.name, cvIssue.name, issueNumStr, isLocked, fillOnly),
-                releaseDate: isLocked ? targetRecord!.releaseDate : (cvIssue.store_date || cvIssue.cover_date || null),
+                releaseDate: releaseVal,
                 description: cvIssue.description || cvIssue.deck || null,
                 coverUrl: cvIssue.image?.medium_url || cvIssue.image?.small_url || null,
                 matchState: 'MATCHED'

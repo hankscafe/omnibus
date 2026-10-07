@@ -777,8 +777,136 @@ fn read_comicinfo_from_zip(path: &Path) -> anyhow::Result<Option<String>> {
     Ok(None)
 }
 
+/// Top-level children of the <ComicInfo> root as (tag name, raw element text, has content).
+/// The raw text is kept verbatim so nested blocks such as <Pages> survive byte-for-byte.
+fn top_level_elements(xml: &str) -> Vec<(String, String, bool)> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut name = String::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                if depth == 1 {
+                    start = before;
+                    let qn = e.name();
+                    let n: &str = qn.as_ref();
+                    name = n.to_string();
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(e)) => {
+                if depth == 1 {
+                    let after = reader.buffer_position() as usize;
+                    let qn = e.name();
+                    let n: &str = qn.as_ref();
+                    out.push((n.to_string(), xml[before..after].to_string(), false));
+                }
+            }
+            Ok(Event::End(_)) => {
+                depth = depth.saturating_sub(1);
+                if depth == 1 {
+                    let end = reader.buffer_position() as usize;
+                    let raw = &xml[start..end];
+                    let open_end = raw.find('>').map(|i| i + 1).unwrap_or(0);
+                    let close_start = raw.rfind("</").unwrap_or(raw.len());
+                    let has_content = open_end <= close_start && !raw[open_end..close_start].trim().is_empty();
+                    out.push((name.clone(), raw.to_string(), has_content));
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Non-destructive embed. `generated` is what Omnibus builds from its DB; `existing` is the file's
+/// current ComicInfo.xml. Rebuilding from the DB alone silently discards whatever the DB has no
+/// column for at all (<Count>, <PageCount>, ComicRack's <Pages> table, any other custom tag) --
+/// that loss is real regardless of file_metadata_priority, so it's fixed unconditionally: every
+/// tag `generated` doesn't model is carried over from `existing` verbatim. Every tag `generated`
+/// DOES model always takes the generated value -- with file_metadata_priority on, the DB already
+/// holds the file's own values for those (the scan fills them in, and a sync only fills blanks),
+/// so the embed doesn't need to independently defend them against the DB a second time; doing so
+/// previously froze bad provider values in permanently and blocked legitimate admin/provider
+/// updates from ever reaching an already-tagged file. An unparseable/missing existing ComicInfo
+/// falls back to `generated` unchanged, and so does a merge whose output isn't well-formed XML, so
+/// a bad merge can never reach a file.
+pub(crate) fn merge_comicinfo(generated: &str, existing: &str) -> String {
+    // The same clean-up the scanner applies on read: .NET taggers (ComicRack) write a byte-order
+    // mark, which quick-xml skips without counting it in buffer_position(), so every slice below
+    // would start 3 bytes early; and a bare `&` (`<Notes>Tom & Jerry</Notes>`) stops the parse,
+    // silently dropping every carried tag after it.
+    let existing = crate::scanner::sanitize_xml_ampersands(existing.trim_start_matches('\u{feff}'));
+    let gen_elems = top_level_elements(generated);
+    let old_elems = top_level_elements(&existing);
+    if gen_elems.is_empty() || old_elems.is_empty() {
+        return generated.to_string();
+    }
+    let (root_open, root_close) = match (generated.find("<ComicInfo"), generated.rfind("</ComicInfo>")) {
+        (Some(o), Some(c)) => match generated[o..].find('>') {
+            Some(gt) => (o + gt + 1, c),
+            None => return generated.to_string(),
+        },
+        _ => return generated.to_string(),
+    };
+
+    let mut body: Vec<String> = Vec::with_capacity(gen_elems.len() + 4);
+    for (_, raw, _) in &gen_elems {
+        body.push(raw.clone());
+    }
+    for (name, raw, has) in &old_elems {
+        if *has && !gen_elems.iter().any(|(n, _, _)| n == name) {
+            body.push(raw.clone());
+        }
+    }
+    let mut out = String::with_capacity(generated.len() + 512);
+    out.push_str(&generated[..root_open]);
+    for b in &body {
+        out.push_str("\n  ");
+        out.push_str(b);
+    }
+    out.push('\n');
+    out.push_str(&generated[root_close..]);
+    if !is_well_formed_xml(&out) {
+        log::warn!("[Writer] Merged ComicInfo.xml was not well-formed; writing Omnibus's own XML without the carried-over tags.");
+        return generated.to_string();
+    }
+    out
+}
+
+/// True when `xml` parses start to end with every element closed. The merge's last line of defence.
+fn is_well_formed_xml(xml: &str) -> bool {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(_)) => {
+                depth += 1;
+                saw_root = true;
+            }
+            Ok(Event::Empty(_)) => saw_root = true,
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            Ok(Event::Eof) => return saw_root && depth == 0,
+            Err(_) => return false,
+            _ => {}
+        }
+    }
+}
+
 /// Rewrites the ZIP to include the new ComicInfo.xml, preserving the source compression of every entry.
-fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
+fn inject_xml_into_zip(file_path: &str, generated_xml: &str) -> bool {
     let path = Path::new(file_path);
     if !path.exists() {
         // FIX (comicinfo-embed-logging): this used to be a silent `return false` -- a stale DB
@@ -794,7 +922,16 @@ fn inject_xml_into_zip(file_path: &str, xml_content: &str) -> bool {
     // sync re-embeds unchanged data every run; rewriting every page entry just to write the same XML
     // is pure disk churn that scales with total library size. On any read error we fall through and
     // rewrite (safe default). build_comic_info_xml is deterministic, so unchanged data → identical XML.
-    if let Ok(Some(existing)) = read_comicinfo_from_zip(path) {
+    let existing_xml = read_comicinfo_from_zip(path).ok().flatten();
+    let merged;
+    let xml_content: &str = match existing_xml.as_deref() {
+        Some(existing) => {
+            merged = merge_comicinfo(generated_xml, existing);
+            &merged
+        }
+        None => generated_xml,
+    };
+    if let Some(existing) = existing_xml.as_deref() {
         if existing == xml_content {
             log::debug!("[Embed Debug] ComicInfo.xml unchanged for {} — skipping repack.", file_path);
             return true;
@@ -924,7 +1061,7 @@ mod tests {
                 gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "mainCharacterOrTeam" TEXT,
                 "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT)"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
-                "isAnnual" INTEGER DEFAULT 0,
+                "isAnnual" INTEGER DEFAULT 0, "hasCustomMetadata" INTEGER DEFAULT 0,
                 name TEXT, description TEXT, "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
                 writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
                 letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,
@@ -1034,6 +1171,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Review of #232: through the REAL embed job (not the pure merge_comicinfo unit test), a cbz
+    /// whose existing ComicInfo.xml carries ComicRack's <Count>/<PageCount>/<Pages> table keeps
+    /// them, in both file_metadata_priority settings -- that loss was real regardless of the flag,
+    /// and the fix for it is unconditional. A modeled tag (<Summary>) takes the DB's value either
+    /// way too; the embed no longer "defends" DB-modeled tags against the file a second time.
+    #[tokio::test]
+    async fn embed_job_preserves_unmodeled_tags_through_a_real_archive_in_both_priority_modes() {
+        let build_cbz = |path: &std::path::Path| {
+            let f = File::create(path).unwrap();
+            let mut zw = ZipWriter::new(f);
+            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.start_file("ComicInfo.xml", FileOptions::default()).unwrap();
+            zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Series>Old Name</Series><Title>Old file title</Title><Summary>file summary</Summary><Count>6</Count><PageCount>17</PageCount><Pages><Page Image="0" Type="FrontCover" /><Page Image="1" /></Pages></ComicInfo>"#).unwrap();
+            zw.finish().unwrap();
+        };
+
+        for file_priority in ["true", "false"] {
+            let base = std::env::temp_dir().join(format!("omnibus_embed_preserve_{}_{}", file_priority, std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).unwrap();
+            let cbz = base.join("Nick Fury 001.cbz");
+            build_cbz(&cbz);
+
+            let db_file = base.join("ci.db");
+            File::create(&db_file).unwrap();
+            let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+            let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+            for ddl in [
+                r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
+                r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER,
+                    "folderPath" TEXT, universe TEXT, "seriesGroup" TEXT, "isManga" INTEGER DEFAULT 0,
+                    "metadataId" TEXT, "metadataSource" TEXT, genres TEXT,
+                    writers TEXT, artists TEXT, "coverArtists" TEXT, colorists TEXT, letterers TEXT,
+                    characters TEXT, teams TEXT, locations TEXT, "storyArcs" TEXT,
+                    inker TEXT, editor TEXT, translator TEXT, imprint TEXT, tags TEXT, format TEXT,
+                    "languageISO" TEXT, "ageRating" TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
+                    gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "mainCharacterOrTeam" TEXT,
+                    "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT)"#,
+                r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
+                    "isAnnual" INTEGER DEFAULT 0, "hasCustomMetadata" INTEGER DEFAULT 0,
+                    name TEXT, description TEXT, "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
+                    writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
+                    letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,
+                    tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+                    "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
+                    "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
+                    "metadataId" TEXT, "metadataSource" TEXT, "attachedVolumeId" TEXT)"#,
+                r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
+                    "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
+                    "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+            ] {
+                sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+            }
+            sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('export_series_json', 'false')"#)
+                .execute(&db.pool).await.unwrap();
+            sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('file_metadata_priority', $1)"#)
+                .bind(file_priority)
+                .execute(&db.pool).await.unwrap();
+            sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, "metadataId", "metadataSource") VALUES ('s232', 'Nick Fury', 'Marvel', 2017, '100830', 'COMICVINE')"#)
+                .execute(&db.pool).await.unwrap();
+            let cbz_str = cbz.to_string_lossy().replace('\\', "/");
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, description, "metadataId", "metadataSource") VALUES ('i232', 's232', $1, '1', 'provider summary', '592604', 'COMICVINE')"#)
+                .bind(&cbz_str).execute(&db.pool).await.unwrap();
+
+            let (ok, fail, _) = process_embed_job(db.clone(), EmbedRequest { series_id: Some("s232".to_string()), issue_ids: None }).await.expect("embed job");
+            assert_eq!((ok, fail), (1, 0), "file_metadata_priority={file_priority}");
+
+            let xml = read_comicinfo_from_zip(&cbz).unwrap().expect("ComicInfo.xml embedded");
+            assert!(xml.contains("<Count>6</Count>"), "file_metadata_priority={file_priority}:\n{xml}");
+            assert!(xml.contains("<PageCount>17</PageCount>"), "file_metadata_priority={file_priority}:\n{xml}");
+            assert!(xml.contains(r#"<Page Image="1" />"#), "Pages block survives, file_metadata_priority={file_priority}:\n{xml}");
+            assert!(xml.contains("<Series>Nick Fury</Series>"), "an Omnibus-modeled tag always takes the DB value, file_metadata_priority={file_priority}:\n{xml}");
+            assert!(xml.contains("<Summary>provider summary</Summary>"), "a modeled tag is never defended against the DB, file_metadata_priority={file_priority}:\n{xml}");
+            // A modeled field that's blank in the DB clears the file's old value instead of reviving
+            // it: the builder writes every tag it models, empty ones included, so the merge never
+            // carries the file's <Title> over.
+            assert!(!xml.contains("Old file title"), "a blank DB title clears the file's, file_metadata_priority={file_priority}:\n{xml}");
+            assert!(xml.contains("<Title></Title>"), "file_metadata_priority={file_priority}:\n{xml}");
+
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
     // #203 Phase 1 — the two halves of the zero-API restore, proven together through the real embed
     // job: series.json records WHICH volumes are attached, and each annual FILE records which one it
     // belongs to. A wipe → rescan can rebuild the whole lane from these two facts alone.
@@ -1073,7 +1294,7 @@ mod tests {
                 gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT, "mainCharacterOrTeam" TEXT,
                 "alternateSeries" TEXT, "alternateNumber" TEXT, "alternateCount" INTEGER, "storyArcNumber" TEXT)"#,
             r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
-                "isAnnual" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT, name TEXT, description TEXT,
+                "isAnnual" INTEGER DEFAULT 0, "hasCustomMetadata" INTEGER DEFAULT 0, "attachedVolumeId" TEXT, "coversIssues" TEXT, name TEXT, description TEXT,
                 "releaseDate" TEXT, universe TEXT, genres TEXT, "storyArcs" TEXT,
                 writers TEXT, artists TEXT, characters TEXT, "coverArtists" TEXT, colorists TEXT,
                 letterers TEXT, teams TEXT, locations TEXT, inker TEXT, editor TEXT, translator TEXT,
@@ -1204,5 +1425,72 @@ mod tests {
         assert_eq!(format_month_year("2020"), "2020"); // no month -> year only
         assert_eq!(format_month_year("2020-00-01"), "2020"); // invalid month index
         assert_eq!(format_month_year("2020-13"), "2020");
+    }
+    const GEN: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<ComicInfo xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n  <Series>Nick Fury</Series>\n  <Number>1</Number>\n  <Summary>provider text</Summary>\n  <Year>2017</Year>\n  <Month>04</Month>\n  <Day>19</Day>\n  <Editor>A, B, C</Editor>\n  <Genre>Superhero</Genre>\n  <Web>https://comicvine.gamespot.com/issue/4000-1/</Web>\n</ComicInfo>";
+    const OLD: &str = "<?xml version=\"1.0\"?>\n<ComicInfo>\n  <Series>Old Name</Series>\n  <Number>1</Number>\n  <Summary>file text</Summary>\n  <Count>6</Count>\n  <PageCount>17</PageCount>\n  <Year>2017</Year>\n  <Month>6</Month>\n  <Day>30</Day>\n  <Editor>A, B</Editor>\n  <Genre />\n  <Web>https://comicvine.gamespot.com/x/4000-1/</Web>\n  <Pages>\n    <Page Image=\"0\" ImageWidth=\"1988\" Type=\"FrontCover\" />\n    <Page Image=\"1\" />\n  </Pages>\n</ComicInfo>";
+
+    #[test]
+    fn merge_keeps_generated_for_modeled_tags_and_carries_over_tags_omnibus_does_not_model() {
+        // Review of #232: dropped per-tag "file wins" entirely -- with file_metadata_priority on,
+        // the DB already holds the file's own values for every tag Omnibus models (the scan fills
+        // them in, a sync only fills blanks), so `generated` is trusted outright for those. The
+        // embed's only remaining job is not LOSING a tag Omnibus has no column for at all.
+        let m = merge_comicinfo(GEN, OLD);
+        let tags = top_level_elements(&m);
+        let get = |n: &str| tags.iter().find(|(name, _, _)| name == n).map(|(_, r, _)| r.clone());
+        assert_eq!(get("Series").unwrap(), "<Series>Nick Fury</Series>");
+        assert_eq!(get("Web").unwrap(), "<Web>https://comicvine.gamespot.com/issue/4000-1/</Web>");
+        assert_eq!(get("Summary").unwrap(), "<Summary>provider text</Summary>", "a modeled tag always takes the generated value");
+        assert_eq!(get("Month").unwrap(), "<Month>04</Month>");
+        assert_eq!(get("Day").unwrap(), "<Day>19</Day>");
+        assert_eq!(get("Editor").unwrap(), "<Editor>A, B, C</Editor>");
+        assert_eq!(get("Genre").unwrap(), "<Genre>Superhero</Genre>");
+        // The real fix: tags Omnibus's schema has no column for at all survive verbatim, in every
+        // case, because the DB literally cannot have an opinion on data it doesn't model.
+        assert_eq!(get("Count").unwrap(), "<Count>6</Count>");
+        assert_eq!(get("PageCount").unwrap(), "<PageCount>17</PageCount>");
+        assert!(get("Pages").unwrap().contains(r#"<Page Image="1" />"#), "Pages block survives verbatim");
+        assert_eq!(merge_comicinfo(GEN, &m), m, "merging is idempotent (unchanged files are not repacked)");
+    }
+
+    #[test]
+    fn merge_handles_a_bom_prefixed_crlf_comicinfo() {
+        // ComicRack and other .NET taggers write a byte-order mark (and CRLF). Unstripped, every
+        // slice came out 3 bytes early: "<Count>6</Cou", "</Pag", and a file nothing could read.
+        let old = "\u{feff}<?xml version=\"1.0\"?>\r\n<ComicInfo>\r\n  <Series>Old Name</Series>\r\n  <Count>6</Count>\r\n  <PageCount>17</PageCount>\r\n  <Pages>\r\n    <Page Image=\"0\" Type=\"FrontCover\" />\r\n    <Page Image=\"1\" />\r\n  </Pages>\r\n</ComicInfo>";
+        let m = merge_comicinfo(GEN, old);
+        assert!(is_well_formed_xml(&m), "merged output must parse:\n{m}");
+        let tags = top_level_elements(&m);
+        let get = |n: &str| tags.iter().find(|(name, _, _)| name == n).map(|(_, r, _)| r.clone());
+        assert_eq!(get("Count").unwrap(), "<Count>6</Count>");
+        assert_eq!(get("PageCount").unwrap(), "<PageCount>17</PageCount>");
+        assert!(get("Pages").unwrap().ends_with("</Pages>"));
+        assert!(get("Pages").unwrap().contains(r#"<Page Image="1" />"#));
+        assert_eq!(get("Series").unwrap(), "<Series>Nick Fury</Series>");
+    }
+
+    #[test]
+    fn merge_survives_a_bare_ampersand_ahead_of_carried_tags() {
+        // Unsanitised, the `&` stops the parse and every carried tag after it is silently dropped.
+        let old = "<?xml version=\"1.0\"?><ComicInfo><Notes>Tom & Jerry</Notes><Count>6</Count><PageCount>17</PageCount></ComicInfo>";
+        let m = merge_comicinfo(GEN, old);
+        assert!(is_well_formed_xml(&m), "merged output must parse:\n{m}");
+        assert!(m.contains("<Count>6</Count>"), "{m}");
+        assert!(m.contains("<PageCount>17</PageCount>"), "{m}");
+    }
+
+    #[test]
+    fn well_formed_check_rejects_truncated_or_mismatched_xml() {
+        assert!(is_well_formed_xml(GEN));
+        assert!(!is_well_formed_xml("<ComicInfo><Count>6</Cou"));
+        assert!(!is_well_formed_xml("<ComicInfo><Count>6</Count><Pages></Pag"));
+        assert!(!is_well_formed_xml("<ComicInfo><Count>6</PageCount></ComicInfo>"));
+        assert!(!is_well_formed_xml(""));
+    }
+
+    #[test]
+    fn merge_falls_back_to_generated_on_unparseable_existing() {
+        assert_eq!(merge_comicinfo(GEN, "not xml at all"), GEN);
+        assert_eq!(merge_comicinfo(GEN, "<ComicInfo></ComicInfo>"), GEN);
     }
 }

@@ -178,6 +178,84 @@ const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 /// 429 is a throttle, not a challenge — it must never burn a 300s solver run.
 fn is_rate_limited(status: u16) -> bool { status == 429 }
 
+// #240: what a finished transfer must prove before the importer sees it. Three outcomes, three
+// retry behaviours (download_with_retries):
+//   - TRUNCATED: fewer bytes than announced - the banked bytes are a good prefix, resume them;
+//   - RESTART:   the bytes on disk can't be trusted (a resume answered from the wrong offset, more
+//                bytes than announced, an archive that doesn't open after a body of unknown length)
+//                - drop them and re-fetch from zero;
+//   - CORRUPT:   every announced byte arrived and the archive still doesn't open - the file itself
+//                is bad, so the same URL won't do better: stop, and let Node try the next hoster.
+const ERR_TRUNCATED: &str = "Download truncated";
+const ERR_RESTART: &str = "restarting from zero";
+const ERR_CORRUPT: &str = "Downloaded archive is corrupt";
+const ERR_INCOMPLETE: &str = "Downloaded archive is incomplete";
+
+/// The download-integrity failures above. For a getcomics link these are NOT "manual download
+/// required" - the file came through and was bad - so they pass through for the next hoster.
+fn is_integrity_failure(err: &str) -> bool {
+    [ERR_TRUNCATED, ERR_RESTART, ERR_CORRUPT, ERR_INCOMPLETE].iter().any(|m| err.contains(m))
+}
+
+/// A getcomics failure becomes the "manual download required" hold unless it is a 429 throttle (the
+/// user would click into the same throttle) or an integrity failure (the file arrived and was bad).
+fn holds_for_manual_download(err: &str) -> bool {
+    !err.contains("rate limited") && !is_integrity_failure(err)
+}
+
+/// `Content-Range: bytes <start>-<end>/<total|*>` → (start, total).
+fn parse_content_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let rest = value.trim().strip_prefix("bytes")?.trim();
+    let (range, total) = rest.split_once('/')?;
+    let (start, _end) = range.trim().split_once('-')?;
+    let start = start.trim().parse::<u64>().ok()?;
+    let total = match total.trim() {
+        "*" => None,
+        t => Some(t.parse::<u64>().ok()?),
+    };
+    Some((start, total))
+}
+
+/// How a response body relates to the bytes already banked in the .part file.
+#[derive(Debug, PartialEq)]
+struct BodyPlan {
+    /// Append after the banked bytes (a 206 that starts exactly where they end).
+    append: bool,
+    already_have: u64,
+    /// The whole file's size, when the server said: Content-Range's total, or the Content-Length.
+    expected_total: Option<u64>,
+}
+
+/// A 206 must start exactly where the banked bytes end - appending a body that starts anywhere else
+/// silently corrupts the file. Any other 2xx is a full body: truncate and count from zero.
+fn plan_body(requested_resume: u64, partial: bool, content_length: Option<u64>, content_range: Option<&str>) -> Result<BodyPlan> {
+    if !partial {
+        return Ok(BodyPlan { append: false, already_have: 0, expected_total: content_length.filter(|l| *l > 0) });
+    }
+    let Some((start, total)) = content_range.and_then(parse_content_range) else {
+        bail!("Partial response without a usable Content-Range; {}", ERR_RESTART);
+    };
+    if start != requested_resume {
+        bail!("Range resume answered from byte {} instead of {}; {}", start, requested_resume, ERR_RESTART);
+    }
+    Ok(BodyPlan {
+        append: requested_resume > 0,
+        already_have: requested_resume,
+        expected_total: total.or_else(|| content_length.map(|l| requested_resume + l)),
+    })
+}
+
+/// A ZIP must open: its end record and central directory - the last bytes written - are what a cut
+/// transfer loses first, and reading them doesn't touch the pages. RAR/7z are left to the length
+/// checks (never judge unrar by its exit code; testing a GB-sized pack is too slow).
+fn check_archive(path: &Path) -> std::result::Result<(), String> {
+    if !crate::converter::is_zip_signature(&crate::converter::read_file_signature(path)) {
+        return Ok(());
+    }
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    zip::ZipArchive::new(file).map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Lower-cased Content-Type of a response (empty string if absent).
 fn response_content_type(response: &reqwest::Response) -> String {
     response.headers().get(reqwest::header::CONTENT_TYPE)
@@ -264,8 +342,10 @@ pub async fn stream_download(db: &sqlx::AnyPool, req: StreamRequest) -> Result<S
         // A 429 throttle is NOT a "couldn't get past Cloudflare" situation — holding it for manual
         // download would just have the user click into the same throttle. Let it surface as a normal
         // retryable failure so the request lifecycle (retry route / dead-request sweep) re-fires it
-        // once the window passes.
-        Err(e) if is_getcomics && !e.to_string().contains("rate limited") => {
+        // once the window passes. Neither is a file that arrived truncated or corrupt (#240): that
+        // error passes through so Node tries the next hoster (it still holds a getcomics link for
+        // manual download if every hoster fails).
+        Err(e) if is_getcomics && holds_for_manual_download(&e.to_string()) => {
             log::warn!("[Internal DL] GetComics download couldn't be completed automatically ({e}); holding for manual download.");
             bail!("GetComics download couldn't be completed automatically; manual download required.")
         }
@@ -309,49 +389,7 @@ async fn run_stream_download(db: &sqlx::AnyPool, req: &StreamRequest) -> Result<
     });
     let client = reqwest::Client::builder().redirect(redirect_policy).build()?;
 
-    // Each attempt re-establishes the stream AND runs the transfer to completion: a mid-stream 45s stall
-    // (or a truncated/too-small file, or an HTML error/challenge page) consumes a retry instead of
-    // failing outright. Kapowarr-parity: partial bytes are BANKED between attempts — a retry against
-    // the same URL asks for `Range: bytes=N-` and appends, so a 300MB stall doesn't restart from zero
-    // (their client resumes as a matter of course; a 200 answer on the retry truncates and restarts).
-    const MAX_ATTEMPTS: u32 = 3;
-    let mut last_err = anyhow!("download failed before any attempt");
-    let mut succeeded = false;
-    let mut resume_hint: Option<(String, u64)> = None;
-    for attempt in 1..=MAX_ATTEMPTS {
-        let (result, streamed_url) = attempt_stream_to_part(db, &client, req, &part_path, &resume_hint).await;
-        match result {
-            Ok(()) => {
-                succeeded = true;
-                break;
-            }
-            Err(e) => {
-                // A 429 means the source will refuse the NEXT attempt too — stop burning retries.
-                let is_throttle = e.to_string().contains("rate limited");
-                let part_len = tokio::fs::metadata(&part_path).await.map(|m| m.len()).unwrap_or(0);
-                resume_hint = streamed_url.filter(|_| part_len > 0).map(|u| (u, part_len));
-                if resume_hint.is_none() {
-                    let _ = tokio::fs::remove_file(&part_path).await;
-                }
-                log::warn!(
-                    "[Internal DL] Attempt {}/{} failed ({}){}.",
-                    attempt, MAX_ATTEMPTS, e,
-                    resume_hint.as_ref().map(|(_, n)| format!("; {} bytes banked for a Range resume", n)).unwrap_or_default()
-                );
-                last_err = e;
-                if is_throttle {
-                    break;
-                }
-                if attempt < MAX_ATTEMPTS {
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                }
-            }
-        }
-    }
-    if !succeeded {
-        let _ = tokio::fs::remove_file(&part_path).await;
-        return Err(last_err);
-    }
+    download_with_retries(db, &client, req, &part_path).await?;
 
     // Overwrite any existing final file, then rename .part → final (timestamped fallback if locked).
     let _ = tokio::fs::remove_file(&req.dest_path).await;
@@ -368,6 +406,59 @@ async fn run_stream_download(db: &sqlx::AnyPool, req: &StreamRequest) -> Result<
     };
     tokio::fs::rename(&part_path, &ts_path).await?;
     Ok(ts_path)
+}
+
+/// Pause between attempts (short under test so retry paths don't slow the suite).
+#[cfg(not(test))]
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
+#[cfg(test)]
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Runs up to three attempts and leaves the completed bytes at `part_path` on success (the .part is
+/// removed on failure). Each attempt re-establishes the stream AND runs the transfer to completion: a
+/// mid-stream 45s stall (or a truncated/too-small file, or an HTML error/challenge page) consumes a
+/// retry instead of failing outright. Kapowarr-parity: partial bytes are BANKED between attempts — a
+/// retry against the same URL asks for `Range: bytes=N-` and appends, so a 300MB stall doesn't restart
+/// from zero (their client resumes as a matter of course; a 200 answer on the retry truncates and restarts).
+async fn download_with_retries(db: &sqlx::AnyPool, client: &reqwest::Client, req: &StreamRequest, part_path: &str) -> Result<()> {
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_err = anyhow!("download failed before any attempt");
+    let mut resume_hint: Option<(String, u64)> = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let (result, streamed_url) = attempt_stream_to_part(db, client, req, part_path, &resume_hint).await;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                // A 429 means the source will refuse the NEXT attempt too — stop burning retries. So
+                // does a file that arrived whole and is still corrupt (#240): the same URL serves the
+                // same bad bytes, so Node moves on to the next hoster instead.
+                let is_throttle = msg.contains("rate limited");
+                let is_corrupt = msg.contains(ERR_CORRUPT);
+                // Bytes that can't be trusted are never resumed (#240): re-fetch from zero.
+                let restart = msg.contains(ERR_RESTART);
+                let part_len = tokio::fs::metadata(part_path).await.map(|m| m.len()).unwrap_or(0);
+                resume_hint = if restart { None } else { streamed_url.filter(|_| part_len > 0).map(|u| (u, part_len)) };
+                if resume_hint.is_none() {
+                    let _ = tokio::fs::remove_file(part_path).await;
+                }
+                log::warn!(
+                    "[Internal DL] Attempt {}/{} failed ({}){}.",
+                    attempt, MAX_ATTEMPTS, e,
+                    resume_hint.as_ref().map(|(_, n)| format!("; {} bytes banked for a Range resume", n)).unwrap_or_default()
+                );
+                last_err = e;
+                if is_throttle || is_corrupt {
+                    break;
+                }
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(RETRY_PAUSE).await;
+                }
+            }
+        }
+    }
+    let _ = tokio::fs::remove_file(part_path).await;
+    Err(last_err)
 }
 
 /// A single download attempt. Returns the inner result PLUS the URL the attempt actually streamed
@@ -494,28 +585,41 @@ async fn attempt_stream_inner(
         bail!("Download URL returned an HTML webpage instead of a comic file.");
     }
 
+    // #240: an error status is never the file (its body used to be saved as one). A 416 on a resume
+    // means the banked bytes don't fit what the server has: start over.
+    let requested_resume = resume_offset(resume_hint, &target_url).unwrap_or(0);
+    let status = response.status();
+    if !status.is_success() {
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && requested_resume > 0 {
+            bail!("Download URL refused the resume (HTTP {}); {}", status, ERR_RESTART);
+        }
+        bail!("Download URL answered HTTP {}", status);
+    }
+
     // From here on bytes may land in the .part file — record where they came from for resume banking.
     *streamed_from = Some(target_url.clone());
 
-    // 206 = the server honored the Range resume: append after the banked bytes. Any 200 (even when a
-    // resume was requested) means a full body: truncate and restart the count from zero.
-    let requested_resume = resume_offset(resume_hint, &target_url).unwrap_or(0);
-    let resuming = requested_resume > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    let already_have: u64 = if resuming { requested_resume } else { 0 };
-    let total = match response.content_length() {
-        Some(len) if len > 0 => already_have + len,
-        _ => 0,
-    };
+    // 206 = the server honored the Range resume: append after the banked bytes, but only when its
+    // Content-Range starts exactly there (#240). Any 200 (even when a resume was requested) means a
+    // full body: truncate and restart the count from zero.
+    let content_range = response.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let plan = plan_body(
+        requested_resume,
+        status == reqwest::StatusCode::PARTIAL_CONTENT,
+        response.content_length(),
+        content_range.as_deref(),
+    )?;
+    let total = plan.expected_total.unwrap_or(0);
 
     // Stream to the .part file. The 45s stall-watchdog is a per-chunk timeout: no data for 45s aborts
     // (Node reset a setTimeout on every 'data' event). Progress is throttled to every 5% / >2s.
-    let mut file = if resuming {
+    let mut file = if plan.append {
         tokio::fs::OpenOptions::new().append(true).open(part_path).await?
     } else {
         tokio::fs::File::create(part_path).await?
     };
     let mut stream = response.bytes_stream();
-    let mut downloaded: u64 = already_have;
+    let mut downloaded: u64 = plan.already_have;
     let mut last_pct: i64 = -1;
     let mut last_update = std::time::Instant::now();
     let mut first_update = true;
@@ -549,12 +653,34 @@ async fn attempt_stream_inner(
     file.flush().await?;
     drop(file);
 
+    // #240: a clean end of stream is not proof of a whole file - compare with what was announced.
+    if let Some(expected) = plan.expected_total {
+        if downloaded < expected {
+            bail!("{}: received {} of {} bytes", ERR_TRUNCATED, downloaded, expected);
+        }
+        if downloaded > expected {
+            bail!("Received {} bytes but the server announced {}; {}", downloaded, expected, ERR_RESTART);
+        }
+    }
+
     // Reject suspiciously small files (a failed/blocked download often yields a tiny error page). The
     // caller cleans up the partial and retries (or, for getcomics, hands it to the manual-hold wrapper).
     let size = tokio::fs::metadata(part_path).await?.len();
     let min_size = req.min_size_bytes.unwrap_or(DEFAULT_MIN_SIZE);
     if size < min_size {
         bail!("Downloaded file is suspiciously small ({}kb). Aborting.", size / 1024);
+    }
+
+    // #240: a ZIP that doesn't open never reaches the importer (a 1.2 GB pack cut short was imported
+    // as one issue with 0 pages). With the full announced length on disk the file itself is bad;
+    // with no length to compare against, the transfer may simply have been cut - re-fetch it.
+    let path = std::path::PathBuf::from(part_path);
+    let verdict = tokio::task::spawn_blocking(move || check_archive(&path)).await?;
+    if let Err(reason) = verdict {
+        if plan.expected_total.is_some() {
+            bail!("{} ({}); every announced byte arrived, so the file itself is bad", ERR_CORRUPT, reason);
+        }
+        bail!("{} ({}); {}", ERR_INCOMPLETE, reason, ERR_RESTART);
     }
 
     Ok(())
@@ -654,6 +780,251 @@ mod tests {
     fn default_ua_is_a_complete_browser_string() {
         assert!(DEFAULT_UA.contains("Chrome/"), "UA should carry a Chrome token: {DEFAULT_UA}");
         assert!(DEFAULT_UA.ends_with("Safari/537.36"), "UA should end with the Safari token: {DEFAULT_UA}");
+    }
+
+    // ==== #240 finding 4: a truncated pack was declared complete. The stream loop ended on any clean
+    // EOF and never compared what it received with what the server announced; a resume's 206 was
+    // appended whatever range it carried; the HTTP status was never checked; and nothing looked at
+    // the archive before it was handed to the importer.
+
+    /// A raw HTTP server: each accepted connection gets the next canned response written verbatim,
+    /// then the socket closes - so a response without Content-Length is a close-delimited body that
+    /// can end anywhere (what a framework won't produce). Records each request's header block.
+    async fn fake_server(responses: Vec<Vec<u8>>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_by_server = seen.clone();
+        tokio::spawn(async move {
+            for resp in responses {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
+                seen_by_server.lock().unwrap().push(String::from_utf8_lossy(&head).to_lowercase());
+                let _ = sock.write_all(&resp).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (format!("http://{}/Pack.cbz", addr), seen)
+    }
+
+    fn http(status: &str, headers: &[(&str, String)], body: &[u8]) -> Vec<u8> {
+        let mut head = format!("HTTP/1.1 {}\r\nConnection: close\r\nContent-Type: application/octet-stream\r\n", status);
+        for (k, v) in headers {
+            head.push_str(&format!("{}: {}\r\n", k, v));
+        }
+        head.push_str("\r\n");
+        let mut out = head.into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// A small valid CBZ (stored entries, so its length is predictable).
+    fn zip_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::FileOptions = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            for i in 0..4u8 {
+                zw.start_file(format!("{:02}.jpg", i), opts).unwrap();
+                zw.write_all(&vec![i; 4096]).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        buf
+    }
+
+    async fn dl_fixture(url: &str) -> (std::path::PathBuf, crate::db::Db, StreamRequest, String) {
+        let dir = std::env::temp_dir().join(format!("omnibus_dl_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_file = dir.join("dl.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        let dest = dir.join("Pack.cbz").to_string_lossy().to_string();
+        let req = StreamRequest {
+            request_id: "req_1".into(), url: url.into(), headers: HashMap::new(),
+            dest_path: dest.clone(), min_size_bytes: Some(1), ext: Some("cbz".into()),
+        };
+        (dir, db, req, format!("{}.part", dest))
+    }
+
+    #[tokio::test]
+    async fn a_truncated_pack_without_a_length_is_never_accepted() {
+        let zip = zip_bytes();
+        let half = zip[..zip.len() / 2].to_vec();
+        // The connection just closes mid-archive, three times over: no Content-Length, no error.
+        let (url, seen) = fake_server(vec![http("200 OK", &[], &half), http("200 OK", &[], &half), http("200 OK", &[], &half)]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+
+        let err = download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap_err();
+
+        assert!(err.to_string().contains("incomplete"), "{err}");
+        assert!(!Path::new(&part).exists(), "no partial left behind");
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3, "an incomplete download is retried");
+        assert!(seen.iter().all(|h| !h.contains("range:")), "an archive that may be corrupt is re-fetched from zero, not resumed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_complete_but_corrupt_archive_fails_without_retrying_the_same_url() {
+        let mut corrupt = zip_bytes();
+        let n = corrupt.len();
+        for b in &mut corrupt[n - 22..] { *b = 0; } // the end-of-central-directory record is gone
+        let len = corrupt.len().to_string();
+        let good = zip_bytes();
+        let good_len = good.len().to_string();
+        // Every announced byte arrives, and the archive is still unreadable: the file itself is bad.
+        let (url, seen) = fake_server(vec![
+            http("200 OK", &[("Content-Length", len)], &corrupt),
+            http("200 OK", &[("Content-Length", good_len)], &good),
+        ]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+
+        let err = download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap_err();
+
+        assert!(err.to_string().contains("corrupt"), "{err}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "re-downloading a bad file from the same URL is pointless - the next hoster gets the next try");
+        assert!(!Path::new(&part).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_resume_answered_from_the_wrong_offset_restarts_from_zero() {
+        let zip = zip_bytes();
+        let total = zip.len();
+        let half = total / 2;
+        let (url, seen) = fake_server(vec![
+            // 1. The announced body stops halfway: half is banked for a resume.
+            http("200 OK", &[("Content-Length", total.to_string())], &zip[..half]),
+            // 2. The Range resume is answered from byte 0 - appending that would corrupt the file.
+            http("206 Partial Content", &[("Content-Length", total.to_string()), ("Content-Range", format!("bytes 0-{}/{}", total - 1, total))], &zip),
+            // 3. A plain re-fetch delivers the whole file.
+            http("200 OK", &[("Content-Length", total.to_string())], &zip),
+        ]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+
+        download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap();
+
+        assert_eq!(std::fs::read(&part).unwrap(), zip, "the finished file is the archive, not half + whole");
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen[1].contains(&format!("range: bytes={}-", half)), "attempt 2 resumed: {}", seen[1]);
+        assert!(!seen[2].contains("range:"), "attempt 3 restarted from zero: {}", seen[2]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_correct_resume_appends_and_completes() {
+        let zip = zip_bytes();
+        let total = zip.len();
+        let half = total / 2;
+        let (url, _seen) = fake_server(vec![
+            http("200 OK", &[("Content-Length", total.to_string())], &zip[..half]),
+            http("206 Partial Content", &[("Content-Length", (total - half).to_string()), ("Content-Range", format!("bytes {}-{}/{}", half, total - 1, total))], &zip[half..]),
+        ]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+
+        download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap();
+
+        assert_eq!(std::fs::read(&part).unwrap(), zip);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_short_resume_is_truncation_keeps_its_bytes_and_resumes_again() {
+        let zip = zip_bytes();
+        let total = zip.len();
+        let (half, three_q) = (total / 2, total * 3 / 4);
+        let (url, seen) = fake_server(vec![
+            http("200 OK", &[("Content-Length", total.to_string())], &zip[..half]),
+            // A capped range: the server sends a quarter but says the file is `total` long.
+            http("206 Partial Content", &[("Content-Length", (three_q - half).to_string()), ("Content-Range", format!("bytes {}-{}/{}", half, three_q - 1, total))], &zip[half..three_q]),
+            http("206 Partial Content", &[("Content-Length", (total - three_q).to_string()), ("Content-Range", format!("bytes {}-{}/{}", three_q, total - 1, total))], &zip[three_q..]),
+        ]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+
+        download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap();
+
+        assert_eq!(std::fs::read(&part).unwrap(), zip);
+        assert!(seen.lock().unwrap()[2].contains(&format!("range: bytes={}-", three_q)), "the truncated attempt's bytes were kept and resumed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn content_range_and_body_plans() {
+        assert_eq!(parse_content_range("bytes 100-199/200"), Some((100, Some(200))));
+        assert_eq!(parse_content_range("bytes 0-99/*"), Some((0, None)));
+        assert_eq!(parse_content_range("items 0-1/2"), None);
+        assert_eq!(parse_content_range("bytes oops"), None);
+
+        // A full body: count from zero; the Content-Length is the whole file.
+        assert_eq!(plan_body(0, false, Some(500), None).unwrap(), BodyPlan { append: false, already_have: 0, expected_total: Some(500) });
+        assert_eq!(plan_body(4096, false, None, None).unwrap(), BodyPlan { append: false, already_have: 0, expected_total: None });
+        // A resume that starts where the bank ends appends; the total comes from Content-Range.
+        assert_eq!(plan_body(100, true, Some(100), Some("bytes 100-199/200")).unwrap(), BodyPlan { append: true, already_have: 100, expected_total: Some(200) });
+        assert_eq!(plan_body(100, true, Some(100), Some("bytes 100-199/*")).unwrap().expected_total, Some(200));
+        // Anywhere else, or no Content-Range at all: the bank can't be trusted.
+        assert!(plan_body(100, true, Some(200), Some("bytes 0-199/200")).unwrap_err().to_string().contains(ERR_RESTART));
+        assert!(plan_body(100, true, Some(100), None).unwrap_err().to_string().contains(ERR_RESTART));
+    }
+
+    #[test]
+    fn integrity_failures_are_not_held_for_manual_download() {
+        // Challenges, stalls and tiny error pages on a getcomics link still become the manual hold...
+        assert!(holds_for_manual_download("Download URL returned an HTML webpage instead of a comic file."));
+        assert!(holds_for_manual_download("Download stalled for 45 seconds"));
+        assert!(holds_for_manual_download("Downloaded file is suspiciously small (3kb). Aborting."));
+        // ...but a throttle, or a file that arrived and was bad, goes to the next hoster.
+        assert!(!holds_for_manual_download("GetComics rate limited (429) the download link; deferring for a later retry."));
+        assert!(!holds_for_manual_download("Download truncated: received 10 of 20 bytes"));
+        assert!(!holds_for_manual_download("Downloaded archive is corrupt (invalid Zip archive); every announced byte arrived, so the file itself is bad"));
+        assert!(!holds_for_manual_download("Downloaded archive is incomplete (invalid Zip archive); restarting from zero"));
+    }
+
+    #[tokio::test]
+    async fn complete_archives_and_non_zip_files_still_download() {
+        // A whole CBZ with no Content-Length (close-delimited) is fine.
+        let zip = zip_bytes();
+        let (url, _) = fake_server(vec![http("200 OK", &[], &zip)]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+        download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), zip);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // RAR/7z can't be checked cheaply (never judge unrar by exit code; `unrar t` on a GB-sized
+        // pack is too slow) - those rely on the length checks alone.
+        let mut rar = b"Rar!\x1a\x07\x01\x00".to_vec();
+        rar.extend_from_slice(&[7u8; 4096]);
+        let (url, _) = fake_server(vec![http("200 OK", &[], &rar)]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+        download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), rar);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_http_error_status_is_never_saved_as_the_file() {
+        let body = vec![1u8; 4096];
+        let (url, _) = fake_server(vec![
+            http("404 Not Found", &[("Content-Length", body.len().to_string())], &body),
+            http("404 Not Found", &[("Content-Length", body.len().to_string())], &body),
+            http("404 Not Found", &[("Content-Length", body.len().to_string())], &body),
+        ]).await;
+        let (dir, db, req, part) = dl_fixture(&url).await;
+
+        let err = download_with_retries(&db.pool, &reqwest::Client::new(), &req, &part).await.unwrap_err();
+
+        assert!(err.to_string().contains("404"), "{err}");
+        assert!(!Path::new(&part).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // 429 is a throttle, not a challenge: it must be classified as rate-limited (skip/defer) rather

@@ -69,7 +69,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// Reads the leading magic bytes of a file; returns an empty vec on any failure. 8 bytes so the
 /// 6-byte 7z signature fits alongside the shorter zip/RAR ones.
-fn read_file_signature(path: &Path) -> Vec<u8> {
+pub(crate) fn read_file_signature(path: &Path) -> Vec<u8> {
     let mut buf = [0u8; 8];
     match File::open(path).and_then(|mut f| f.read(&mut buf)) {
         Ok(n) => buf[..n].to_vec(),
@@ -78,7 +78,7 @@ fn read_file_signature(path: &Path) -> Vec<u8> {
 }
 
 /// "PK" ZIP local-file-header signature.
-fn is_zip_signature(sig: &[u8]) -> bool {
+pub(crate) fn is_zip_signature(sig: &[u8]) -> bool {
     sig.len() >= 2 && sig[0] == 0x50 && sig[1] == 0x4B
 }
 

@@ -81,6 +81,11 @@ export async function parseComicInfo(filePath: string) {
         if (!parsedYear || isNaN(parsedYear)) {
             parsedYear = info.Year ? parseInt(info.Year) : null;
         }
+        // #243: `year` above is the SERIES year (Volume-first, for series resolution). The issue's
+        // own cover year is <Year> alone - what a file's {IssueYear} wants - kept only when plausible
+        // (a ComicVine id leaking into <Year> is not a year).
+        const rawIssueYear = info.Year ? parseInt(info.Year) : NaN;
+        const issueYear = rawIssueYear >= 1900 && rawIssueYear <= 2100 ? rawIssueYear : null;
 
         const cacheKey = `${seriesName}_${parsedYear || 'unknown'}`;
         // Namespace the resolution cache by provider — a ComicVine volume id and a Metron series id for the
@@ -175,6 +180,7 @@ export async function parseComicInfo(filePath: string) {
             number: info.Number ? String(info.Number).trim() : null,
             publisher: info.Publisher ? String(info.Publisher).trim() : null,
             year: parsedYear,
+            issueYear,
             summary: info.Summary ? String(info.Summary).trim() : null,
             writers: splitList(info.Writer),
             artists: splitList(info.Penciller),

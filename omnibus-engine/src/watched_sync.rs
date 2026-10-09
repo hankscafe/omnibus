@@ -352,6 +352,15 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
             let _ = std::fs::create_dir_all(&dest_folder);
 
             let formatted_num = if issue_num.len() == 1 { format!("0{}", issue_num) } else { issue_num.clone() };
+            // #243: {IssueYear} is this issue's own year, not the series' (year_str above is the
+            // Volume-first SERIES year). A series already in the library may hold the issue's row
+            // (the monitor's placeholder for a wanted issue) with its release date.
+            let issue_release = if had_existing_series {
+                issue_release_date(&db, &series_id, &issue_num, is_annual).await
+            } else {
+                None
+            };
+            let issue_year_str = issue_year_for_name(issue_release.as_deref(), info.year, &year_str);
             // #203 Phase 1: an annual arriving through the watched folder is named the Mylar way
             // ("Batman Annual #001 (2012)") — parity with renamer.rs and the Node importer, so a
             // file lands under the same name whichever door it came through.
@@ -372,7 +381,7 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                     ("{Series}", series_name.as_str()),
                     ("{Year}", year_str.as_str()),
                     ("{VolumeYear}", year_str.as_str()),
-                    ("{IssueYear}", year_str.as_str()),
+                    ("{IssueYear}", issue_year_str.as_str()),
                     ("{Issue}", formatted_num.as_str()),
                     ("{IssueTitle}", info.title.as_deref().unwrap_or_default()),
                     ("{UniverseName}", info.universe.as_deref().unwrap_or_default()),
@@ -586,6 +595,41 @@ fn extract_comicinfo(path: &Path) -> Option<ComicInfo> {
         }
     }
     None
+}
+
+/// #243: the year a file name's {IssueYear} carries - this issue's release date in the library
+/// (the year Standardize writes, so the next Standardize leaves the name alone), else the file's
+/// own ComicInfo <Year> (its cover year; never <Volume>, which is the series' start year), else
+/// the series year. Node twin: src/lib/utils/issue-year.ts resolveIssueYear.
+fn issue_year_for_name(release_date: Option<&str>, comicinfo_year: Option<i32>, series_year: &str) -> String {
+    let plausible = |y: &i32| (1900..=2100).contains(y);
+    release_date
+        .and_then(|d| d.trim().get(..4))
+        .and_then(|y| y.parse::<i32>().ok())
+        .filter(plausible)
+        .or_else(|| comicinfo_year.filter(plausible))
+        .map(|y| y.to_string())
+        .unwrap_or_else(|| series_year.to_string())
+}
+
+/// The release date of the series' row for this issue, if the library already has one - same
+/// identity as the import dedupe below: number (by issue identity, "38" == "038") + annual domain.
+async fn issue_release_date(db: &Db, series_id: &str, issue_num: &str, is_annual: bool) -> Option<String> {
+    let rows = sqlx::query(
+        // isAnnual is CAST for the Any driver (no SQLite BOOLEAN mapping); releaseDate is TEXT.
+        r#"SELECT number, CAST("isAnnual" AS INTEGER) AS is_annual, "releaseDate" FROM "Issue" WHERE "seriesId" = $1"#,
+    )
+    .bind(series_id)
+    .fetch_all(&db.pool)
+    .await
+    .ok()?;
+    rows.iter()
+        .find(|r| {
+            let n: String = r.try_get("number").unwrap_or_default();
+            let row_annual = r.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
+            row_annual == is_annual && crate::metadata::is_same_issue(&n, issue_num)
+        })
+        .and_then(|r| r.try_get::<Option<String>, _>("releaseDate").ok().flatten())
 }
 
 fn robust_move(src: &Path, dest: &Path) -> Result<()> {
@@ -807,6 +851,54 @@ mod tests {
 
         assert!(src.exists(), "a failed move keeps the source");
         assert_eq!(names_in(&to), vec!["Batman 001.cbz"], "the staged copy is removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ==== #243: {IssueYear} carried the SERIES year (ComicInfo <Volume>, else <Year>) for every
+    // file the watched folder imported - "X-Men #38 (2024)" for a 2026 issue of a 2024 series.
+
+    #[test]
+    fn issue_year_for_name_prefers_the_library_then_the_files_year_then_the_series() {
+        assert_eq!(issue_year_for_name(Some("2026-01-14"), Some(2025), "2024"), "2026");
+        assert_eq!(issue_year_for_name(Some("2026-01-14T00:00:00.000Z"), None, "2024"), "2026");
+        assert_eq!(issue_year_for_name(None, Some(2026), "2024"), "2026");
+        assert_eq!(issue_year_for_name(Some(""), Some(2026), "2024"), "2026");
+        assert_eq!(issue_year_for_name(None, None, "2024"), "2024");
+        // Implausible values never become a year (a ComicVine id in <Year>, a placeholder date).
+        assert_eq!(issue_year_for_name(Some("TBA"), Some(106705), "2024"), "2024");
+        assert_eq!(issue_year_for_name(Some("0000-00-00"), Some(0), ""), "");
+    }
+
+    #[tokio::test]
+    async fn issue_release_date_reads_the_matching_row_in_the_files_domain() {
+        let base = std::env::temp_dir().join(format!("omnibus_issueyear_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("iy.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+        // Column types as Prisma creates them on SQLite (BOOLEAN has no Any-driver mapping).
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, number TEXT, "isAnnual" BOOLEAN NOT NULL DEFAULT false, "releaseDate" TEXT)"#)
+            .execute(&db.pool).await.unwrap();
+        for (id, series, number, annual, date) in [
+            ("a", "xmen", "37", false, Some("2025-12-10")),
+            ("b", "xmen", "38", false, Some("2026-01-14")),
+            ("c", "xmen", "1", false, Some("2024-07-10")),
+            ("d", "xmen", "1", true, Some("2025-08-20")),
+            ("e", "xmen", "39", false, None),
+            ("f", "other", "38", false, Some("1999-01-01")),
+        ] {
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", "releaseDate") VALUES ($1, $2, $3, $4, $5)"#)
+                .bind(id).bind(series).bind(number).bind(if annual { 1_i64 } else { 0_i64 }).bind(date)
+                .execute(&db.pool).await.unwrap();
+        }
+
+        assert_eq!(issue_release_date(&db, "xmen", "38", false).await.as_deref(), Some("2026-01-14"));
+        assert_eq!(issue_release_date(&db, "xmen", "038", false).await.as_deref(), Some("2026-01-14"), "same issue identity as the import dedupe");
+        assert_eq!(issue_release_date(&db, "xmen", "1", true).await.as_deref(), Some("2025-08-20"), "an annual reads the annual's row");
+        assert_eq!(issue_release_date(&db, "xmen", "1", false).await.as_deref(), Some("2024-07-10"));
+        assert_eq!(issue_release_date(&db, "xmen", "39", false).await, None, "a row with no date");
+        assert_eq!(issue_release_date(&db, "xmen", "40", false).await, None, "no row yet");
         let _ = std::fs::remove_dir_all(&base);
     }
 

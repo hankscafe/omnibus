@@ -206,6 +206,89 @@ describe('File System: Importer Engine', () => {
             expect('fileAddedAt' in data).toBe(false);
         });
     });
+    // #243 (anacronismo): a monitored download of X-Men #38 - a series that started in 2024, an
+    // issue released in 2026 - was named "X-Men #38 (2024)" although the file pattern asks for
+    // {IssueYear}. The importer took the year from ComicInfo's <Volume> (the series' start year)
+    // and never looked at the issue's own row. {IssueYear} is now the issue's release date in the
+    // library, else the file's own <Year>, else the series year - the same year Standardize uses.
+    describe('{IssueYear} (#243)', () => {
+        const xmenDownload = () => {
+            mocks.findManySettings.mockResolvedValue([
+                { key: 'download_path', value: '/downloads' },
+                { key: 'folder_naming_pattern', value: '{Publisher}/{Series} ({Year})' },
+                { key: 'file_naming_pattern', value: '{Series} #{Issue} ({IssueYear})' },
+            ]);
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'X-Men #38 (2026).cbz', volumeId: 'cv_1', createdAt: new Date()
+            });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_x', name: 'X-Men', publisher: 'Marvel', year: 2024, libraryId: 'lib_1', isManga: false
+            });
+        };
+        const libraryRows = async (rows: Array<{ number: string; releaseDate: string | null; isAnnual?: boolean }>) => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue(rows.map((r, i) => ({
+                id: `iss_${i}`, seriesId: 'series_x', isAnnual: false, filePath: null, status: 'WANTED',
+                name: null, description: null, writers: null, artists: null, characters: null, ...r,
+            })));
+        };
+        const copiedTo = () => (fs.copy as any).mock.calls.at(-1)?.[1] as string;
+        afterEach(async () => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([]);
+        });
+
+        it('uses the issue\'s release date in the library, not the series year from <Volume>', async () => {
+            xmenDownload();
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'X-Men', number: '38', year: 2024 });
+            await libraryRows([{ number: '37', releaseDate: '2025-12-10' }, { number: '38', releaseDate: '2026-01-14' }]);
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+            expect(copiedTo()).toMatch(/Marvel[\\/]X-Men \(2024\)[\\/](?:\d+_)?X-Men #38 \(2026\)\.cbz$/);
+        });
+
+        it('the library\'s release date wins over the file\'s own <Year>, so Standardize never renames it again', async () => {
+            xmenDownload();
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'X-Men', number: '38', year: 2024, issueYear: 2026 });
+            await libraryRows([{ number: '38', releaseDate: '2025-11-05' }]);
+
+            await Importer.importRequest('req_1');
+            expect(copiedTo()).toMatch(/(?:\d+_)?X-Men #38 \(2025\)\.cbz$/);
+        });
+
+        it('without a library row, uses the file\'s own ComicInfo <Year>', async () => {
+            xmenDownload();
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'X-Men', number: '38', year: 2024, issueYear: 2026 });
+
+            await Importer.importRequest('req_1');
+            expect(copiedTo()).toMatch(/(?:\d+_)?X-Men #38 \(2026\)\.cbz$/);
+        });
+
+        it('with neither, falls back to the series year', async () => {
+            xmenDownload();
+            mocks.parseComicInfo.mockResolvedValueOnce(null);
+
+            await Importer.importRequest('req_1');
+            expect(copiedTo()).toMatch(/(?:\d+_)?X-Men #38 \(2024\)\.cbz$/);
+        });
+
+        it('an annual takes its year from the annual\'s row, never the main run\'s same number', async () => {
+            xmenDownload();
+            mocks.findUniqueRequest.mockReset();
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'X-Men Annual #1 (2025).cbz', volumeId: 'cv_1', createdAt: new Date()
+            });
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'X-Men', number: '1', year: 2024, format: 'Annual' });
+            await libraryRows([
+                { number: '1', releaseDate: '2024-07-10', isAnnual: false },
+                { number: '1', releaseDate: '2025-08-20', isAnnual: true },
+            ]);
+
+            await Importer.importRequest('req_1');
+            expect(copiedTo()).toMatch(/(?:\d+_)?X-Men Annual #01 \(2025\)\.cbz$/);
+        });
+    });
+
     it.each([null, '', '   '])('adopts ComicInfo Imprint over stored %j and saves it for later naming', async (imprint) => {
         mocks.findManySettings.mockResolvedValue([
             { key: 'download_path', value: '/downloads' },

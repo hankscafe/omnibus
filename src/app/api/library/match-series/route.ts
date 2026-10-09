@@ -27,6 +27,7 @@ import { findLocalCoverBasename } from '@/lib/utils/cover-plan';
 import { parseComicVineCredits } from '@/lib/utils';
 import { folderOwner, suggestFreeFolderName, attachAsCollected } from '@/lib/match-collision';
 import { replaceNamingToken } from '@/lib/utils/naming';
+import { resolveIssueYear } from '@/lib/utils/issue-year';
 
 // #199 round 4 Beta B: only non-empty credit groups become columns (never write a literal '[]' —
 // issue #179), stringified to the Issue JSON-array convention.
@@ -564,8 +565,27 @@ export async function POST(request: Request) {
                             ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
                             : (config.file_naming_pattern || "{Series} #{Issue}");
                         
-                    const issueYear = existingRecord ? (existingRecord.year?.toString() || safeYear) : safeYear;
-                        
+                    // The series' rows in this file's domain, read before naming: the matched row's
+                    // release date is the file's {IssueYear} (#243 - this used the series' year), and
+                    // the adopt-or-create below reuses the same rows.
+                    // #203: find within the SAME domain — "Annual #1" must never adopt the main run's "#1" row.
+                    let domainRows: Array<{ id: string; number: string; releaseDate: string | null }> = [];
+                    if (existingRecord) {
+                        try {
+                            domainRows = await prisma.issue.findMany({
+                                where: { seriesId: existingRecord.id, isAnnual: isAnnualFile },
+                                select: { id: true, number: true, releaseDate: true },
+                            });
+                        } catch (e) {
+                            Logger.log(`[Match Series] Could not read the series' issues for ${file}: ${getErrorMessage(e)}`, 'warn');
+                        }
+                    }
+                    const matchedRow = domainRows.find(r => isSameIssue(r.number, issueNumStr)) ?? null;
+                    const issueYear = resolveIssueYear({
+                        releaseDate: matchedRow?.releaseDate,
+                        seriesYear: existingRecord?.year?.toString() || safeYear,
+                    });
+
                     // Use finalExt so the rename applies the verified extension
                     let newFileName = filePatternToUse
                         .replace(/{Publisher}/gi, safePublisher || "Other")
@@ -630,16 +650,11 @@ export async function POST(request: Request) {
                         }
 
                         try {
-                            // #203: find within the SAME domain — "Annual #1" must never adopt the
-                            // main run's "#1" row (Phase 0's rule, applied at the match surface too).
                             // #205: by issue IDENTITY, never the raw string — the provider's row may
                             // read "13½" while the file and the admin say "13.5". Looked up as a
                             // string, that row was missed and Accept created a twin beside it.
-                            const domainRows: Array<{ id: string; number: string }> = await prisma.issue.findMany({
-                                where: { seriesId: existingRecord.id, isAnnual: isAnnualFile },
-                                select: { id: true, number: true },
-                            });
-                            const existingIssue = domainRows.find(r => isSameIssue(r.number, issueNumStr)) ?? null;
+                            // (domainRows / matchedRow were read before naming, in the file's domain.)
+                            const existingIssue = matchedRow;
 
                             let finalIssueId;
 

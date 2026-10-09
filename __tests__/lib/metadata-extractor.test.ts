@@ -87,6 +87,28 @@ describe('Core Logic: ComicInfo.xml Extractor', () => {
         expect(result?.metadataSource).toBe('COMICVINE');
     });
 
+    // #243: <Volume> is the series' start year (what series resolution wants); <Year> is this
+    // issue's own cover year (what a file's {IssueYear} wants). `year` keeps its Volume-first
+    // meaning; `issueYear` carries <Year> alone, and only when it is a plausible year.
+    it('keeps the issue\'s own <Year> apart from the series start year in <Volume> (#243)', async () => {
+        const xml = (inner: string) => `<?xml version="1.0"?><ComicInfo><Series>X-Men</Series><Number>38</Number>${inner}<ComicVineVolumeId>12345</ComicVineVolumeId></ComicInfo>`;
+        const parse = async (inner: string) => {
+            mocks.getEntries.mockReturnValue([{ entryName: 'ComicInfo.xml', getData: () => Buffer.from(xml(inner), 'utf8') }]);
+            return parseComicInfo('/library/comic.cbz');
+        };
+
+        const both = await parse('<Volume>2024</Volume><Year>2026</Year>');
+        expect(both?.year).toBe(2024);
+        expect(both?.issueYear).toBe(2026);
+
+        const volumeOnly = await parse('<Volume>2024</Volume>');
+        expect(volumeOnly?.issueYear).toBeNull();
+
+        // A ComicVine id that leaked into <Year> is not a year.
+        const junk = await parse('<Volume>2024</Volume><Year>106705</Year>');
+        expect(junk?.issueYear).toBeNull();
+    });
+
     it('should perfectly parse custom ComicInfo.xml data with Metron IDs', async () => {
         const fakeXml = `
             <?xml version="1.0"?>

@@ -617,6 +617,32 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(adopt.data.number).toBeUndefined();
     });
 
+    // #243: {IssueYear} used the series' year for every file the Smart Matcher renamed. It is the
+    // matched issue row's release date now (the year Standardize writes), else the series year.
+    it('#243: names a matched file with the issue\'s own release year, not the series year', async () => {
+        mocks.findManySettings.mockResolvedValue([{ key: 'file_naming_pattern', value: '{Series} #{Issue} ({IssueYear})' }]);
+        vi.mocked(fs.promises.stat).mockResolvedValueOnce({ isFile: () => true } as any);
+        vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p) === '/unmatched/Bone 14.cbz');
+        vi.mocked(fs.promises.readdir).mockResolvedValueOnce(['Bone 14.cbz'] as any);
+        vi.mocked(axios.get).mockResolvedValue({ data: Buffer.from('series-cover') } as any);
+        mocks.getSeriesDetails.mockResolvedValueOnce({ name: 'Bone', year: 1991, publisher: 'Cartoon Books', coverUrl: 'http://cover/img.jpg', status: 'Ended' });
+        mocks.findFirstSeries.mockResolvedValue({ id: 's1' });
+        mocks.updateSeries.mockResolvedValue({ id: 's1', year: 1991 });
+        mocks.findManyIssues.mockImplementation(async (args: any) =>
+            args?.where?.seriesId === 's1' && args?.where?.isAnnual === false
+                ? [{ id: 'i13', number: '13', releaseDate: '1994-04-01' }, { id: 'i14', number: '14', releaseDate: '1994-07-01' }]
+                : []
+        );
+        mocks.updateIssue.mockResolvedValue({ id: 'i14' });
+
+        const res = await POST(createReq({ oldFolderPath: '/unmatched/Bone 14.cbz', metadataId: '2127', metadataSource: 'METRON' }));
+        expect(res.status).toBe(200);
+
+        const renamedTo = mocks.moveFileSafe.mock.calls.map(c => String(c[1]));
+        expect(renamedTo).toContainEqual(expect.stringMatching(/Bone #14 \(1994\)\.cbz$/));
+        expect(renamedTo).not.toContainEqual(expect.stringMatching(/\(1991\)\.cbz$/));
+    });
+
     // Issue.fileAddedAt (#206 follow-up): matching is a RE-HOME, not an arrival. A file the scan
     // already indexed was announced when it appeared; Accept carries that row's time over, so a
     // bulk matching session never floods Recently Added, the Updates feed or the digest.

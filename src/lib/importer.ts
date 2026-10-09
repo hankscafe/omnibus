@@ -19,6 +19,7 @@ import { WATCHED_DIR } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
 import { replaceNamingToken } from '@/lib/utils/naming';
+import { resolveIssueYear } from '@/lib/utils/issue-year';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -718,16 +719,28 @@ export const Importer = {
     let formattedNum = extractedNum;
     if (!extractedNum.includes('.') && extractedNum.length === 1) formattedNum = `0${extractedNum}`;
     
-    // Sanitize the XML year to prevent ComicVine IDs in the filename
-    let xmlYear = xmlMeta?.year;
-    if (xmlYear && (xmlYear < 1900 || xmlYear > 2100)) {
-        xmlYear = null;
-    }
-    
-    const issueYearFromMeta = xmlMeta?.year ? xmlMeta.year.toString() : seriesYearFromMeta.toString();
     // #203 Phase 1: an imported annual lands under the Mylar-shaped name (engine parity:
     // renamer.rs / watched_sync.rs) so it reads correctly beside the main run from the first write.
     const isAnnualImport = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, rawFileName);
+
+    // #243: {IssueYear} is THIS issue's year - its release date in the library (the year
+    // Standardize writes), else the file's own ComicInfo <Year>, else the series year. A monitored
+    // download already has its row (the monitor's placeholder), so look it up before naming -
+    // same identity as the dedupe below: number + annual domain.
+    let issueReleaseDate: string | null = null;
+    if (series?.id) {
+        const identity = xmlMeta?.number || extractedNum;
+        const rows = await prisma.issue.findMany({
+            where: { seriesId: series.id },
+            select: { number: true, isAnnual: true, releaseDate: true },
+        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null }>);
+        issueReleaseDate = rows.find(r => ((r.isAnnual ?? false) === isAnnualImport) && isSameIssue(r.number, identity))?.releaseDate ?? null;
+    }
+    const issueYearFromMeta = resolveIssueYear({
+        releaseDate: issueReleaseDate,
+        comicInfoYear: xmlMeta?.issueYear,
+        seriesYear: seriesYearFromMeta,
+    });
     const filePatToUse = isAnnualImport
         ? "{Series} Annual #{Issue} ({IssueYear})"
         : (isManga ? mangaFilePattern : filePattern);

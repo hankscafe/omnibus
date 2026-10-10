@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => ({
     syncSeriesMetadata: vi.fn().mockResolvedValue(true),
     // global fetch (engine nested-pack offload)
     fetch: vi.fn(),
-    zipGetEntries: vi.fn().mockReturnValue([])
+    zipGetEntries: vi.fn().mockReturnValue([]),
+    // The ZIP index reader (end record + central directory only) - readable by default.
+    readZipEntryNames: vi.fn().mockResolvedValue(['01.jpg']),
+    requeue: vi.fn().mockResolvedValue('requeued'),
 }));
 
 // 2. Deeply Mock Dependencies to save RAM and prevent OOM crashes
@@ -72,6 +75,11 @@ vi.mock('@/lib/converter', () => ({ convertCbrToCbz: mocks.convertCbrToCbz }));
 vi.mock('@/lib/metadata-fetcher', () => ({ syncSeriesMetadata: mocks.syncSeriesMetadata }));
 vi.mock('adm-zip', () => ({ default: class AdmZipMock { getEntries() { return mocks.zipGetEntries(); } } }));
 vi.mock('axios');
+vi.mock('@/lib/utils/archive-pages', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/utils/archive-pages')>()),
+    readZipEntryNames: mocks.readZipEntryNames,
+}));
+vi.mock('@/lib/requeue', () => ({ requeueWithNextRelease: mocks.requeue }));
 
 describe('File System: Importer Engine', () => {
     beforeEach(() => {
@@ -352,7 +360,9 @@ describe('File System: Importer Engine', () => {
             id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Big Pack.cbz'
         });
 
-        // Engine unreachable (default fetch rejection) → local AdmZip detection + extraction.
+        // Engine unreachable (default fetch rejection) → the ZIP's index finds the nested comic
+        // (#240: without loading the pack into memory), then the local AdmZip extraction runs.
+        mocks.readZipEntryNames.mockResolvedValueOnce(['nested/a.cbz', 'readme.txt']);
         mocks.zipGetEntries.mockReturnValue([
             { entryName: 'nested/a.cbz', isDirectory: false, getData: () => Buffer.from('a') },
             { entryName: 'readme.txt', isDirectory: false, getData: () => Buffer.from('junk') },
@@ -369,6 +379,91 @@ describe('File System: Importer Engine', () => {
         expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
             title: expect.stringContaining('1 Files')
         }));
+    });
+
+    // ==== #240 finding 4: a 1.2 GB pack cut short was imported as ONE issue with 0 pages. The engine
+    // listing failed, the AdmZip fallback (which loads the whole pack into memory) threw, the error
+    // was swallowed, and the file went down the single-issue path. An archive that can't be read is
+    // now refused: never imported, the release is blocked, and the request searches again. ====
+    describe('unreadable archives (#240)', () => {
+        const unreadable = () => mocks.readZipEntryNames.mockRejectedValueOnce(new Error('EOCD signature not found'));
+
+        it('refuses a ZIP whose index can\'t be read: no issue, no move, and the release is blocked for a re-search', async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Big Pack (2024).cbz', downloadLink: 'abc123hash', retryCount: 0, volumeId: 'cv_1'
+            });
+            unreadable();
+
+            expect(await Importer.importRequest('req_1')).toBe(false);
+
+            expect(mocks.createIssue).not.toHaveBeenCalled();
+            expect(fs.copy).not.toHaveBeenCalled();
+            expect(fs.move).not.toHaveBeenCalled();
+            expect(mocks.requeue).toHaveBeenCalledWith(expect.objectContaining({ id: 'req_1' }), { title: 'Big Pack (2024).cbz' });
+            expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining("can't be read"), 'error');
+            // A download client's file is left where it is (a torrent may still be seeding it).
+            expect(fs.remove).not.toHaveBeenCalled();
+        });
+
+        it('deletes our own direct-download temp file when refusing it, so a folder search never picks it up again', async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Big Pack (2024).cbz', downloadLink: 'https://getcomics.org/dls/x', retryCount: 0
+            });
+            // Only the GetComics copy exists (the engine's DDL target), not one in the download root.
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+                const s = String(p).replace(/\\/g, '/');
+                return !(s.endsWith('/Big Pack (2024).cbz') && !s.includes('/GetComics/'));
+            });
+            unreadable();
+
+            expect(await Importer.importRequest('req_1')).toBe(false);
+
+            expect(fs.remove).toHaveBeenCalledWith(expect.stringMatching(/GetComics[\\/]Big Pack \(2024\)\.cbz$/));
+            expect(mocks.requeue).toHaveBeenCalled();
+            expect(mocks.createIssue).not.toHaveBeenCalled();
+        });
+
+        it('an admin\'s uploaded file that can\'t be read is reported - not deleted, not re-searched', async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({ id: 'req_1', status: 'PENDING', activeDownloadName: 'X-Men 038.cbz' });
+            unreadable();
+
+            expect(await Importer.importRequest('req_1', { sourcePathOverride: '/downloads/X-Men 038.cbz' })).toBe(false);
+
+            expect(mocks.requeue).not.toHaveBeenCalled();
+            expect(fs.remove).not.toHaveBeenCalled();
+            expect(mocks.createIssue).not.toHaveBeenCalled();
+        });
+
+        it('a readable ZIP is checked from its index alone - the file is never loaded into memory', async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+            });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false
+            });
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            expect(mocks.readZipEntryNames).toHaveBeenCalled();
+            expect(mocks.createIssue).toHaveBeenCalled();
+            expect(mocks.zipGetEntries).not.toHaveBeenCalled();
+            expect(mocks.requeue).not.toHaveBeenCalled();
+        });
+
+        it('when the engine lists the archive, its answer is trusted and the index isn\'t read again', async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+            });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false
+            });
+            mocks.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ count: 0, entries: [] }) });
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            expect(mocks.readZipEntryNames).not.toHaveBeenCalled();
+            expect(mocks.createIssue).toHaveBeenCalled();
+        });
     });
 
     // ==== Issue #174: RAR packs (the dominant Usenet/scene container) must be batch-split too. ====

@@ -20,6 +20,8 @@ import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
 import { replaceNamingToken } from '@/lib/utils/naming';
 import { resolveIssueYear } from '@/lib/utils/issue-year';
+import { readZipEntryNames } from '@/lib/utils/archive-pages';
+import { requeueWithNextRelease } from '@/lib/requeue';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -260,6 +262,8 @@ export const Importer = {
     let isRarContainer = false;
     let batchFiles: string[] = [];
     let nestedArchiveCount = 0;
+    // #240: set when the archive can't be read at all - it is refused below, never imported.
+    let unreadableReason: string | null = null;
 
     if (fs.statSync(sourcePath).isDirectory()) {
         async function getComicFilesInDir(dir: string) {
@@ -323,10 +327,12 @@ export const Importer = {
                     Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(actualSourceFile)} (engine)`, 'debug');
                 }
             } else if (isZipContainer) {
+                // #240: the ZIP's own index (end record + central directory) - never the whole pack in
+                // the Node heap. An index that can't be read means the archive can't be imported at
+                // all; it used to be logged and then filed as ONE issue with 0 pages.
                 try {
-                    const zip = new AdmZip(actualSourceFile);
-                    const entries = zip.getEntries();
-                    const comicFiles = entries.filter((e: any) => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
+                    const comicFiles = (await readZipEntryNames(actualSourceFile))
+                        .filter(name => !name.endsWith('/') && COMIC_EXT_REGEX.test(name));
 
                     if (comicFiles.length > 0) {
                         isBatchArchive = true;
@@ -334,12 +340,29 @@ export const Importer = {
                         Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(actualSourceFile)}`, 'debug');
                     }
                 } catch(e: any) {
-                    Logger.log(`[Importer Debug] Error inspecting zip for nested archives: ${e.message}`, 'error');
+                    unreadableReason = e.message;
                 }
             } else {
                 Logger.log(`[Importer] Engine unavailable — cannot inspect ${path.basename(actualSourceFile)} (RAR) for nested archives; importing as a single file.`, 'debug');
             }
         }
+    }
+
+    // --- UNREADABLE ARCHIVE (#240) ---
+    // Usually a download that was cut short. It is never imported: the release (its link and title)
+    // is blocked and the request searches again - the same "try the next release" step the cron
+    // takes when a client reports a failed download.
+    if (unreadableReason) {
+        const label = req.activeDownloadName || path.basename(actualSourceFile);
+        Logger.log(`[Importer] Not importing "${label}": the archive can't be read (${unreadableReason}) - usually a download that was cut short.`, 'error');
+        // An admin's upload is reported, never deleted or searched for on their behalf.
+        if (opts?.sourcePathOverride) return false;
+        // Our own direct-download temp file goes, so a folder search never picks it up again. A
+        // client's file stays where it is: a torrent may be seeding it, and usenet cleanup (#198)
+        // only ever follows a verified import.
+        if (!isFromClient && !trackingHash) await fs.remove(sourcePath).catch(() => {});
+        await requeueWithNextRelease(req as any, { title: req.activeDownloadName });
+        return false;
     }
 
     // --- BATCH ROUTING EXECUTION ---
@@ -634,8 +657,8 @@ export const Importer = {
     const isActualZip = inMemoryTrueExt === '.cbz' || inMemoryTrueExt === '.zip' || actualSourceFile.toLowerCase().match(/\.(cbz|zip|epub)$/i);
     if (isActualZip) {
         try {
-            const zip = new AdmZip(actualSourceFile);
-            pageCount = zip.getEntries().filter((e: any) => !e.isDirectory && !e.entryName.toLowerCase().includes('__macosx') && IMAGE_EXT_REGEX.test(e.entryName)).length;
+            // Pages are counted after the move, from the archive's index (#240: this used to load the
+            // whole file into the Node heap just to count its entries).
             const { parseComicInfo } = await import('./metadata-extractor');
             xmlMeta = await parseComicInfo(actualSourceFile);
         } catch(e) {}
@@ -839,9 +862,9 @@ export const Importer = {
           }
       }
 
-      // Late page count: the AdmZip count above only handles zip sources, so a CBR/CB7 import lands
-      // here with 0 — count the final file now (converted .cbz locally, unconverted .cbr/.rar/.cb7
-      // via the engine's native listing) so OPDS-PSE never advertises a fresh import as "0 pages".
+      // Page count: every import is counted here, from the final file - a .cbz/.zip from its index
+      // (never loaded whole), an unconverted .cbr/.rar/.cb7 via the engine's native listing - so
+      // OPDS-PSE never advertises a fresh import as "0 pages".
       if (pageCount === 0 && /\.(cbz|zip|cbr|rar|cb7)$/i.test(finalPath)) {
           const { countArchivePages, countArchivePagesViaEngine, isEngineCountable } = await import('./utils/archive-pages');
           pageCount = isEngineCountable(finalPath)

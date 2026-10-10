@@ -4,7 +4,6 @@ import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import axios from 'axios';
-import path from 'path';
 import fs from 'fs';
 import { SystemNotifier } from '@/lib/notifications';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
@@ -23,6 +22,7 @@ import { omnibusQueue } from '@/lib/queue';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { followSeries, followSeriesByCatalogId } from '@/lib/follows';
 import { replaceNamingToken, sanitizeNamingPart } from '@/lib/utils/naming';
+import { folderYear, librarySubfolder } from '@/lib/utils/paths';
 
 export const dynamic = 'force-dynamic';
 
@@ -249,9 +249,13 @@ export async function POST(request: NextRequest) {
           : libraries.find(l => l.isDefault && !l.isManga) || libraries.find(l => !l.isManga);
       if (!targetLib) targetLib = libraries[0];
 
-      const safeFolderName = name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
-      const safePubFolder = safePublisher !== "Unknown" ? safePublisher.replace(/[<>:"/\\|?*]/g, '').trim() : "Other";
+      // The name, publisher and year can come straight from the requester (the provider only fills
+      // what's missing), so each is sanitized like ComicInfo metadata: a dots-only value becomes "_"
+      // and the year keeps only its digits - none of them can become a ".." folder segment.
+      const safeFolderName = sanitizeNamingPart(name.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim());
+      const safePubFolder = safePublisher !== "Unknown" ? sanitizeNamingPart(safePublisher) : "Other";
       const safeImprint = sanitizeNamingPart(existingSeries?.imprint || '');
+      const safeYear = folderYear(year);
 
       const settings = await prisma.systemSetting.findMany();
       const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
@@ -260,8 +264,8 @@ export async function POST(request: NextRequest) {
       let relFolderPath = folderPattern
           .replace(/{Publisher}/gi, safePubFolder)
           .replace(/{Series}/gi, safeFolderName)
-          .replace(/{Year}/gi, year ? year.toString() : "")
-          .replace(/{VolumeYear}/gi, year ? year.toString() : "");
+          .replace(/{Year}/gi, safeYear)
+          .replace(/{VolumeYear}/gi, safeYear);
 
       relFolderPath = replaceNamingToken(relFolderPath, '{Imprint}', safeImprint)
           .replace(/\(\s*\)/g, '')
@@ -269,10 +273,13 @@ export async function POST(request: NextRequest) {
           .replace(/\s+/g, ' ')
           .trim();
 
-      const folderParts = relFolderPath.split(/[/\\]/).map((p:string) => p.trim()).filter(Boolean);
       const basePath = targetLib ? targetLib.path : `/${libraryTypeFolder}`;
-      
-      const folderPath = path.join(basePath, ...folderParts).replace(/\\/g, '/');
+      const seriesFolder = librarySubfolder(basePath, relFolderPath);
+      if (!seriesFolder) {
+          Logger.log(`[Request] Folder pattern "${folderPattern}" gives "${relFolderPath}" for ${name}, which isn't a folder inside the library. Check Settings > Library & Files.`, 'warn');
+          return NextResponse.json({ error: "The folder naming pattern doesn't produce a folder inside the library for this series. Ask an admin to check Settings > Library & Files." }, { status: 400 });
+      }
+      const folderPath = seriesFolder.replace(/\\/g, '/');
 
       const series = await prisma.series.upsert({
           where: { metadataSource_metadataId: { metadataSource: metadataSource, metadataId: resolvedCvId.toString() } },

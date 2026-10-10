@@ -6,6 +6,7 @@
 // then apply seriesAccessWhere() to a Series query (or canAccessLibraryId() for a single series).
 //
 // Enforcement is a fresh DB lookup (not the JWT) so grants/revocations take effect immediately.
+import path from 'path';
 import { prisma } from '@/lib/db';
 
 export type AccessibleLibraries = string[] | 'ALL';
@@ -54,13 +55,14 @@ export function canAccessLibraryId(ids: AccessibleLibraries, libraryId: string |
   return ids.includes(libraryId);
 }
 
-/** Whether a given filesystem path lives under an accessible library root (for the reader). */
+/** Whether a given filesystem path lives under an accessible library root (for the reader). `..` is
+ *  collapsed first: `<granted root>/../<other library>/x.cbz` is the other library, not the granted one. */
 export function canAccessPath(paths: string[] | 'ALL', filePath: string | null | undefined): boolean {
   if (paths === 'ALL') return true;
   if (!filePath) return false;
-  const target = filePath.replace(/\\/g, '/').toLowerCase();
+  const target = path.posix.normalize(filePath.replace(/\\/g, '/')).toLowerCase();
   return paths.some((p) => {
-    const root = p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const root = path.posix.normalize(p.replace(/\\/g, '/')).replace(/\/+$/, '').toLowerCase();
     return target === root || target.startsWith(root + '/');
   });
 }

@@ -52,6 +52,14 @@ describe('library-access', () => {
     it('denies a missing path', () => {
       expect(canAccessPath(['/data/comics'], null)).toBe(false);
     });
+    it('collapses .. before comparing, so a granted root is no doorway into another library', () => {
+      const roots = ['/data/comics'];
+      expect(canAccessPath(roots, '/data/comics/../manga/x.cbz')).toBe(false);
+      expect(canAccessPath(roots, '\\data\\comics\\..\\manga\\x.cbz')).toBe(false);
+      expect(canAccessPath(roots, '/data/comics/Batman/../../comics-secret/x.cbz')).toBe(false);
+      // A .. that stays inside the granted library is still that library.
+      expect(canAccessPath(roots, '/data/comics/Batman/../Superman/01.cbz')).toBe(true);
+    });
   });
 
   describe('getAccessibleLibraryIds', () => {

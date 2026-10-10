@@ -18,6 +18,7 @@ import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { safeParse } from '@/lib/utils/safe-parse';
 import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 import { arrivalStamp, rescanStamp } from '@/lib/file-added';
+import { isInsideLibraryRoot } from '@/lib/utils/paths';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -526,13 +527,21 @@ export async function DELETE(request: Request) {
         await prisma.issue.deleteMany({ where: { seriesId: { in: seriesIds } } });
         await prisma.series.deleteMany({ where: { id: { in: seriesIds } } });
         
-        const deletedPaths = [];
+        const deletedPaths: string[] = [];
+        const refusedPaths: string[] = [];
         if (deleteFiles) {
+            // Only a folder strictly inside a library is removed - never a library root, never a
+            // folder elsewhere on disk, whatever the series row holds.
+            const libraryRoots = (await prisma.library.findMany()).map(l => l.path);
             for (const series of seriesToDelete) {
-                if (series.folderPath && fs.existsSync(series.folderPath)) {
-                    await fs.remove(series.folderPath);
-                    deletedPaths.push(series.folderPath);
+                if (!series.folderPath || !fs.existsSync(series.folderPath)) continue;
+                if (!isInsideLibraryRoot(series.folderPath, libraryRoots)) {
+                    Logger.log(`[Series API] Not deleting "${series.folderPath}" for series ${series.id}: it isn't a folder inside a library.`, 'warn');
+                    refusedPaths.push(series.folderPath);
+                    continue;
                 }
+                await fs.remove(series.folderPath);
+                deletedPaths.push(series.folderPath);
             }
         }
 
@@ -540,7 +549,8 @@ export async function DELETE(request: Request) {
             seriesIds,
             seriesNames: seriesToDelete.map(s => s.name),
             deletedPhysicalFiles: deleteFiles,
-            deletedPaths
+            deletedPaths,
+            refusedPaths
         }, (session.user as any).id);
 
         return NextResponse.json({ success: true });

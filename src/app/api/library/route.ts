@@ -15,6 +15,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { LibraryScanner } from '@/lib/library-scanner';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
+import { isInsideLibraryRoot } from '@/lib/utils/paths';
 
 export async function GET(request: Request) {
   try {
@@ -473,13 +474,21 @@ export async function DELETE(request: Request) {
         });
 
         const deletedPaths: string[] = [];
+        const refusedPaths: string[] = [];
 
         if (deleteFiles) {
+            // Only a folder strictly inside a library is removed - never a library root, never a
+            // folder elsewhere on disk, whatever the series row holds.
+            const libraryRoots = (await prisma.library.findMany()).map(l => l.path);
             for (const series of seriesToDelete) {
-                if (series.folderPath && fs.existsSync(series.folderPath)) {
-                    await fs.remove(series.folderPath);
-                    deletedPaths.push(series.folderPath);
+                if (!series.folderPath || !fs.existsSync(series.folderPath)) continue;
+                if (!isInsideLibraryRoot(series.folderPath, libraryRoots)) {
+                    Logger.log(`[Library Series API] Not deleting "${series.folderPath}" for series ${series.id}: it isn't a folder inside a library.`, 'warn');
+                    refusedPaths.push(series.folderPath);
+                    continue;
                 }
+                await fs.remove(series.folderPath);
+                deletedPaths.push(series.folderPath);
             }
         }
 
@@ -489,7 +498,8 @@ export async function DELETE(request: Request) {
         await AuditLogger.log('DELETE_SERIES_BULK', {
             seriesCount: seriesIds.length,
             deletedPhysicalFiles: deleteFiles,
-            deletedPaths
+            deletedPaths,
+            refusedPaths
         }, userId);
 
         return NextResponse.json({ success: true });

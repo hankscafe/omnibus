@@ -214,6 +214,32 @@ describe('File System: Importer Engine', () => {
             expect('fileAddedAt' in data).toBe(false);
         });
     });
+
+    // A series row whose folderPath isn't strictly inside a library - a library root itself, or a
+    // folder elsewhere (a volume request could store one) - is never "standardized" by moving that
+    // folder into the library. The download lands in the pattern's folder instead.
+    describe('a series folder outside the library', () => {
+        it.each(['/library/comics', '/config', '/library/comics/DC Comics/../..'])('never moves %s', async (stored) => {
+            vi.mocked(fs.move).mockClear();
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+            });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false, folderPath: stored
+            });
+
+            const result = await Importer.importRequest('req_1');
+
+            expect(result).toBe(true);
+            expect(vi.mocked(fs.move).mock.calls.filter(c => c[0] === stored)).toEqual([]);
+            expect(fs.copy).toHaveBeenLastCalledWith(
+                expect.any(String),
+                // (existsSync is true for every path here, so the collision prefix applies)
+                expect.stringMatching(/[\\/]library[\\/]comics[\\/]DC Comics[\\/]Batman \(2016\)[\\/](\d+_)?Batman #01\.cbz$/),
+                expect.any(Object)
+            );
+        });
+    });
     // #243 (anacronismo): a monitored download of X-Men #38 - a series that started in 2024, an
     // issue released in 2026 - was named "X-Men #38 (2024)" although the file pattern asks for
     // {IssueYear}. The importer took the year from ComicInfo's <Volume> (the series' start year)

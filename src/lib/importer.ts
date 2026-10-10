@@ -15,7 +15,7 @@ import { isSameIssue, extractIssueNumber, annualFlagForSignals } from '@/lib/uti
 import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
-import { WATCHED_DIR } from '@/lib/utils/paths';
+import { WATCHED_DIR, isInsideLibraryRoot } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
 import { replaceNamingToken } from '@/lib/utils/naming';
@@ -697,7 +697,10 @@ export const Importer = {
     const idealDestFolder = path.join(libraryRoot, ...folderParts);
 
     let destFolder = "";
-    if (series?.folderPath && series.folderPath.trim() !== "") {
+    // A stored folder that isn't strictly inside a library (a library root itself, or a folder
+    // elsewhere on disk) is never this series' to move - the download goes to the pattern's folder.
+    const storedFolderIsOurs = isInsideLibraryRoot(series?.folderPath, libraries.map(l => l.path));
+    if (series?.folderPath && series.folderPath.trim() !== "" && storedFolderIsOurs) {
         if (series.folderPath !== idealDestFolder && fs.existsSync(series.folderPath)) {
             try {
                 Logger.log(`[Importer] Standardizing folder to: ${idealDestFolder}`, "info");

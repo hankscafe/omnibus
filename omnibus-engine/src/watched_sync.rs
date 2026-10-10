@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 use tokio::task::JoinSet;
 use regex::Regex;
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
@@ -82,6 +82,99 @@ fn re_cv_issue() -> &'static Regex {
 fn re_metron_issue() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"/issue/(\d+)").unwrap())
+}
+
+// ==========================================
+// ONE SWEEP AT A TIME
+// ==========================================
+// Three things trigger a sweep: the schedule, the importer after it routes a batch pack here, and
+// an admin's Run now. A sweep converting big packs can outlast the next trigger, and two sweeps
+// over one folder race each other's moves and imports (#240). A trigger that lands mid-sweep is
+// folded into ONE more sweep after the running one - its files may have arrived after the running
+// sweep listed the folder, so dropping it would leave them for the next scheduled run.
+
+struct SweepState {
+    running: bool,
+    rerun: bool,
+}
+
+/// Admits one watched-folder sweep at a time; see [`spawn_exclusive`].
+pub(crate) struct SweepGate(Mutex<SweepState>);
+
+/// The gate every watched-folder trigger goes through.
+pub(crate) static WATCHED_SWEEP: SweepGate = SweepGate::new();
+
+impl SweepGate {
+    pub(crate) const fn new() -> Self {
+        SweepGate(Mutex::new(SweepState { running: false, rerun: false }))
+    }
+
+    fn state(&self) -> MutexGuard<'_, SweepState> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Claims the gate, or None when a sweep is running - which then sweeps once more.
+    fn try_acquire(&'static self) -> Option<SweepClaim> {
+        let mut s = self.state();
+        if s.running {
+            s.rerun = true;
+            None
+        } else {
+            s.running = true;
+            Some(SweepClaim { gate: self, released: false })
+        }
+    }
+}
+
+/// The running sweep's hold on its gate; dropping it (a panicked sweep included) opens the gate.
+struct SweepClaim {
+    gate: &'static SweepGate,
+    released: bool,
+}
+
+impl SweepClaim {
+    /// After a sweep: true when a trigger landed during it (sweep again, still holding the gate);
+    /// false opens the gate under the same lock, so no trigger can slip in between unseen.
+    fn rerun_requested(&mut self) -> bool {
+        let mut s = self.gate.state();
+        if s.rerun {
+            s.rerun = false;
+            true
+        } else {
+            s.running = false;
+            self.released = true;
+            false
+        }
+    }
+}
+
+impl Drop for SweepClaim {
+    fn drop(&mut self) {
+        if !self.released {
+            let mut s = self.gate.state();
+            s.running = false;
+            s.rerun = false;
+        }
+    }
+}
+
+/// Runs `sweep` on a background task unless one is already running on `gate`; None means this
+/// trigger was folded into one more sweep after the running one.
+pub(crate) fn spawn_exclusive<F, Fut>(gate: &'static SweepGate, sweep: F) -> Option<tokio::task::JoinHandle<()>>
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut claim = gate.try_acquire()?;
+    Some(tokio::spawn(async move {
+        loop {
+            sweep().await;
+            if !claim.rerun_requested() {
+                break;
+            }
+            log::info!("[Watched Sync] Sweeping again for the trigger that arrived during the last sweep.");
+        }
+    }))
 }
 
 pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
@@ -1060,5 +1153,118 @@ mod tests {
         // Non-numeric / unrelated URLs must NOT match.
         assert!(re_cv_volume().captures("https://example.com/foo").is_none());
         assert!(re_metron_series().captures("https://metron.cloud/series/slug-name/").is_none());
+    }
+
+    // ==== One sweep at a time (#240): every trigger - the schedule, the importer after a batch
+    // pack, an admin's Run now - spawned its own sweep, so a long sweep had others running over
+    // the same folder beside it (four sweeps finishing in the same second).
+
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::sync::Arc;
+
+    type SweepFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+    /// A stand-in sweep that counts its runs and overlaps, and holds until the test finishes it.
+    struct FakeSweeps {
+        started: AtomicUsize,
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+        finish: tokio::sync::Semaphore,
+    }
+
+    impl FakeSweeps {
+        fn new() -> Arc<Self> {
+            Arc::new(FakeSweeps {
+                started: AtomicUsize::new(0),
+                active: AtomicUsize::new(0),
+                max_active: AtomicUsize::new(0),
+                finish: tokio::sync::Semaphore::new(0),
+            })
+        }
+
+        fn sweep(self: &Arc<Self>) -> impl Fn() -> SweepFuture + Send + 'static {
+            let me = self.clone();
+            move || {
+                let me = me.clone();
+                Box::pin(async move {
+                    me.started.fetch_add(1, SeqCst);
+                    let now = me.active.fetch_add(1, SeqCst) + 1;
+                    me.max_active.fetch_max(now, SeqCst);
+                    me.finish.acquire().await.unwrap().forget();
+                    me.active.fetch_sub(1, SeqCst);
+                })
+            }
+        }
+
+        fn finish_one(&self) {
+            self.finish.add_permits(1);
+        }
+
+        async fn wait_started(&self, n: usize) {
+            for _ in 0..2000 {
+                if self.started.load(SeqCst) >= n {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            panic!("sweep {} never started", n);
+        }
+    }
+
+    #[tokio::test]
+    async fn triggers_during_a_sweep_become_one_more_sweep_after_it_never_one_beside_it() {
+        static GATE: SweepGate = SweepGate::new();
+        let fake = FakeSweeps::new();
+
+        let first = spawn_exclusive(&GATE, fake.sweep()).expect("an idle gate runs the sweep");
+        fake.wait_started(1).await;
+
+        // The schedule and a batch import both fire while it runs.
+        assert!(spawn_exclusive(&GATE, fake.sweep()).is_none(), "a trigger mid-sweep doesn't start a second sweep");
+        assert!(spawn_exclusive(&GATE, fake.sweep()).is_none(), "nor does a third");
+        assert_eq!(fake.started.load(SeqCst), 1);
+
+        // Its files may have landed after the running sweep listed the folder: one more sweep follows.
+        fake.finish_one();
+        fake.wait_started(2).await;
+        fake.finish_one();
+        first.await.unwrap();
+
+        assert_eq!(fake.started.load(SeqCst), 2, "two mid-sweep triggers fold into one follow-up sweep");
+        assert_eq!(fake.max_active.load(SeqCst), 1, "never two sweeps at once");
+
+        // Idle again: the next trigger sweeps straight away.
+        let next = spawn_exclusive(&GATE, fake.sweep()).expect("the gate opens once the sweeps finish");
+        fake.finish_one();
+        next.await.unwrap();
+        assert_eq!(fake.started.load(SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_sweep_with_no_trigger_during_it_runs_once() {
+        static GATE: SweepGate = SweepGate::new();
+        let fake = FakeSweeps::new();
+
+        let only = spawn_exclusive(&GATE, fake.sweep()).expect("an idle gate runs the sweep");
+        fake.finish_one();
+        only.await.unwrap();
+
+        assert_eq!(fake.started.load(SeqCst), 1, "no follow-up without a trigger");
+        assert!(spawn_exclusive(&GATE, fake.sweep()).is_some(), "and the gate is open");
+        fake.finish_one();
+    }
+
+    #[tokio::test]
+    async fn a_sweep_that_panics_still_opens_the_gate() {
+        static GATE: SweepGate = SweepGate::new();
+
+        let crashed = spawn_exclusive(&GATE, || async { panic!("sweep crashed"); }).expect("an idle gate runs the sweep");
+        assert!(crashed.await.is_err(), "the sweep panicked");
+
+        let fake = FakeSweeps::new();
+        let next = spawn_exclusive(&GATE, fake.sweep()).expect("a crashed sweep doesn't hold the gate shut");
+        fake.finish_one();
+        next.await.unwrap();
+        assert_eq!(fake.started.load(SeqCst), 1);
     }
 }

@@ -1696,23 +1696,29 @@ async fn handle_matcher_sweep(State(state): State<Arc<AppState>>) -> StatusCode 
 async fn handle_watched_sync(State(state): State<Arc<AppState>>) -> StatusCode {
     log::info!("Received request to process Watched Folder.");
 
-    tokio::spawn(async move {
+    // One sweep at a time (#240): a trigger during a sweep becomes one more sweep after it.
+    let spawned = watched_sync::spawn_exclusive(&watched_sync::WATCHED_SWEEP, move || {
         let db = state.db.clone();
-        let start_time = std::time::Instant::now();
+        async move {
+            let start_time = std::time::Instant::now();
 
-        match watched_sync::process_watched_folder(state.db.clone()).await {
-            Ok((_success, _unmatched, details)) => {
-                let duration = start_time.elapsed().as_millis() as i32;
-                log::info!("{}", details);
+            match watched_sync::process_watched_folder(db.clone()).await {
+                Ok((_success, _unmatched, details)) => {
+                    let duration = start_time.elapsed().as_millis() as i32;
+                    log::info!("{}", details);
 
-                write_joblog(&db, "WATCHED_FOLDER_SYNC", "COMPLETED", duration, details).await;
-            },
-            Err(e) => {
-                log::error!("❌ Background Watched Sync failed: {:?}", e);
-                write_failed_joblog(&db, "WATCHED_FOLDER_SYNC", start_time.elapsed().as_millis() as i32, format!("Watched folder sync failed: {:?}", e)).await;
-            },
+                    write_joblog(&db, "WATCHED_FOLDER_SYNC", "COMPLETED", duration, details).await;
+                },
+                Err(e) => {
+                    log::error!("❌ Background Watched Sync failed: {:?}", e);
+                    write_failed_joblog(&db, "WATCHED_FOLDER_SYNC", start_time.elapsed().as_millis() as i32, format!("Watched folder sync failed: {:?}", e)).await;
+                },
+            }
         }
     });
+    if spawned.is_none() {
+        log::info!("[Watched Sync] A sweep is already running; it will sweep once more when it finishes.");
+    }
 
     StatusCode::ACCEPTED
 }

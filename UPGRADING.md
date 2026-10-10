@@ -1,5 +1,30 @@
 # Upgrading Omnibus
 
+## Updating an existing install
+
+Pull the new images and recreate the containers. Your database, settings, and library carry over,
+and the database schema upgrades itself on first boot:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The web app and the engine are released together — update both, or System Health warns that their
+versions don't match.
+
+### Coming from v1.1.x? Add the engine
+
+v1.2.0 split Omnibus into two application containers: the web app now **requires** the
+`omnibus-engine` sidecar. If you pull the new image into your old compose file, every
+scan/conversion/metadata/search job fails with `fetch failed` and System Health reports "Engine
+unreachable." Update your `docker-compose.yml` to the layout in the README's
+[Installation section](README.md#installation-docker) — add the `omnibus-engine` service and the
+`OMNIBUS_ENGINE_URL` variable, and give the engine the **same** `NEXTAUTH_SECRET` and volume mounts
+as the web app. Your database and config carry over untouched.
+
+---
+
 ## Choosing your database (SQLite or PostgreSQL)
 
 Omnibus runs on **either** database from the **same images** — you choose with `DATABASE_URL`, and

@@ -370,6 +370,10 @@ export async function POST(request: NextRequest) {
                           volumeId: resolvedCvId.toString(),
                           metadataSource: metadataSource,
                           status: issueStatus,
+                          // #240: the issue this request is for — the download overwrites
+                          // activeDownloadName with the release's title, and the monitor dedupes on
+                          // this column so a pack-titled request still matches its own issue.
+                          issueNumber: normNum ? String(normNum) : null,
                           activeDownloadName: searchName,
                           imageUrl: issueImage,
                           downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null 
@@ -429,7 +433,8 @@ export async function POST(request: NextRequest) {
               const newReq = await prisma.request.create({
                 data: {
                   userId: userId, volumeId: resolvedCvId.toString(), metadataSource: metadataSource,
-                  status: issueStatus, activeDownloadName: searchName, imageUrl: issueImage,
+                  status: issueStatus, issueNumber: normNum ? String(normNum) : null,
+                  activeDownloadName: searchName, imageUrl: issueImage,
                   downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null 
                 }
               });
@@ -464,7 +469,8 @@ export async function POST(request: NextRequest) {
       const newReq = await prisma.request.create({
         data: {
           userId: userId, volumeId: resolvedCvId.toString(), metadataSource: metadataSource,
-          status: issueStatus, activeDownloadName: searchName, imageUrl: image,
+          status: issueStatus, issueNumber: body.issueNumber ? String(body.issueNumber) : null,
+          activeDownloadName: searchName, imageUrl: image,
           downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }
       });

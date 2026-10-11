@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     const activeOnly = searchParams.get('activeOnly') === 'true';
 
     const whereClause = activeOnly ? {
-        status: { in: ['PENDING', 'PENDING_APPROVAL', 'MANUAL_DDL', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR'] }
+        status: { in: ['PENDING', 'PENDING_APPROVAL', 'MANUAL_DDL', 'DOWNLOADING', 'STALLED', 'FAILED', 'ERROR', 'NEEDS_REVIEW'] }
     } : {};
 
     const requests = await prisma.request.findMany({

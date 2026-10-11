@@ -803,6 +803,9 @@ export default function ProfilePage() {
       case 'DOWNLOADING': return <Badge variant="outline" className="bg-primary/20 text-primary border-primary/30 text-[10px] uppercase font-bold">Downloading</Badge>;
       case 'PENDING_APPROVAL': return <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] uppercase font-bold text-center leading-tight">Needs Approval</Badge>;
       case 'FAILED': case 'STALLED': case 'ERROR': return <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 text-[10px] uppercase font-bold">Failed</Badge>;
+      // #240: handled by the dedupe (a consumed link, an issue that never arrived) — nothing is
+      // retried automatically, so say so instead of letting it fall through to "Pending".
+      case 'NEEDS_REVIEW': return <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 text-[10px] uppercase font-bold">Needs Review</Badge>;
       default: return <Badge variant="outline" className="bg-muted text-foreground border-border text-[10px] uppercase font-bold">Pending</Badge>;
     }
   }

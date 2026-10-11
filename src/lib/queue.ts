@@ -11,6 +11,7 @@ import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { issueNumberOf, settleDuplicateOnLink } from '@/lib/request-dedupe';
 import { processPageSweepChunk } from '@/lib/pages/page-sweep';
 import { SCHEDULE_SEED_KEY, newScheduleSeed, scheduleOffsetMs } from '@/lib/schedule-jitter';
 
@@ -394,15 +395,18 @@ export function initWorker() {
 
                             // Batch-pack dedup against the primary link: if another request is already
                             // downloading it, attach for batch extraction rather than downloading twice
-                            // (parity with automation.ts duplicateDownload).
-                            const duplicateDownload = await prisma.request.findFirst({
-                                where: { downloadLink: candidates[0].url, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: requestId } }
-                            });
-                            if (duplicateDownload) {
-                                Logger.log(`[BullMQ] Batch pack already downloading/downloaded (${candidates[0].url}). Queuing ${name} for batch extraction.`, 'info');
+                            // (parity with automation.ts duplicateDownload). #240: a link whose earlier
+                            // request has already FINISHED is not a reason to park — nothing would ever
+                            // close this row, and the pack's bytes are gone. The helper settles it
+                            // instead (COMPLETED when the issue is in the library, NEEDS_REVIEW when it
+                            // never arrived) and we download nothing.
+                            const duplicateDownload = await settleDuplicateOnLink(candidates[0].url, requestId);
+                            if (duplicateDownload.action === 'park') {
+                                Logger.log(`[BullMQ] Batch pack already downloading (${candidates[0].url}). Queuing ${name} for batch extraction.`, 'info');
                                 await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: candidates[0].url } });
                                 break;
                             }
+                            if (duplicateDownload.action === 'settle') break;
 
                             // Detached download-time fallback: try each hoster in priority order until one
                             // streams. If they all fail but a Cloudflare-gated getcomics.org/dls/ link was
@@ -461,11 +465,11 @@ export function initWorker() {
                             // download, not one per request. Park this request against the sibling's link —
                             // the importer's shared-link completion sweep (updateMany on downloadLink) closes
                             // it out when the single download imports, and the cron dead-lead release frees it
-                            // if the lead permanently fails.
-                            const duplicateExternal = await prisma.request.findFirst({
-                                where: { downloadLink: trackingHash, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: requestId } }
-                            });
-                            if (duplicateExternal) {
+                            // if the lead permanently fails. #240: that only holds while the lead is still
+                            // downloading; a finished lead means the release is gone from the client, so the
+                            // helper settles this request instead of parking it on a dead link.
+                            const duplicateExternal = await settleDuplicateOnLink(trackingHash, requestId);
+                            if (duplicateExternal.action === 'park') {
                                 Logger.log(`[BullMQ] Release already sent to the download client by another request (${bestMatch.title}). Parking ${name} against it instead of re-downloading.`, 'info');
                                 await prisma.request.update({
                                     where: { id: requestId },
@@ -473,6 +477,7 @@ export function initWorker() {
                                 });
                                 break;
                             }
+                            if (duplicateExternal.action === 'settle') break;
 
                             Logger.log(`[BullMQ] Routing ${bestMatch.protocol.toUpperCase()} release to external client: ${clientConfig.name}`, 'info');
 
@@ -910,16 +915,21 @@ export function initWorker() {
                     const existingReqs: any[] = candidateVolumeIds.length
                         ? await prisma.request.findMany({
                             where: { volumeId: { in: candidateVolumeIds } },
-                            select: { id: true, volumeId: true, activeDownloadName: true, status: true }
+                            select: { id: true, volumeId: true, activeDownloadName: true, issueNumber: true, status: true }
                         })
                         : [];
 
                     // Request creation / UNRELEASED upgrade from the engine's candidates.
                     for (const c of (monitorData.candidates || [])) {
+                        // Identity first, name second (#240): the stored issue number survives the
+                        // download overwriting activeDownloadName with a pack title, which is what made a
+                        // COMPLETED request titled "X-Men #34-40" stop matching the #37 it was created
+                        // for — the monitor then queued a fresh request and the same pack came down again.
+                        // Rows that predate the column (and requests that aren't for one issue: a
+                        // reading-list title import, a manual pack link) fall back to the name parse.
                         const alreadyReq = existingReqs.find(r => {
                             if (r.volumeId !== c.volume_id) return false;
-                            const match = r.activeDownloadName?.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
-                            const reqNum = match ? match[1] : null;
+                            const reqNum = issueNumberOf(r);
                             return reqNum ? isSameIssue(reqNum, c.issue_number) : false;
                         });
 
@@ -951,6 +961,9 @@ export function initWorker() {
                                     // broke that lookup for Metron-monitored series and weakened the guard.
                                     metadataSource: c.metadata_source,
                                     status: issueStatus,
+                                    // #240: the issue this request is for, kept alongside the search name the
+                                    // download will overwrite with the release's own title.
+                                    issueNumber: c.issue_number != null ? String(c.issue_number) : null,
                                     activeDownloadName: c.search_name,
                                     imageUrl: c.image_url || null
                                 }

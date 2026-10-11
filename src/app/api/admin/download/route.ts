@@ -6,6 +6,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { AuditLogger } from '@/lib/audit-logger';
+import { settleDuplicateOnLink } from '@/lib/request-dedupe';
 
 export async function POST(req: Request) {
   try {
@@ -33,21 +34,18 @@ export async function POST(req: Request) {
     const downloadHash = infoHash || guid;
 
     if (downloadHash) {
-        const duplicateDownload = await prisma.request.findFirst({
-            where: {
-                downloadLink: downloadHash,
-                status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
-                id: { not: requestId }
-            }
-        });
+        const duplicateDownload = await settleDuplicateOnLink(downloadHash, requestId);
 
-        if (duplicateDownload) {
+        if (duplicateDownload.action === 'park') {
              Logger.log(`[Admin Download] Batch torrent already downloading (${downloadHash}). Queuing for batch extraction.`, 'info');
              await prisma.request.update({
                  where: { id: requestId },
                  data: { status: 'DOWNLOADING', downloadLink: downloadHash, progress: 0 }
              });
              return NextResponse.json({ success: true });
+        }
+        if (duplicateDownload.action === 'settle') {
+             return NextResponse.json({ success: true, settled: duplicateDownload.status });
         }
     }
 

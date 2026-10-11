@@ -88,12 +88,24 @@ model Request {
   userId             String   
   volumeId           String
   metadataSource     String   @default("COMICVINE")
-  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED, UNRELEASED, AWAITING_RELEASE, STALLED
+  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED, UNRELEASED, AWAITING_RELEASE, STALLED, NEEDS_REVIEW
+  // NEEDS_REVIEW is terminal-but-not-done (#240): the dedupe found this request's download link
+  // already consumed by a finished request and the issue never reached the library, so nothing is
+  // retried automatically — a person reviews the pack. It is deliberately absent from every retry
+  // sweep and from the notification list.
   progress           Int      @default(0)
   retryCount         Int      @default(0)
   indexer            String?
   downloadLink       String?
   activeDownloadName String?
+  // #240 (realAbitbol): the issue this request is FOR, captured where the request is created. The
+  // download overwrites activeDownloadName with the release's own title — "X-Men #1-50", "Invincible
+  // Vol. 1-25" — and the monitor parses the issue number back out of that name to dedupe, so a
+  // request whose name became a pack title stopped matching its own issue: the same pack was
+  // re-requested and re-downloaded every cycle. Nullable on purpose — rows that predate this column
+  // (and requests that aren't for one issue: a whole-title reading-list import, a manual pack link)
+  // have none, and every reader falls back to the name parse for them.
+  issueNumber        String?
   failedLinks        String? @default("[]")
   // Set when an admin dismisses/snoozes the System Health warning for this request. Snoozed items are
   // excluded from health flagging and from the AWAITING_RELEASE retry sweep until this timestamp passes.

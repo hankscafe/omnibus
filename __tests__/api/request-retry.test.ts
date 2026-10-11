@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         user: { findUnique: mocks.userFindUnique },
-        request: { findUnique: mocks.requestFindUnique, findFirst: mocks.requestFindFirst, update: mocks.requestUpdate },
+        request: { findUnique: mocks.requestFindUnique, findFirst: mocks.requestFindFirst, findMany: vi.fn().mockResolvedValue([]), update: mocks.requestUpdate },
         series: { findFirst: mocks.seriesFindFirst },
         systemSetting: { findMany: mocks.settingFindMany, findUnique: mocks.settingFindUnique },
     }

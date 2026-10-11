@@ -13,8 +13,17 @@ import { detectManga } from '@/lib/manga-detector';
 import { DiscordNotifier } from '@/lib/discord';
 import { Mailer } from '@/lib/mailer';
 import { seriesFolderSegments } from '@/lib/utils/naming';
+import { settleDuplicateOnLink } from '@/lib/request-dedupe';
 
 export const dynamic = 'force-dynamic';
+
+// #240: what to tell the user when a link they picked is already consumed — the three manual paths
+// (torrent, GetComics, Anna's Archive) answer alike.
+function settledMessage(status: 'COMPLETED' | 'NEEDS_REVIEW'): string {
+    return status === 'COMPLETED'
+        ? "That issue is already in your library — nothing was downloaded."
+        : "That pack was already downloaded and consumed, but the issue never reached the library — the request is marked for review. Nothing was downloaded.";
+}
 
 export async function POST(request: NextRequest) {
   const token = await getToken({ req: request });
@@ -122,6 +131,9 @@ export async function POST(request: NextRequest) {
             userId: userId,
             volumeId: cvId.toString(),
             status: initialStatus,
+            // #240: an issue request keeps the issue it is for; a pack/series request has no single
+            // number, so the column stays null and the name parse remains the fallback.
+            issueNumber: type === 'issue' && body.issueNumber ? String(body.issueNumber) : null,
             activeDownloadName: searchResult?.title || searchName,
             imageUrl: image,
             downloadLink: skipIndexers && initialStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null,
@@ -169,21 +181,18 @@ export async function POST(request: NextRequest) {
                 const trackingHash = searchResult.infoHash || searchResult.guid || null;
                 
                 if (trackingHash) {
-                    const duplicateDownload = await prisma.request.findFirst({
-                        where: {
-                            downloadLink: trackingHash,
-                            status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
-                            id: { not: targetReqId }
-                        }
-                    });
+                    const duplicateDownload = await settleDuplicateOnLink(trackingHash, targetReqId);
 
-                    if (duplicateDownload) {
+                    if (duplicateDownload.action === 'park') {
                          Logger.log(`[Manual Request] Batch torrent already downloading (${trackingHash}). Queuing for batch extraction.`, 'info');
                          await prisma.request.update({
                              where: { id: targetReqId },
                              data: { status: 'DOWNLOADING', activeDownloadName: searchResult.title, downloadLink: trackingHash, indexer: searchResult.indexer }
                          });
                          return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                    }
+                    if (duplicateDownload.action === 'settle') {
+                         return NextResponse.json({ success: true, message: settledMessage(duplicateDownload.status) });
                     }
                 }
 
@@ -211,21 +220,18 @@ export async function POST(request: NextRequest) {
                     const settings = await prisma.systemSetting.findMany();
                     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
                     
-                    const duplicateDownload = await prisma.request.findFirst({
-                        where: {
-                            downloadLink: url,
-                            status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
-                            id: { not: targetReqId }
-                        }
-                    });
+                    const duplicateDownload = await settleDuplicateOnLink(url, targetReqId);
 
-                    if (duplicateDownload) {
+                    if (duplicateDownload.action === 'park') {
                          Logger.log(`[Manual Request] Batch pack already downloading (${url}). Queuing for batch extraction.`, 'info');
                          await prisma.request.update({
                              where: { id: targetReqId },
                              data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
                          });
                          return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                    }
+                    if (duplicateDownload.action === 'settle') {
+                         return NextResponse.json({ success: true, message: settledMessage(duplicateDownload.status) });
                     }
 
                     await prisma.request.update({
@@ -260,16 +266,17 @@ export async function POST(request: NextRequest) {
                 const settings = await prisma.systemSetting.findMany();
                 const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
-                const duplicateDownload = await prisma.request.findFirst({
-                    where: { downloadLink: url, status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] }, id: { not: targetReqId } }
-                });
-                if (duplicateDownload) {
+                const duplicateDownload = await settleDuplicateOnLink(url, targetReqId);
+                if (duplicateDownload.action === 'park') {
                     Logger.log(`[Manual Request] Anna's Archive file already downloading (${url}). Queuing for batch extraction.`, 'info');
                     await prisma.request.update({
                         where: { id: targetReqId },
                         data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
                     });
                     return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                }
+                if (duplicateDownload.action === 'settle') {
+                    return NextResponse.json({ success: true, message: settledMessage(duplicateDownload.status) });
                 }
 
                 await prisma.request.update({

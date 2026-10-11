@@ -414,14 +414,15 @@ describe('Cron: BullMQ Worker Router', () => {
     // request. The DDL path already dedups against the primary link (queue.ts duplicateDownload);
     // the external-client (Prowlarr → SAB/qBit) path must do the same on the tracking hash.
 
-    const runExternalClientSearch = async (sibling: { id: string } | null) => {
+    const runExternalClientSearch = async (siblings: { id: string; status: string }[], req: Record<string, unknown> = { id: 'req_2', volumeId: '0', failedLinks: '[]' }) => {
         initWorker();
 
-        // freshReq: volumeId "0" skips the series/issue-year block — this test targets routing only.
-        mocks.requestFindUnique.mockResolvedValue({ id: 'req_2', volumeId: '0', failedLinks: '[]' });
+        // freshReq: volumeId "0" skips the series/issue-year block — these tests target routing only.
+        mocks.requestFindUnique.mockResolvedValue(req);
         mocks.systemSettingFindMany.mockResolvedValue([]);
         mocks.downloadClientFindMany.mockResolvedValue([{ id: 'dc1', name: 'SAB', protocol: 'usenet' }]);
-        mocks.requestFindFirst.mockResolvedValue(sibling);
+        // The dedupe now loads every request holding this link, not just the first one.
+        mocks.requestFindMany.mockResolvedValue(siblings);
 
         // Engine matched the same whole-run pack this request's sibling already grabbed.
         mocks.engineFetch.mockResolvedValueOnce({
@@ -448,7 +449,7 @@ describe('Cron: BullMQ Worker Router', () => {
     };
 
     it('parks a duplicate external-client pack instead of re-adding it to the client (issue #174)', async () => {
-        await runExternalClientSearch({ id: 'req_1' }); // sibling already holds this tracking hash
+        await runExternalClientSearch([{ id: 'req_1', status: 'DOWNLOADING' }]); // sibling is on it now
 
         // The pack must NOT be sent to SABnzbd a second time…
         expect(mocks.addDownload).not.toHaveBeenCalled();
@@ -460,8 +461,38 @@ describe('Cron: BullMQ Worker Router', () => {
         }));
     });
 
+    // ==== #240: the sibling has FINISHED, so the importer's shared-link sweep will never run again
+    // for that link and the parked row would stay DOWNLOADING forever (10 such rows in the report).
+    // Settle it instead — and download nothing.
+
+    it('settles the request as NEEDS_REVIEW when the link\'s earlier request already finished and the issue never arrived (#240)', async () => {
+        await runExternalClientSearch([{ id: 'req_1', status: 'COMPLETED' }]);
+
+        expect(mocks.addDownload).not.toHaveBeenCalled();
+        expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'req_2' },
+            data: { status: 'NEEDS_REVIEW' }
+        }));
+    });
+
+    it('closes the request as COMPLETED when the finished sibling\'s pack did put the issue in the library (#240)', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ id: 's1', metadataId: '101', metadataSource: 'COMICVINE' });
+        mocks.issueFindMany.mockResolvedValue([{ number: '2' }]);
+
+        await runExternalClientSearch([{ id: 'req_1', status: 'COMPLETED' }], {
+            id: 'req_2', volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '2',
+            activeDownloadName: "Batman '89: Echoes #2", failedLinks: '[]'
+        });
+
+        expect(mocks.addDownload).not.toHaveBeenCalled();
+        expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'req_2' },
+            data: { status: 'COMPLETED', progress: 100, notified: true }
+        }));
+    });
+
     it('adds the download normally when no sibling holds the same tracking hash', async () => {
-        await runExternalClientSearch(null);
+        await runExternalClientSearch([]);
 
         expect(mocks.addDownload).toHaveBeenCalledTimes(1);
         expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
@@ -558,6 +589,51 @@ describe('Cron: BullMQ Worker Router', () => {
         expect(mocks.searchAndDownload).toHaveBeenCalledTimes(1);
     });
 
+    it('re-uses an existing COMPLETED request whose name became the pack title (#240)', async () => {
+        // The download overwrites activeDownloadName with the release's own title, so a request for
+        // #37 reads "X-Men #34-40". Parsing that name back gives 34, never 37 — on dev the monitor
+        // saw no request for the candidate, created a fresh one, and downloaded the pack again.
+        mocks.requestFindMany.mockImplementation(async (args: { where?: { volumeId?: { in?: string[] } } }) =>
+            args.where?.volumeId?.in ? [{ id: 'req_37', volumeId: 'v1', activeDownloadName: 'X-Men #34-40 (2004)', issueNumber: '37', status: 'COMPLETED' }] : []
+        );
+
+        await runMonitor([{
+            volume_id: 'v1', metadata_source: 'COMICVINE', search_name: 'X-Men #37', issue_number: '37',
+            issue_year: '2004', is_released: true, has_date: true, publisher: 'Marvel', is_manga: false, image_url: null
+        }]);
+
+        expect(mocks.requestCreate).not.toHaveBeenCalled();
+        expect(mocks.searchAndDownload).not.toHaveBeenCalled();
+    });
+
+    it('still re-requests an issue the pack title genuinely does not cover (#240 regression guard)', async () => {
+        mocks.requestFindMany.mockImplementation(async (args: { where?: { volumeId?: { in?: string[] } } }) =>
+            args.where?.volumeId?.in ? [{ id: 'req_37', volumeId: 'v1', activeDownloadName: 'X-Men #34-40 (2004)', issueNumber: '37', status: 'COMPLETED' }] : []
+        );
+
+        await runMonitor([{
+            volume_id: 'v1', metadata_source: 'COMICVINE', search_name: 'X-Men #41', issue_number: '41',
+            issue_year: '2004', is_released: true, has_date: true, publisher: 'Marvel', is_manga: false, image_url: null
+        }]);
+
+        expect(mocks.requestCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'PENDING', issueNumber: '41' })
+        }));
+    });
+
+    it('stores the candidate issue number on the request it creates (#240)', async () => {
+        mocks.requestFindMany.mockImplementation(async () => []);
+
+        await runMonitor([{
+            volume_id: 'v1', metadata_source: 'COMICVINE', search_name: 'Spawn #360', issue_number: '360',
+            issue_year: '2026', is_released: true, has_date: true, publisher: 'Image', is_manga: false, image_url: null
+        }]);
+
+        expect(mocks.requestCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ issueNumber: '360' })
+        }));
+    });
+
     it('re-searches parked MANUAL_DDL and dead STALLED requests on the awaiting cadence, leaving live retries to the cron', async () => {
         // No candidates → the first request.findMany call is the UNRELEASED sweep, the second is
         // the parked/dead sweep (this is the one under test).
@@ -645,6 +721,7 @@ describe('Cron: BullMQ Worker Router', () => {
         mocks.requestFindUnique.mockResolvedValue({ id: 'req_ddl', volumeId: '0', failedLinks: '[]' });
         mocks.systemSettingFindMany.mockResolvedValue([]);
         mocks.requestFindFirst.mockResolvedValue(null); // no duplicate download
+        mocks.requestFindMany.mockResolvedValue([]); // …and nothing holds this link either
         mocks.downloadDirectFile.mockResolvedValue(false); // every hoster fails
         mocks.engineFetch.mockResolvedValueOnce({
             ok: true, status: 200,

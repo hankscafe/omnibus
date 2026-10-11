@@ -8,6 +8,7 @@ import { enabledHostersFromSetting, scrapeDeepLinkViaEngine } from '@/lib/getcom
 import { Importer } from '@/lib/importer';
 import { omnibusQueue } from '@/lib/queue';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import { settleDuplicateOnLink } from '@/lib/request-dedupe';
 
 export const dynamic = 'force-dynamic';
 
@@ -194,21 +195,20 @@ export async function POST(request: NextRequest) {
                 if (cand) {
                     const safeSearchTitle = best.title.replace(/[<>:"/\\|?*]/g, ' - ').replace(/\s+/g, ' ').trim();
 
-                    const duplicateDownload = await prisma.request.findFirst({
-                        where: {
-                            downloadLink: cand.url,
-                            status: { in: ['DOWNLOADING', 'IMPORTED', 'COMPLETED'] },
-                            id: { not: id }
-                        }
-                    });
+                    const duplicateDownload = await settleDuplicateOnLink(cand.url, id);
 
-                    if (duplicateDownload) {
-                         Logger.log(`[Retry] Batch pack already downloading or downloaded (${cand.url}). Queuing for batch extraction.`, 'info');
+                    if (duplicateDownload.action === 'park') {
+                         Logger.log(`[Retry] Batch pack already downloading (${cand.url}). Queuing for batch extraction.`, 'info');
                          await prisma.request.update({
                              where: { id },
                              data: { status: 'DOWNLOADING', retryCount: 0, progress: 0, activeDownloadName: safeSearchTitle, downloadLink: cand.url, failedLinks: "[]" }
                          });
                          return NextResponse.json({ success: true, message: `Link recovered via ${cand.hoster.startsWith('getcomics') ? 'Direct' : cand.hoster} and queued for batch extraction.` });
+                    }
+                    if (duplicateDownload.action === 'settle') {
+                         return NextResponse.json({ success: true, message: duplicateDownload.status === 'COMPLETED'
+                             ? "That issue is already in your library — nothing was downloaded."
+                             : "That pack was already downloaded and consumed, but the issue never reached the library — the request is marked for review. Nothing was downloaded." });
                     }
                     await prisma.request.update({
                         where: { id },

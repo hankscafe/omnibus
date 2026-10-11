@@ -122,6 +122,37 @@ model Request {
   @@index([volumeId])
 }
 
+// #240 (realAbitbol, "notify on reality"): the handoff between the importer (Node) and the
+// watched-folder sweep (Rust engine) — what lets a request be closed on what actually reached the
+// library instead of on what was merely routed to the watched folder.
+//
+// The importer writes one row per file it routes (outcome PENDING) and leaves the requests at
+// IMPORTING; the engine stamps each row where it imports the file (IMPORTED + the issue id and
+// destination it wrote) or parks it in /unmatched (UNMATCHED), keyed by `relPath` — the file's name
+// relative to the watched folder, which both sides compute without sharing an absolute path. A
+// cron reconciler then closes every request in the batch: COMPLETED with one "available" alert when
+// the issue is in the library, NEEDS_REVIEW with one "needs review" alert when the batch settled
+// without it. Nobody announces an arrival from the routing side any more.
+model ImportHandoff {
+  id             String   @id @default(cuid())
+  batchId        String
+  // The requests this download was made for, as a JSON array of ids: one pack usually serves
+  // several issue requests, so the row is keyed per FILE and carries its request ids beside it.
+  requestIds     String   @default("[]")
+  relPath        String
+  volumeId       String?
+  metadataSource String?
+  outcome        String   @default("PENDING") // PENDING, IMPORTED, UNMATCHED
+  issueId        String?
+  destination    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([batchId])
+  @@index([relPath])
+  @@index([outcome])
+}
+
 model Library {
   id        String   @id @default(cuid())
   name      String

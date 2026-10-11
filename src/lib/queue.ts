@@ -402,6 +402,11 @@ export function initWorker() {
                                 await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: candidates[0].url } });
                                 break;
                             }
+                            if (duplicateDownload.action === 'join') {
+                                Logger.log(`[BullMQ] Batch pack already handed to the watched folder (${candidates[0].url}). Joining its wait instead of downloading it again.`, 'info');
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'IMPORTING', progress: 100, activeDownloadName: safeTitle, downloadLink: candidates[0].url } });
+                                break;
+                            }
                             if (duplicateDownload.action === 'settle') break;
 
                             // Detached download-time fallback: try each hoster in priority order until one
@@ -473,6 +478,14 @@ export function initWorker() {
                                 await prisma.request.update({
                                     where: { id: requestId },
                                     data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
+                                });
+                                break;
+                            }
+                            if (duplicateExternal.action === 'join') {
+                                Logger.log(`[BullMQ] Release already handed to the watched folder by another request (${bestMatch.title}). Joining its wait instead of re-downloading.`, 'info');
+                                await prisma.request.update({
+                                    where: { id: requestId },
+                                    data: { status: 'IMPORTING', progress: 100, activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
                                 });
                                 break;
                             }

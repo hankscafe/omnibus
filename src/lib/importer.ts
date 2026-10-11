@@ -24,6 +24,7 @@ import { readZipEntryNames } from '@/lib/utils/archive-pages';
 import { fixMagicNumberSync } from '@/lib/utils/archive-signature';
 import { storedFolderProblem } from '@/lib/utils/stored-folder';
 import { requeueWithNextRelease } from '@/lib/requeue';
+import { newImportBatchId, recordImportHandoff, watchedRelativePath } from '@/lib/import-handoff';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -84,8 +85,10 @@ export const Importer = {
         include: { user: true } 
     });
     
-    // Abort if the user cancelled the request while it was downloading
-    if (!req || req.status === 'COMPLETED' || req.status === 'IMPORTED' || req.status === 'CANCELLED') return false;
+    // Abort if the user cancelled the request while it was downloading. An IMPORTING request has
+    // already been handed to the watched folder (#240 PR B) and is waiting on the sweep: importing
+    // it again would look for a download that is gone and could fail a request that is fine.
+    if (!req || req.status === 'COMPLETED' || req.status === 'IMPORTED' || req.status === 'IMPORTING' || req.status === 'CANCELLED') return false;
 
     Logger.log(`[Importer] Starting import for: ${req.activeDownloadName || requestId}`, 'info');
     Logger.log(`[Importer Debug] Resolving physical path for request [${requestId}]...`, 'debug');
@@ -346,6 +349,9 @@ export const Importer = {
         const watchedDir = WATCHED_DIR;
         await fs.ensureDir(watchedDir);
         let moveSuccessCount = 0;
+        // The files this batch actually handed over, named relative to the watched folder
+        // (#240 PR B): the engine stamps each one's outcome under exactly this key.
+        const routedRelPaths: string[] = [];
 
         if (isBatchFolder) {
             for (const file of batchFiles) {
@@ -362,6 +368,7 @@ export const Importer = {
                     }
                     
                     finalDest = fixMagicNumberSync(finalDest);
+                    routedRelPaths.push(watchedRelativePath(watchedDir, finalDest));
 
                     moveSuccessCount++;
                 } catch(err: any) {
@@ -377,6 +384,7 @@ export const Importer = {
             const engineExtract = await engineNestedArchives(actualSourceFile, watchedDir);
             if (engineExtract?.files) {
                 moveSuccessCount = engineExtract.files.length;
+                routedRelPaths.push(...engineExtract.files.map(f => watchedRelativePath(watchedDir, f)));
                 if (!isFromClient && !trackingHash) {
                     try { await fs.remove(sourcePath); } catch(e) {}
                 }
@@ -401,6 +409,7 @@ export const Importer = {
                             fs.writeFileSync(finalDest, entry.getData());
 
                             finalDest = fixMagicNumberSync(finalDest);
+                            routedRelPaths.push(watchedRelativePath(watchedDir, finalDest));
 
                             moveSuccessCount++;
                         }
@@ -415,36 +424,50 @@ export const Importer = {
             }
         }
 
-        // Safely clear the queue for anything sharing the link (Except missing match placeholders)
-        if (req.downloadLink && req.downloadLink !== "PENDING_MATCH") {
-            await prisma.request.updateMany({
-                where: { downloadLink: req.downloadLink, status: 'DOWNLOADING' },
-                data: { status: 'COMPLETED', progress: 100, notified: false }
-            });
-        } else {
-            await prisma.request.update({
-                where: { id: requestId },
-                data: { status: 'COMPLETED', progress: 100, notified: false }
-            });
+        // --- HANDOFF, NOT ARRIVAL (#240 PR B) ---
+        // The pack is in the watched folder; that is all we know. The requests now wait at
+        // IMPORTING until the sweep reports what each file became, and the reconciler in the cron
+        // closes them: COMPLETED with the "available" alert only once the issue really is in the
+        // library, NEEDS_REVIEW when the batch settled without it. Routing nothing is not a handoff
+        // — leave the requests to the download checker rather than promise an import that is not
+        // coming.
+        if (moveSuccessCount === 0) {
+            Logger.log(`[Importer] Batch of "${req.activeDownloadName || requestId}" routed 0 files — not handing anything to the watched folder.`, 'error');
+            return false;
         }
+
+        const batchId = newImportBatchId();
+        // Every request this download was made for: the pack is shared, so the batch is closed for
+        // all of them (and each one on its own issue, once the library can answer).
+        const siblingRequests = req.downloadLink && req.downloadLink !== "PENDING_MATCH"
+            ? await prisma.request.findMany({
+                where: { downloadLink: req.downloadLink, status: { in: ['DOWNLOADING', 'IMPORTING'] } },
+                select: { id: true }
+            })
+            : [];
+        const batchRequestIds = Array.from(new Set([requestId, ...siblingRequests.map(r => r.id)]));
+
+        await prisma.request.updateMany({
+            where: { id: { in: batchRequestIds } },
+            data: { status: 'IMPORTING', progress: 100, notified: false }
+        });
+
+        await recordImportHandoff({
+            batchId,
+            requestIds: batchRequestIds,
+            relativePaths: routedRelPaths,
+            volumeId: req.volumeId,
+            metadataSource: req.metadataSource
+        });
 
         try {
             const { omnibusQueue } = await import('./queue');
             await omnibusQueue.add('WATCHED_FOLDER_SYNC', { type: 'WATCHED_FOLDER_SYNC' }, {
-                jobId: `WATCHED_SYNC_BATCH_${Date.now()}`
+                jobId: batchId
             });
         } catch(e) {}
 
-        Logger.log(`[Importer] Successfully routed ${moveSuccessCount} files to Watched folder. Batch import complete.`, 'success');
-        
-        await SystemNotifier.sendAlert('comic_available', {
-            title: `${req.activeDownloadName || "Batch Download"} - ${moveSuccessCount} Files`,
-            imageUrl: req.imageUrl,
-            user: req.user?.username,
-            email: req.user?.email,
-            description: `Your batch download has finished! The files have been sent to the Watched Folder for auto-tagging and organization.`,
-            date: new Date().toLocaleString()
-        });
+        Logger.log(`[Importer] Successfully routed ${moveSuccessCount} files to Watched folder. Batch ${batchId} handed off; ${batchRequestIds.length} request(s) stay IMPORTING until the sweep reports back.`, 'success');
 
         // CRITICAL: Only add trackingHash (Torrents) to the ignore list so DDLs can be re-downloaded later if needed!
         if (trackingHash) {

@@ -191,6 +191,16 @@ export async function POST(request: NextRequest) {
                          });
                          return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
                     }
+                    if (duplicateDownload.action === 'join') {
+                         // #240 PR B: the sibling's pack is already in the watched folder, so its
+                         // bytes are gone and its outcome is not known yet — wait with it (the
+                         // reconciler closes this request when the sweep reports back).
+                         await prisma.request.update({
+                             where: { id: targetReqId },
+                             data: { status: 'IMPORTING', progress: 100, activeDownloadName: searchResult.title, downloadLink: trackingHash, indexer: searchResult.indexer }
+                         });
+                         return NextResponse.json({ success: true, message: "This pack is already in the watched folder — the request waits for the import instead of downloading it again." });
+                    }
                     if (duplicateDownload.action === 'settle') {
                          return NextResponse.json({ success: true, message: settledMessage(duplicateDownload.status) });
                     }
@@ -229,6 +239,16 @@ export async function POST(request: NextRequest) {
                              data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
                          });
                          return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                    }
+                    if (duplicateDownload.action === 'join') {
+                         // #240 PR B: the sibling's pack is already in the watched folder, so its
+                         // bytes are gone and its outcome is not known yet — wait with it (the
+                         // reconciler closes this request when the sweep reports back).
+                         await prisma.request.update({
+                             where: { id: targetReqId },
+                             data: { status: 'IMPORTING', progress: 100, activeDownloadName: safeTitle, downloadLink: url }
+                         });
+                         return NextResponse.json({ success: true, message: "This pack is already in the watched folder — the request waits for the import instead of downloading it again." });
                     }
                     if (duplicateDownload.action === 'settle') {
                          return NextResponse.json({ success: true, message: settledMessage(duplicateDownload.status) });
@@ -274,6 +294,15 @@ export async function POST(request: NextRequest) {
                         data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: url }
                     });
                     return NextResponse.json({ success: true, message: "Added to existing batch download queue." });
+                }
+                if (duplicateDownload.action === 'join') {
+                    // #240 PR B: see the torrent branch above — the pack is in the watched folder, so
+                    // this request waits for the sweep instead of downloading it again.
+                    await prisma.request.update({
+                        where: { id: targetReqId },
+                        data: { status: 'IMPORTING', progress: 100, activeDownloadName: safeTitle, downloadLink: url }
+                    });
+                    return NextResponse.json({ success: true, message: "This pack is already in the watched folder — the request waits for the import instead of downloading it again." });
                 }
                 if (duplicateDownload.action === 'settle') {
                     return NextResponse.json({ success: true, message: settledMessage(duplicateDownload.status) });

@@ -324,6 +324,21 @@ export function initCronJobs() {
           }
       }
 
+      // #240 PR B: close the requests whose pack is sitting in the watched folder (IMPORTING) on
+      // what the sweep actually imported, instead of announcing them when they were routed. Returns
+      // immediately while nothing is IMPORTING; own lock so a slow cycle is never doubled up.
+      try {
+        if (await acquireLock('CRON_IMPORT_HANDOFF_RECONCILE', 55000)) {
+          const { reconcileImportHandoffs } = await import('@/lib/import-handoff');
+          const swept = await reconcileImportHandoffs();
+          if (swept.completed > 0 || swept.review > 0) {
+            Logger.log(`[Cron] Import handoff reconciled: ${swept.completed} completed, ${swept.review} needs review, ${swept.waiting} still waiting on the sweep.`, 'info');
+          }
+        }
+      } catch (e: unknown) {
+        Logger.log(`[Cron] Import handoff reconciliation failed: ${getErrorMessage(e)}`, 'error');
+      }
+
     } catch (error: unknown) {
       Logger.log(`[Cron] Download Checker Error: ${getErrorMessage(error)}`, 'error');
     } finally {

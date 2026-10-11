@@ -77,6 +77,12 @@ describe('verdictForLinkSiblings', () => {
         expect(verdictForLinkSiblings(['COMPLETED', 'DOWNLOADING'], true)).toEqual({ action: 'park' });
     });
 
+    it('joins the wait when a sibling already handed the pack to the watched folder (#240 PR B)', () => {
+        expect(verdictForLinkSiblings(['IMPORTING'], false)).toEqual({ action: 'join' });
+        // A live download beside a handed-off pack still parks: those bytes are not even on disk yet.
+        expect(verdictForLinkSiblings(['IMPORTING', 'DOWNLOADING'], false)).toEqual({ action: 'park' });
+    });
+
     it('settles as COMPLETED when every sibling finished and the issue is in the library', () => {
         expect(verdictForLinkSiblings(['COMPLETED'], true)).toEqual({ action: 'settle', status: 'COMPLETED', reason: 'in-library' });
     });
@@ -132,6 +138,18 @@ describe('settleDuplicateOnLink', () => {
     it('parks on a link a sibling is still downloading, and writes nothing itself', async () => {
         mocks.requestFindMany.mockResolvedValue([{ id: 'req_lead', status: 'DOWNLOADING' }]);
         await expect(settleDuplicateOnLink('https://host/pack.cbz', 'req_new')).resolves.toEqual({ action: 'park' });
+        expect(mocks.requestUpdate).not.toHaveBeenCalled();
+    });
+
+    it('joins a sibling that has the pack in the watched folder, even beside finished rows (#240 PR B)', async () => {
+        // The sibling's bytes are gone but its outcome is not known yet: settling now would be a
+        // guess (the issue may be landing), and downloading again is the bandwidth PR A removed.
+        mocks.requestFindMany.mockResolvedValue([
+            { id: 'req_lead', status: 'IMPORTING' },
+            { id: 'req_old', status: 'COMPLETED' }
+        ]);
+
+        await expect(settleDuplicateOnLink('https://host/pack.cbz', 'req_new')).resolves.toEqual({ action: 'join' });
         expect(mocks.requestUpdate).not.toHaveBeenCalled();
     });
 

@@ -11,6 +11,7 @@ import packageJson from '../../package.json';
 import { readRateStatus } from '@/lib/metron/client';
 import { describeMetronHealth, metronCalls24h, type MetronSnapshot } from '@/lib/metron/health';
 import { metronCredentialKind } from '@/lib/metron/credentials';
+import { IMPORTING_STALE_MS } from '@/lib/import-handoff';
 
 export interface HealthCheckResult {
     id: string;
@@ -471,6 +472,34 @@ export async function runSystemHealthCheck() {
         }
     } catch (e) {
         Logger.log(`[Health Check Debug] Duplicate file scan failed: ${getErrorMessage(e)}`, 'debug');
+    }
+
+    // 13. Imports waiting on the watched folder (#240 PR B). A request is IMPORTING from the moment
+    // its pack is routed until the reconciler closes it on what the sweep reported. Past
+    // IMPORTING_STALE_MS the handoff it waits on never came back (engine down, sweep never ran, row
+    // lost): a person has to look — the reconciler never invents an outcome for a pending import.
+    try {
+        const staleImporting = await prisma.request.findMany({
+            where: { status: 'IMPORTING', updatedAt: { lt: new Date(Date.now() - IMPORTING_STALE_MS) }, ...notSnoozed },
+            select: { id: true, activeDownloadName: true, updatedAt: true }
+        });
+        const staleHours = Math.round(IMPORTING_STALE_MS / 3600000);
+        if (staleImporting.length > 0) {
+            const staleNames = staleImporting.map(r => r.activeDownloadName || `Request ID: ${r.id}`);
+            results.push({
+                id: 'import_handoff',
+                name: 'Imports Waiting on the Watched Folder',
+                status: 'warning',
+                message: `${staleImporting.length} request(s) have been IMPORTING for over ${staleHours} h: the watched-folder sweep never reported what happened to their files. Check the engine and the watched folder, then review the requests.`,
+                actionLink: '/requests',
+                details: staleNames,
+                items: staleImporting.map(r => ({ id: r.id, name: r.activeDownloadName || `Request ID: ${r.id}` }))
+            });
+        } else {
+            results.push({ id: 'import_handoff', name: 'Imports Waiting on the Watched Folder', status: 'ok', message: 'No import is waiting on the watched folder' });
+        }
+    } catch (e) {
+        Logger.log(`[Health Check Debug] Import handoff check failed: ${getErrorMessage(e)}`, 'debug');
     }
 
     let overallStatus: 'HEALTHY' | 'WARNING' | 'DEGRADED' = 'HEALTHY';

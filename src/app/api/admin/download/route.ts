@@ -44,6 +44,16 @@ export async function POST(req: Request) {
              });
              return NextResponse.json({ success: true });
         }
+        if (duplicateDownload.action === 'join') {
+             // #240 PR B: the pack is already in the watched folder for another request — the
+             // request waits on that import (the reconciler closes it) instead of re-downloading.
+             Logger.log(`[Admin Download] Pack already in the watched folder (${downloadHash}). Joining its wait.`, 'info');
+             await prisma.request.update({
+                 where: { id: requestId },
+                 data: { status: 'IMPORTING', progress: 100, downloadLink: downloadHash }
+             });
+             return NextResponse.json({ success: true, waiting: true });
+        }
         if (duplicateDownload.action === 'settle') {
              return NextResponse.json({ success: true, settled: duplicateDownload.status });
         }

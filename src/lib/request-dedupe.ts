@@ -19,16 +19,25 @@ import { isSameIssue } from '@/lib/utils/issue-parser';
 import { ownedCoverageBySeries } from '@/lib/coverage-ownership';
 
 // The statuses that mean "this request still owns its link": a sibling in one of them is a genuine
-// wait-for-it duplicate. DOWNLOADING is the only in-flight one.
+// wait-for-it duplicate. DOWNLOADING is the in-flight one; IMPORTING is the pack handed to the
+// watched folder, whose outcome is not known yet (#240 PR B) — the bytes are gone, so the newcomer
+// must not download them again, but its issue may still be on its way into the library.
 export const IN_FLIGHT_REQUEST_STATUS = 'DOWNLOADING';
+export const IMPORTING_REQUEST_STATUS = 'IMPORTING';
 export const FINISHED_REQUEST_STATUSES = ['IMPORTED', 'COMPLETED'];
-const LINK_OCCUPYING_STATUSES = [IN_FLIGHT_REQUEST_STATUS, ...FINISHED_REQUEST_STATUSES];
+const LINK_OCCUPYING_STATUSES = [IN_FLIGHT_REQUEST_STATUS, IMPORTING_REQUEST_STATUS, ...FINISHED_REQUEST_STATUSES];
 
 export type DuplicateLinkVerdict =
   /** Nothing else holds this link — download normally. */
   | { action: 'download' }
   /** A sibling is still downloading it: park and let the shared-link sweep close us out. */
   | { action: 'park' }
+  /**
+   * A sibling has the bytes and is waiting on the sweep (#240 PR B): join that wait instead of
+   * downloading the pack a second time. The sibling's handoff carries this request to its end —
+   * the reconciler closes it COMPLETED when the issue lands, NEEDS_REVIEW when it doesn't.
+   */
+  | { action: 'join' }
   /** Every sibling has finished (bytes gone) — the request was settled, download nothing. */
   | { action: 'settle'; status: 'COMPLETED' | 'NEEDS_REVIEW'; reason: 'in-library' | 'unmatched' };
 
@@ -70,6 +79,7 @@ export function notifiedOnSettle(
 export function verdictForLinkSiblings(siblingStatuses: string[], issueOwned: boolean): DuplicateLinkVerdict {
   if (siblingStatuses.length === 0) return { action: 'download' };
   if (siblingStatuses.includes(IN_FLIGHT_REQUEST_STATUS)) return { action: 'park' };
+  if (siblingStatuses.includes(IMPORTING_REQUEST_STATUS)) return { action: 'join' };
   return issueOwned
     ? { action: 'settle', status: 'COMPLETED', reason: 'in-library' }
     : { action: 'settle', status: 'NEEDS_REVIEW', reason: 'unmatched' };
@@ -111,7 +121,8 @@ export async function issueIsInLibrary(opts: {
  * Settle a request against the other requests holding its download link. Called wherever a request
  * is about to be parked on a link someone else already owns (the search path, the manual and retry
  * routes, the admin download panel). Returns what the caller should do: `download` (proceed),
- * `park` (today's behaviour) or `settle` (the request was closed here — download nothing).
+ * `park` (today's behaviour), `join` (a sibling already has the bytes and is waiting on the sweep —
+ * wait with it, download nothing) or `settle` (the request was closed here — download nothing).
  *
  * The request's own row supplies its identity, so every call site behaves identically.
  */
@@ -127,6 +138,9 @@ export async function settleDuplicateOnLink(link: string | null | undefined, req
   if (siblings.some(s => s.status === IN_FLIGHT_REQUEST_STATUS)) {
     return verdictForLinkSiblings(siblings.map(s => s.status), false);
   }
+  // A sibling is IMPORTING: its pack is in the watched folder and its outcome is not known yet, so
+  // neither "download" (bandwidth) nor "settle" (much too early) is honest — wait with it.
+  if (siblings.some(s => s.status === IMPORTING_REQUEST_STATUS)) return { action: 'join' };
 
   const req = await prisma.request.findUnique({
     where: { id: requestId },

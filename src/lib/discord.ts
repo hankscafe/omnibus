@@ -96,6 +96,14 @@ export const DiscordNotifier = {
           if (payload.user) embed.fields.push({ name: "Requested By", value: payload.user, inline: true });
           break;
 
+        case 'import_needs_review':
+          embed.title = "⚠️ Import Needs Review";
+          embed.description = `**${payload.title}** was downloaded but did not reach the library — it needs a look.`;
+          embed.color = 15844367; // Amber
+          appendMetadata();
+          if (payload.user) embed.fields.push({ name: "Requested By", value: payload.user, inline: true });
+          break;
+
         case 'pending_request':
           embed.title = "🔔 New Request Pending";
           embed.description = `**${payload.title}** is waiting for admin approval.`;

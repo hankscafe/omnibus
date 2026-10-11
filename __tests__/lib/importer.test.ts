@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     findFirstClient: vi.fn(),
     getAllActiveDownloads: vi.fn(),
     updateRequest: vi.fn(),
+    updateManyRequest: vi.fn().mockResolvedValue({ count: 2 }),
+    recordHandoff: vi.fn().mockResolvedValue(1),
     createIssue: vi.fn(),
     upsertSeries: vi.fn(),
     updateSeries: vi.fn(),
@@ -37,7 +39,7 @@ const mocks = vi.hoisted(() => ({
 // 2. Deeply Mock Dependencies to save RAM and prevent OOM crashes
 vi.mock('@/lib/db', () => ({
     prisma: {
-        request: { findUnique: mocks.findUniqueRequest, update: mocks.updateRequest, updateMany: vi.fn().mockResolvedValue({ count: 1 }), count: vi.fn().mockResolvedValue(0) },
+        request: { findUnique: mocks.findUniqueRequest, update: mocks.updateRequest, updateMany: mocks.updateManyRequest, findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
         systemSetting: { findMany: mocks.findManySettings, findUnique: vi.fn().mockResolvedValue(null) },
         library: { findMany: mocks.findManyLibraries },
         series: { findFirst: mocks.findFirstSeries, upsert: mocks.upsertSeries, update: mocks.updateSeries },
@@ -65,6 +67,16 @@ vi.mock('@/lib/queue', () => ({
     omnibusQueue: {
         add: vi.fn().mockResolvedValue(true)
     }
+}));
+
+// #240 PR B: the importer records the handoff and nothing else — the row-writing itself is unit
+// tested in import-handoff.test.ts, and the relative-path key is mocked to its basename here so the
+// assertions read as intent rather than as /tmp path arithmetic.
+vi.mock('@/lib/import-handoff', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/import-handoff')>()),
+    newImportBatchId: () => 'batch_test',
+    watchedRelativePath: (_dir: string, filePath: string) => filePath.split(/[\\/]/).pop(),
+    recordImportHandoff: mocks.recordHandoff,
 }));
 
 vi.mock('@/lib/utils/path-resolver', () => ({ resolveRemotePath: vi.fn((path) => path) }));
@@ -441,14 +453,20 @@ describe('File System: Importer Engine', () => {
         expect(extractBody.path).toContain('Big Pack.cbz');
         expect(extractBody.dest_dir).toBeTruthy();
         expect(mocks.zipGetEntries).not.toHaveBeenCalled();
-        // Batch routing completed: request closed out and the watched-folder sync queued.
-        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ status: 'COMPLETED' })
+        // Batch ROUTED, not closed (#240 PR B): the request waits at IMPORTING, the files are handed
+        // over to the sweep under their watched-folder names, and the sync is queued under the batch.
+        expect(mocks.updateManyRequest).toHaveBeenCalledWith({
+            where: { id: { in: ['req_1'] } },
+            data: expect.objectContaining({ status: 'IMPORTING' })
+        });
+        expect(mocks.recordHandoff).toHaveBeenCalledWith(expect.objectContaining({
+            batchId: 'batch_test',
+            requestIds: ['req_1'],
+            relativePaths: ['a.cbz', 'b.cbz']
         }));
-        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), expect.any(Object));
-        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
-            title: expect.stringContaining('2 Files')
-        }));
+        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), { jobId: 'batch_test' });
+        // Nothing is announced at routing time any more — the bell no longer lies about the import.
+        expect(notifierSendAlert).not.toHaveBeenCalled();
     });
 
     it('falls back to local AdmZip batch extraction when the engine is down', async () => {
@@ -469,12 +487,15 @@ describe('File System: Importer Engine', () => {
         expect(result).toBe(true);
         // Only the nested comic was written to the watched folder.
         expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledTimes(1);
-        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ status: 'COMPLETED' })
+        expect(mocks.updateManyRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'IMPORTING' })
         }));
-        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
-            title: expect.stringContaining('1 Files')
+        // The destination keeps a collision prefix when the watched folder already holds that name,
+        // and the handoff key follows the file it actually wrote.
+        expect(mocks.recordHandoff).toHaveBeenCalledWith(expect.objectContaining({
+            relativePaths: [expect.stringMatching(/a\.cbz$/)]
         }));
+        expect(notifierSendAlert).not.toHaveBeenCalled();
     });
 
     // ==== #240 finding 4: a 1.2 GB pack cut short was imported as ONE issue with 0 pages. The engine
@@ -580,9 +601,13 @@ describe('File System: Importer Engine', () => {
         expect(mocks.fetch).toHaveBeenCalledTimes(2);
         // AdmZip can't read RAR — it must never be consulted for a .cbr pack.
         expect(mocks.zipGetEntries).not.toHaveBeenCalled();
-        expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ status: 'COMPLETED' })
+        expect(mocks.updateManyRequest).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'IMPORTING' })
         }));
+        expect(mocks.recordHandoff).toHaveBeenCalledWith(expect.objectContaining({
+            relativePaths: ['Batman 89 Echoes 001.cbz']
+        }));
+        expect(notifierSendAlert).not.toHaveBeenCalled();
         expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), expect.any(Object));
     });
 
@@ -617,9 +642,12 @@ describe('File System: Importer Engine', () => {
         expect(result).toBe(false);
         // The reason must be the REAL one — not a path-mapping/permissions red herring.
         expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining('could not be split'), 'error');
-        expect(mocks.updateRequest).not.toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ status: 'COMPLETED' })
+        // Nothing was handed over: the request is not marked IMPORTING and no handoff row exists —
+        // a request that would wait forever on an import that was never queued (#240 PR B).
+        expect(mocks.updateManyRequest).not.toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ status: 'IMPORTING' })
         }));
+        expect(mocks.recordHandoff).not.toHaveBeenCalled();
     });
 
     it('splits a pack that arrives inside a download-client job folder (SAB case, issue #174)', async () => {

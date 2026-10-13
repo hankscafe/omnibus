@@ -6,6 +6,7 @@ import {
     issueNumberOf,
     verdictForLinkSiblings,
     issueIsInLibrary,
+    notifiedOnSettle,
     settleDuplicateOnLink,
 } from '@/lib/request-dedupe';
 
@@ -40,6 +41,28 @@ describe('issueNumberOf', () => {
 
     it('has nothing to say about a request that is not for one issue', () => {
         expect(issueNumberOf({ issueNumber: null, activeDownloadName: 'Invincible Vol. 1-25' })).toBeNull();
+    });
+
+    it('keeps the negative sign the name parse has always captured (an annual-ish number)', () => {
+        expect(issueNumberOf({ issueNumber: null, activeDownloadName: 'Batman #-1' })).toBe('-1');
+    });
+});
+
+describe('notifiedOnSettle', () => {
+    it('keeps the bell quiet when a finished request on the link is the same user\'s', () => {
+        // Their own request consumed the pack, so its import already announced the issue.
+        expect(notifiedOnSettle([{ status: 'COMPLETED', userId: 'u1' }], 'u1')).toBe(true);
+        expect(notifiedOnSettle([{ status: 'IMPORTED', userId: 'u1' }], 'u1')).toBe(true);
+    });
+
+    it('rings for a closer whose link was consumed by someone else\'s request', () => {
+        expect(notifiedOnSettle([{ status: 'COMPLETED', userId: 'u2' }], 'u1')).toBe(false);
+        expect(notifiedOnSettle([{ status: 'COMPLETED' }], 'u1')).toBe(false);
+        expect(notifiedOnSettle([{ status: 'COMPLETED', userId: 'u1' }], undefined)).toBe(false);
+    });
+
+    it('never counts a sibling that is still downloading as the one that told them', () => {
+        expect(notifiedOnSettle([{ status: 'DOWNLOADING', userId: 'u1' }], 'u1')).toBe(false);
     });
 });
 
@@ -95,7 +118,7 @@ describe('settleDuplicateOnLink', () => {
     beforeEach(() => {
         mocks.requestFindMany.mockResolvedValue([]);
         mocks.requestFindUnique.mockResolvedValue({
-            volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '37', activeDownloadName: 'X-Men #37'
+            volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '37', activeDownloadName: 'X-Men #37', userId: 'u1'
         });
         mocks.seriesFindFirst.mockResolvedValue({ id: 's1' });
         mocks.issueFindMany.mockResolvedValue([{ number: '37' }]);
@@ -113,7 +136,7 @@ describe('settleDuplicateOnLink', () => {
     });
 
     it('closes as COMPLETED (and download nothing) when the link is consumed and the issue is owned', async () => {
-        mocks.requestFindMany.mockResolvedValue([{ id: 'req_lead', status: 'COMPLETED' }]);
+        mocks.requestFindMany.mockResolvedValue([{ id: 'req_lead', status: 'COMPLETED', userId: 'u1' }]);
 
         await expect(settleDuplicateOnLink('https://host/pack.cbz', 'req_new')).resolves.toEqual({
             action: 'settle', status: 'COMPLETED', reason: 'in-library'
@@ -121,6 +144,18 @@ describe('settleDuplicateOnLink', () => {
         expect(mocks.requestUpdate).toHaveBeenCalledWith({
             where: { id: 'req_new' },
             data: { status: 'COMPLETED', progress: 100, notified: true }
+        });
+    });
+
+    it('closes as COMPLETED with the bell left to ring when the consumed link was another user\'s', async () => {
+        mocks.requestFindMany.mockResolvedValue([{ id: 'req_lead', status: 'COMPLETED', userId: 'u2' }]);
+
+        await expect(settleDuplicateOnLink('https://host/pack.cbz', 'req_new')).resolves.toEqual({
+            action: 'settle', status: 'COMPLETED', reason: 'in-library'
+        });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_new' },
+            data: { status: 'COMPLETED', progress: 100, notified: false }
         });
     });
 

@@ -15,6 +15,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getServerSession } from 'next-auth/next';
 import { omnibusQueue } from '@/lib/queue';
 import { describeIssueFromFilename, normalizeFractionNumbers, isSameIssue } from '@/lib/utils/issue-parser';
+import { issueNumberOf } from '@/lib/request-dedupe';
 import { COMIC_EXTENSIONS } from '@/lib/utils/formats';
 import { sanitizeFilename } from '@/lib/utils/sanitize';
 import { UNMATCHED_DIR, CONFIG_DIR, isPathWithinRoots } from '@/lib/utils/paths';
@@ -741,29 +742,47 @@ export async function POST(request: Request) {
     } catch (err) {}
 
     try {
+        // #240 review: this close-out has to answer the same two questions as the monitor, or the
+        // request a review asked for is never closed. (1) A NEEDS_REVIEW row is precisely the case
+        // this route is the tool for — "the pack was consumed and the issue never arrived" — so the
+        // match that finally puts the issue on disk must close it; it used to be left out of the
+        // status list and stayed NEEDS_REVIEW for good. (2) The issue is identified with the monitor's
+        // own helper — the stored number, else the name parse — because parsing activeDownloadName
+        // here read "#37" out of a pack title like "X-Men #34-40" as 34 and never matched the issue
+        // the request was actually for.
         const pendingRequests = await prisma.request.findMany({
-            where: { volumeId: targetMetaId, status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING'] } }
+            where: { volumeId: targetMetaId, status: { in: ['MANUAL_DDL', 'PENDING', 'DOWNLOADING', 'NEEDS_REVIEW'] } }
         });
 
         if (pendingRequests.length > 0) {
             const seriesIssues = await prisma.issue.findMany({ where: { series: { metadataId: targetMetaId } } });
             const requestsToComplete = [];
+            const reviewedRequestsToComplete = [];
 
             for (const dbReq of pendingRequests) {
-                const searchStr = (dbReq.activeDownloadName || (dbReq as any).title || (dbReq as any).name || "");
-                // Added -? to capture negative requested issues
-                const numMatch = searchStr.match(/(?:#|issue\s*#?)\s*(-?\d+(?:\.\d+)?)/i);
-                const issueNum = numMatch ? parseFloat(numMatch[1]) : null;
-                if (issueNum === null) continue;
-                const matchingIssue = seriesIssues.find(i => parseFloat(i.number) === issueNum && i.filePath && i.filePath.length > 0);
+                const issueNumber = issueNumberOf(dbReq);
+                if (!issueNumber) continue;
+                const matchingIssue = seriesIssues.find(i => isSameIssue(i.number, issueNumber) && i.filePath && i.filePath.length > 0);
 
-                if (matchingIssue) requestsToComplete.push(dbReq.id);
+                if (matchingIssue) {
+                    // A NEEDS_REVIEW row was never announced as available: the match that delivered
+                    // the issue is the news, so it closes with `notified: false` and rings once.
+                    if (dbReq.status === 'NEEDS_REVIEW') reviewedRequestsToComplete.push(dbReq.id);
+                    else requestsToComplete.push(dbReq.id);
+                }
             }
 
             if (requestsToComplete.length > 0) {
                 await prisma.request.updateMany({
                     where: { id: { in: requestsToComplete } },
                     data: { status: 'COMPLETED', progress: 100 }
+                });
+            }
+
+            if (reviewedRequestsToComplete.length > 0) {
+                await prisma.request.updateMany({
+                    where: { id: { in: reviewedRequestsToComplete } },
+                    data: { status: 'COMPLETED', progress: 100, notified: false }
                 });
             }
         }

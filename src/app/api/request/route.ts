@@ -469,7 +469,7 @@ export async function POST(request: NextRequest) {
       const newReq = await prisma.request.create({
         data: {
           userId: userId, volumeId: resolvedCvId.toString(), metadataSource: metadataSource,
-          status: issueStatus, issueNumber: body.issueNumber ? String(body.issueNumber) : null,
+          status: issueStatus, issueNumber: type === 'issue' && body.issueNumber ? String(body.issueNumber) : null,
           activeDownloadName: searchName, imageUrl: image,
           downloadLink: skipIndexers && issueStatus === 'PENDING_APPROVAL' ? 'DIRECT_GETCOMICS' : null
         }

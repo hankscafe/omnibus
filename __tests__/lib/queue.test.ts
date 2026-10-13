@@ -414,7 +414,7 @@ describe('Cron: BullMQ Worker Router', () => {
     // request. The DDL path already dedups against the primary link (queue.ts duplicateDownload);
     // the external-client (Prowlarr → SAB/qBit) path must do the same on the tracking hash.
 
-    const runExternalClientSearch = async (siblings: { id: string; status: string }[], req: Record<string, unknown> = { id: 'req_2', volumeId: '0', failedLinks: '[]' }) => {
+    const runExternalClientSearch = async (siblings: { id: string; status: string; userId?: string }[], req: Record<string, unknown> = { id: 'req_2', volumeId: '0', failedLinks: '[]' }) => {
         initWorker();
 
         // freshReq: volumeId "0" skips the series/issue-year block — these tests target routing only.
@@ -479,15 +479,33 @@ describe('Cron: BullMQ Worker Router', () => {
         mocks.seriesFindFirst.mockResolvedValue({ id: 's1', metadataId: '101', metadataSource: 'COMICVINE' });
         mocks.issueFindMany.mockResolvedValue([{ number: '2' }]);
 
-        await runExternalClientSearch([{ id: 'req_1', status: 'COMPLETED' }], {
+        await runExternalClientSearch([{ id: 'req_1', status: 'COMPLETED', userId: 'u1' }], {
             id: 'req_2', volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '2',
-            activeDownloadName: "Batman '89: Echoes #2", failedLinks: '[]'
+            activeDownloadName: "Batman '89: Echoes #2", userId: 'u1', failedLinks: '[]'
         });
 
         expect(mocks.addDownload).not.toHaveBeenCalled();
         expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
             where: { id: 'req_2' },
             data: { status: 'COMPLETED', progress: 100, notified: true }
+        }));
+    });
+
+    // #240 review: the "the pack's import already told this user" claim only holds for the user who
+    // owns the finished request on the link. Another user's request closes silently unless it rings.
+    it('rings the bell for the closer when the finished sibling on the link belongs to another user (#240)', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ id: 's1', metadataId: '101', metadataSource: 'COMICVINE' });
+        mocks.issueFindMany.mockResolvedValue([{ number: '2' }]);
+
+        await runExternalClientSearch([{ id: 'req_1', status: 'COMPLETED', userId: 'someone_else' }], {
+            id: 'req_2', volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '2',
+            activeDownloadName: "Batman '89: Echoes #2", userId: 'u1', failedLinks: '[]'
+        });
+
+        expect(mocks.addDownload).not.toHaveBeenCalled();
+        expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'req_2' },
+            data: { status: 'COMPLETED', progress: 100, notified: false }
         }));
     });
 

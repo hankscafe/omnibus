@@ -36,12 +36,30 @@ export type DuplicateLinkVerdict =
  * The identity of the issue a request is for: the stored column first, and — for rows created
  * before it existed — the issue number parsed out of the download name (the parse the monitor has
  * always used). Pure so the monitor's dedupe stays testable without a database.
+ *
+ * The name pattern is dev's monitor pattern verbatim, negative sign included: a request for an
+ * annual-ish "-1" is still identified by its name when no number was stored.
  */
 export function issueNumberOf(req: { issueNumber?: string | null; activeDownloadName?: string | null }): string | null {
   const stored = (req.issueNumber || '').trim();
   if (stored) return stored;
-  const match = (req.activeDownloadName || '').match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
+  const match = (req.activeDownloadName || '').match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?[a-zA-Z]?)/i);
   return match ? match[1] : null;
+}
+
+/**
+ * Does the settle's `notified: true` hold for this request? It is claimed on the grounds that the
+ * pack's own import already told the requester the issue is available — which is only true when a
+ * FINISHED request on the link belongs to the SAME user. A request that met someone else's
+ * consumed link was never announced anything, so it closes with `notified: false` and the
+ * "available" bell fires for it.
+ */
+export function notifiedOnSettle(
+  siblings: { status: string; userId?: string | null }[],
+  requestUserId?: string | null
+): boolean {
+  if (!requestUserId) return false;
+  return siblings.some(s => FINISHED_REQUEST_STATUSES.includes(s.status) && s.userId === requestUserId);
 }
 
 /**
@@ -102,7 +120,7 @@ export async function settleDuplicateOnLink(link: string | null | undefined, req
 
   const siblings = await prisma.request.findMany({
     where: { downloadLink: link, id: { not: requestId }, status: { in: LINK_OCCUPYING_STATUSES } },
-    select: { id: true, status: true }
+    select: { id: true, status: true, userId: true }
   });
   if (siblings.length === 0) return { action: 'download' };
 
@@ -112,7 +130,7 @@ export async function settleDuplicateOnLink(link: string | null | undefined, req
 
   const req = await prisma.request.findUnique({
     where: { id: requestId },
-    select: { volumeId: true, metadataSource: true, issueNumber: true, activeDownloadName: true }
+    select: { volumeId: true, metadataSource: true, issueNumber: true, activeDownloadName: true, userId: true }
   });
   const issueNumber = req ? issueNumberOf(req) : null;
   const owned = issueNumber
@@ -125,9 +143,11 @@ export async function settleDuplicateOnLink(link: string | null | undefined, req
   await prisma.request.update({
     where: { id: requestId },
     data: verdict.status === 'COMPLETED'
-      // `notified: true` on purpose: the pack's own import already told this user the issue is
-      // available — a second "finished" bell line for the same issue is noise, not news.
-      ? { status: 'COMPLETED', progress: 100, notified: true }
+      // `notified` follows who was already told. The pack's own import announced the issue to the
+      // user whose request consumed the link — so only a request of THAT user can claim it was
+      // already notified, and stay quiet. A request meeting another user's finished link closes
+      // with `notified: false`: nobody ever announced this issue to them.
+      ? { status: 'COMPLETED', progress: 100, notified: notifiedOnSettle(siblings, req?.userId) }
       : { status: 'NEEDS_REVIEW' }
   });
   Logger.log(

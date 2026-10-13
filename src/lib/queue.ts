@@ -466,8 +466,11 @@ export function initWorker() {
                             // the importer's shared-link completion sweep (updateMany on downloadLink) closes
                             // it out when the single download imports, and the cron dead-lead release frees it
                             // if the lead permanently fails. #240: that only holds while the lead is still
-                            // downloading; a finished lead means the release is gone from the client, so the
-                            // helper settles this request instead of parking it on a dead link.
+                            // downloading. A finished lead means nothing will ever close this row: the
+                            // shared-link sweep has already run, and the cron's client loop would match
+                            // the parked row to the same completed (still-seeding) torrent and route the
+                            // same files a second time. Settling is the better behaviour, so the helper
+                            // does that instead of parking.
                             const duplicateExternal = await settleDuplicateOnLink(trackingHash, requestId);
                             if (duplicateExternal.action === 'park') {
                                 Logger.log(`[BullMQ] Release already sent to the download client by another request (${bestMatch.title}). Parking ${name} against it instead of re-downloading.`, 'info');

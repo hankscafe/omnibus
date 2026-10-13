@@ -778,6 +778,75 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         const coverWrite = vi.mocked(fs.promises.writeFile).mock.calls.find(c => String(c[0]).includes('cover.jpg'));
         expect(coverWrite).toBeTruthy();
     });
+
+    // #240 review: NEEDS_REVIEW tells the admin to look at the pack in /unmatched, and the Smart
+    // Matcher is the tool for that — but this route's close-out only looked at MANUAL_DDL, PENDING and
+    // DOWNLOADING, so the request a review was asked for stayed NEEDS_REVIEW for good. It also read
+    // the issue out of activeDownloadName, where a pack title ("Batman #31-40") parses as its first
+    // number — never the issue the request was created for.
+    describe('closing a request out on the issue the match just put on disk (#240 review)', () => {
+        const matchReq = () => createReq({
+            oldFolderPath: '/unmatched/Batman', metadataId: '4050-1234',
+            name: 'Batman', year: 2016, publisher: 'DC Comics',
+        });
+        // The close-out's own issue query; every other issue.findMany in the route (folder repoint,
+        // naming) keeps its empty default.
+        const onDiskIssues = (rows: { number: string; filePath?: string }[]) =>
+            mocks.findManyIssues.mockImplementation(async (args: { where?: { series?: { metadataId?: string } } }) =>
+                args?.where?.series?.metadataId ? rows : []
+            );
+        // The route's request query, honoured rather than ignored: a status the route does not ask
+        // for is never returned, so dropping NEEDS_REVIEW from that list fails these tests (which is
+        // exactly the defect a match used to leave behind).
+        const requestsHeld = (rows: { id: string; status: string; issueNumber: string; activeDownloadName: string }[]) =>
+            mocks.findManyRequests.mockImplementation(async (args: { where?: { status?: { in?: string[] } } }) =>
+                rows.filter(r => !args?.where?.status?.in || args.where.status.in.includes(r.status))
+            );
+
+        it('closes a NEEDS_REVIEW request whose pack title names a different number, and rings once', async () => {
+            requestsHeld([
+                { id: 'req_37', status: 'NEEDS_REVIEW', issueNumber: '37', activeDownloadName: 'Batman #31-40 (2016)' },
+            ]);
+            onDiskIssues([{ number: '37', filePath: '/comics/DC Comics/Batman (2016)/Batman #037.cbz' }]);
+
+            const res = await POST(matchReq());
+            expect(res.status).toBe(200);
+
+            // The stored number — not the 31 out of the pack title — matched the file, and the row
+            // was never announced as available, so it closes un-notified and the bell fires for it.
+            expect(mocks.updateManyRequests).toHaveBeenCalledWith({
+                where: { id: { in: ['req_37'] } },
+                data: { status: 'COMPLETED', progress: 100, notified: false },
+            });
+        });
+
+        it('still closes MANUAL_DDL/PENDING/DOWNLOADING rows the way it always did, notified untouched', async () => {
+            requestsHeld([
+                { id: 'req_pending', status: 'PENDING', issueNumber: '37', activeDownloadName: 'Batman #37' },
+            ]);
+            onDiskIssues([{ number: '37', filePath: '/comics/DC Comics/Batman (2016)/Batman #037.cbz' }]);
+
+            const res = await POST(matchReq());
+            expect(res.status).toBe(200);
+
+            expect(mocks.updateManyRequests).toHaveBeenCalledWith({
+                where: { id: { in: ['req_pending'] } },
+                data: { status: 'COMPLETED', progress: 100 },
+            });
+        });
+
+        it('leaves a NEEDS_REVIEW request open while its issue is not on disk', async () => {
+            requestsHeld([
+                { id: 'req_38', status: 'NEEDS_REVIEW', issueNumber: '38', activeDownloadName: 'Batman #31-40 (2016)' },
+            ]);
+            onDiskIssues([{ number: '37', filePath: '/comics/DC Comics/Batman (2016)/Batman #037.cbz' }]);
+
+            const res = await POST(matchReq());
+            expect(res.status).toBe(200);
+
+            expect(mocks.updateManyRequests).not.toHaveBeenCalled();
+        });
+    });
 });
 
 // 2026-07-25 worklist item 5: matching used to recompute detectManga({name, publisher, year}) with

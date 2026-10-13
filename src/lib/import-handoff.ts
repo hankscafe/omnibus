@@ -94,7 +94,37 @@ type ImportingRequest = {
   user?: { username: string | null; email: string | null } | null;
 };
 
-type HandoffTally = { imported: number; unmatched: number; reason: 'handoff' | 'no-handoff' };
+type HandoffTally = { imported: number; unmatched: number; reason: 'handoff' | 'no-handoff' | 'recheck' };
+
+/**
+ * The COMPLETED half of the verdict: the issue is in the library, so the request is done — one
+ * "available" alert, and `notified: false` so the web bell lines up with it.
+ */
+async function closeAsCompleted(req: ImportingRequest, tally: HandoffTally): Promise<void> {
+  const issueNumber = issueNumberOf(req);
+  const label = req.activeDownloadName || (issueNumber ? `Issue #${issueNumber}` : 'Download');
+
+  await prisma.request.update({
+    where: { id: req.id },
+    data: { status: 'COMPLETED', progress: 100, notified: false }
+  });
+  await SystemNotifier.sendAlert('comic_available', {
+    title: tally.imported > 0 ? `${label} - ${tally.imported} File${tally.imported > 1 ? 's' : ''}` : label,
+    imageUrl: req.imageUrl,
+    user: req.user?.username,
+    email: req.user?.email,
+    description: tally.reason === 'recheck'
+      ? `The pack has imported since the review — ${issueNumber ? `issue #${issueNumber} is` : 'your issue is'} now in your library and ready to read.`
+      : `The download has finished importing — ${issueNumber ? `issue #${issueNumber} is` : 'your issue is'} now in your library and ready to read.`,
+    date: new Date().toLocaleString()
+  }).catch(() => {});
+  Logger.log(
+    tally.reason === 'recheck'
+      ? `[Import Handoff] Reviewed request ${req.id} (${label}) is COMPLETED: the issue is in the library now, without a second import.`
+      : `[Import Handoff] Request ${req.id} (${label}) is COMPLETED: the sweep imported ${tally.imported} file(s)${tally.unmatched > 0 ? `, ${tally.unmatched} parked in unmatched` : ''} and the issue is in the library.`,
+    'info'
+  );
+}
 
 /**
  * Close one IMPORTING request on what the library says. Same question the dedupe asks before it
@@ -111,22 +141,7 @@ async function closeImportingRequest(req: ImportingRequest, tally: HandoffTally)
   const label = req.activeDownloadName || (issueNumber ? `Issue #${issueNumber}` : 'Download');
 
   if (owned) {
-    await prisma.request.update({
-      where: { id: req.id },
-      data: { status: 'COMPLETED', progress: 100, notified: false }
-    });
-    await SystemNotifier.sendAlert('comic_available', {
-      title: tally.imported > 0 ? `${label} - ${tally.imported} File${tally.imported > 1 ? 's' : ''}` : label,
-      imageUrl: req.imageUrl,
-      user: req.user?.username,
-      email: req.user?.email,
-      description: `The download has finished importing — ${issueNumber ? `issue #${issueNumber} is` : 'your issue is'} now in your library and ready to read.`,
-      date: new Date().toLocaleString()
-    }).catch(() => {});
-    Logger.log(
-      `[Import Handoff] Request ${req.id} (${label}) is COMPLETED: the sweep imported ${tally.imported} file(s)${tally.unmatched > 0 ? `, ${tally.unmatched} parked in unmatched` : ''} and the issue is in the library.`,
-      'info'
-    );
+    await closeAsCompleted(req, tally);
     return 'completed';
   }
 
@@ -156,6 +171,11 @@ async function closeImportingRequest(req: ImportingRequest, tally: HandoffTally)
  *   - no row at all → the request joined an in-flight batch, or predates the handoff; wait out the
  *     grace period, then judge it by the library rather than leave it IMPORTING forever.
  *   - every row settled → COMPLETED when the issue is in the library, NEEDS_REVIEW when it is not.
+ *
+ * It also re-asks the library for every request already parked at NEEDS_REVIEW, and closes it as
+ * COMPLETED the moment the issue is really there: that verdict was true when it was made, not
+ * forever — the window between "routed" and "imported" is minutes to hours, and a pack imported by
+ * another route than the Smart Matcher lands later too.
  */
 export async function reconcileImportHandoffs(
   now: Date = new Date()
@@ -175,38 +195,66 @@ export async function reconcileImportHandoffs(
   });
 
   const result = { completed: 0, review: 0, waiting: 0 };
-  if (importing.length === 0) return result;
+  if (importing.length > 0) {
+    for (const req of importing) {
+      // Request ids are stored as a JSON array, so the quotes make this an exact id match.
+      const rows = await prisma.importHandoff.findMany({
+        where: { requestIds: { contains: `"${req.id}"` } },
+        select: { outcome: true }
+      });
 
-  for (const req of importing) {
-    // Request ids are stored as a JSON array, so the quotes make this an exact id match.
-    const rows = await prisma.importHandoff.findMany({
-      where: { requestIds: { contains: `"${req.id}"` } },
-      select: { outcome: true }
-    });
+      if (rows.length === 0) {
+        if (now.getTime() - req.updatedAt.getTime() < IMPORT_RECONCILE_GRACE_MS) {
+          result.waiting++;
+          continue;
+        }
+        const outcome = await closeImportingRequest(req, { imported: 0, unmatched: 0, reason: 'no-handoff' });
+        if (outcome === 'completed') result.completed++; else result.review++;
+        continue;
+      }
 
-    if (rows.length === 0) {
-      if (now.getTime() - req.updatedAt.getTime() < IMPORT_RECONCILE_GRACE_MS) {
+      const pending = rows.filter(r => r.outcome === HANDOFF_PENDING).length;
+      if (pending > 0) {
         result.waiting++;
         continue;
       }
-      const outcome = await closeImportingRequest(req, { imported: 0, unmatched: 0, reason: 'no-handoff' });
+
+      const tally: HandoffTally = {
+        imported: rows.filter(r => r.outcome === HANDOFF_IMPORTED).length,
+        unmatched: rows.filter(r => r.outcome === HANDOFF_UNMATCHED).length,
+        reason: 'handoff'
+      };
+      const outcome = await closeImportingRequest(req, tally);
       if (outcome === 'completed') result.completed++; else result.review++;
-      continue;
     }
+  }
 
-    const pending = rows.filter(r => r.outcome === HANDOFF_PENDING).length;
-    if (pending > 0) {
-      result.waiting++;
-      continue;
+  const reviewed = await prisma.request.findMany({
+    where: { status: 'NEEDS_REVIEW' },
+    select: {
+      id: true,
+      volumeId: true,
+      metadataSource: true,
+      issueNumber: true,
+      activeDownloadName: true,
+      imageUrl: true,
+      updatedAt: true,
+      user: { select: { username: true, email: true } }
     }
+  });
 
-    const tally: HandoffTally = {
-      imported: rows.filter(r => r.outcome === HANDOFF_IMPORTED).length,
-      unmatched: rows.filter(r => r.outcome === HANDOFF_UNMATCHED).length,
-      reason: 'handoff'
-    };
-    const outcome = await closeImportingRequest(req, tally);
-    if (outcome === 'completed') result.completed++; else result.review++;
+  for (const req of reviewed) {
+    const issueNumber = issueNumberOf(req);
+    // A request that is not for one issue has no number to look for — it waits for a person.
+    if (!issueNumber) continue;
+    const owned = await issueIsInLibrary({
+      volumeId: req.volumeId,
+      metadataSource: req.metadataSource,
+      issueNumber
+    });
+    if (!owned) continue;
+    await closeAsCompleted(req, { imported: 0, unmatched: 0, reason: 'recheck' });
+    result.completed++;
   }
 
   return result;

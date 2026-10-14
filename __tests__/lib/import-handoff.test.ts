@@ -379,6 +379,46 @@ describe('reconcileImportHandoffs', () => {
         expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW' } });
     });
 
+    // hankscafe's round-2 probe, verbatim: a joiner and its lead, both past the stale window, on a
+    // batch still PENDING. Waiting on that batch has to carry the same bound as waiting on rows of
+    // one's own, or nothing ever changes those rows and the joiner stays IMPORTING forever.
+    it('judges a joiner past the stale window too, when the batch it joined never finishes stamping', async () => {
+        const old = new Date(Date.now() - IMPORTING_STALE_MS - 60_000);
+        requestsAt([
+            importingRequest({ id: 'req_joiner', downloadLink: 'https://host/pack', updatedAt: old }),
+            importingRequest({ id: 'req_lead', downloadLink: 'https://host/pack', updatedAt: old }),
+        ]);
+        handoffRows([{ outcome: 'PENDING', batchId: 'b1', requestIds: ['req_lead'], createdAt: old }]);
+        mocks.issueIsInLibrary.mockResolvedValue(false);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 2, waiting: 0 });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW' } });
+        // The joined batch's own pending count gives the joiner the same wording as the lead.
+        expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
+            description: expect.stringContaining('never reported back')
+        }));
+    });
+
+    it('closes a stale joiner as COMPLETED when the joined batch did import, and the library has it', async () => {
+        const old = new Date(Date.now() - IMPORTING_STALE_MS - 60_000);
+        requestsAt([
+            importingRequest({ id: 'req_joiner', downloadLink: 'https://host/pack', updatedAt: old }),
+            importingRequest({ id: 'req_lead', downloadLink: 'https://host/pack', updatedAt: old }),
+        ]);
+        handoffRows([
+            { outcome: 'IMPORTED', batchId: 'b1', requestIds: ['req_lead'], createdAt: old },
+            { outcome: 'PENDING', batchId: 'b1', requestIds: ['req_lead'], createdAt: old },
+        ]);
+        mocks.issueIsInLibrary.mockResolvedValue(true);
+
+        // Both are judged: the lead on its own rows, the joiner on the batch it joined — not parked
+        // for a person just because the wait ran out.
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 2, review: 0, waiting: 0 });
+        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+            description: expect.stringContaining('has finished importing')
+        }));
+    });
+
     // The three smaller points of the same review: the re-check window, and pruning settled rows.
     it('stops re-checking a NEEDS_REVIEW row once it is older than the re-check window', async () => {
         requestsAt([

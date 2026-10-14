@@ -33,8 +33,10 @@ export const IMPORT_RECONCILE_GRACE_MS = 30 * 60 * 1000;
 // this, whatever it was waiting on never came back (engine down, sweep never ran, handoff lost) —
 // the health check says so, and the reconciler stops waiting on rows nothing will stamp: it judges
 // the request by the library and the batch's own tally, exactly like the no-row path (review round,
-// hankscafe). A person still hears about it from the health check.
-export const IMPORTING_STALE_MS = 3 * 60 * 60 * 1000;
+// hankscafe). Six hours, not three: #240's own logs have the sweep running up to 3 h behind, and a
+// sweep at that end of the normal range must not be called stalled before it lands — the bound is
+// the headroom over the worst case the incident actually showed.
+export const IMPORTING_STALE_MS = 6 * 60 * 60 * 1000;
 
 // The NEEDS_REVIEW re-check is a rescue for a verdict that was true when it was made, minutes to
 // hours ago. A row that is still NEEDS_REVIEW days later is a person's to-do item, not something a
@@ -259,7 +261,9 @@ async function joinedBatchRows(req: { id: string; downloadLink?: string | null }
  *   - no row at all → the request joined a batch that was already routed: wait on THAT batch (its
  *     rows are the sibling requests' rows), and only fall back to the 30-minute grace when no
  *     sibling batch can be found. Judging a joiner on the clock alone announces a failed import
- *     while the sweep is still running — the incident's sweeps ran 26 minutes to 3 hours behind.
+ *     while the sweep is still running — the incident's sweeps ran 26 minutes to 3 hours behind. The
+ *     wait carries the same IMPORTING_STALE_MS bound: a batch that never finishes stamping is judged
+ *     there too, pending rows and all, rather than holding the joiner at IMPORTING forever.
  *   - every row settled → COMPLETED when the issue is in the library (or, for a request that names
  *     no issue, when the batch imported something), NEEDS_REVIEW when it is not.
  *
@@ -299,7 +303,10 @@ export async function reconcileImportHandoffs(
     if (rows.length === 0) {
       const joined = await joinedBatchRows(req);
       if (joined.length > 0) {
-        if (joined.some(r => r.outcome === HANDOFF_PENDING)) {
+        // The same bound as a request that has rows of its own: a batch that stopped reporting must
+        // not hold a joiner at IMPORTING forever — nothing will ever stamp those rows, and the lead
+        // it waits on is judged at the same moment (hankscafe's probe).
+        if (joined.some(r => r.outcome === HANDOFF_PENDING) && waited < IMPORTING_STALE_MS) {
           result.waiting++;
           continue;
         }

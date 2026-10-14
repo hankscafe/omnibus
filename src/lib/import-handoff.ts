@@ -31,8 +31,21 @@ export const IMPORT_RECONCILE_GRACE_MS = 30 * 60 * 1000;
 
 // A request is IMPORTING from the moment its pack is routed until the reconciler closes it. Past
 // this, whatever it was waiting on never came back (engine down, sweep never ran, handoff lost) —
-// the health check says so, and a person looks; the reconciler never invents an outcome.
+// the health check says so, and the reconciler stops waiting on rows nothing will stamp: it judges
+// the request by the library and the batch's own tally, exactly like the no-row path (review round,
+// hankscafe). A person still hears about it from the health check.
 export const IMPORTING_STALE_MS = 3 * 60 * 60 * 1000;
+
+// The NEEDS_REVIEW re-check is a rescue for a verdict that was true when it was made, minutes to
+// hours ago. A row that is still NEEDS_REVIEW days later is a person's to-do item, not something a
+// 60 s loop should keep asking the library about, so the re-check only looks at recently touched
+// rows.
+export const IMPORT_REVIEW_RECHECK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Settled handoff rows are only ever consulted while their request is IMPORTING, so they can be
+// pruned: one row per routed file otherwise accumulates forever, and every reconciler pass scans
+// that table for the ids of each IMPORTING request.
+export const IMPORT_HANDOFF_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** One id per routed batch. It doubles as the watched-folder job id, so logs line up. */
 export function newImportBatchId(): string {
@@ -90,11 +103,37 @@ type ImportingRequest = {
   issueNumber: string | null;
   activeDownloadName: string | null;
   imageUrl: string | null;
+  downloadLink?: string | null;
   updatedAt: Date;
   user?: { username: string | null; email: string | null } | null;
 };
 
-type HandoffTally = { imported: number; unmatched: number; reason: 'handoff' | 'no-handoff' | 'recheck' };
+type HandoffRow = { outcome: string; batchId?: string; createdAt?: Date };
+
+type HandoffTally = {
+  imported: number;
+  unmatched: number;
+  /** Rows of the batch the sweep never stamped — it may still be running (#240 review). */
+  pending?: number;
+  reason: 'handoff' | 'no-handoff' | 'recheck';
+};
+
+/** What a batch's rows say happened, in the shape the verdict wants. */
+function tallyOf(rows: HandoffRow[]): HandoffTally {
+  return {
+    imported: rows.filter(r => r.outcome === HANDOFF_IMPORTED).length,
+    unmatched: rows.filter(r => r.outcome === HANDOFF_UNMATCHED).length,
+    pending: rows.filter(r => r.outcome === HANDOFF_PENDING).length,
+    reason: 'handoff'
+  };
+}
+
+/** "issue #37" when the request names one, "the pack" when it does not. */
+function whatArrived(issueNumber: string | null, tally: HandoffTally): string {
+  if (issueNumber) return `issue #${issueNumber}`;
+  const files = tally.imported;
+  return files === 1 ? 'one file from this download is' : `${files} files from this download are`;
+}
 
 /**
  * The COMPLETED half of the verdict: the issue is in the library, so the request is done — one
@@ -103,25 +142,34 @@ type HandoffTally = { imported: number; unmatched: number; reason: 'handoff' | '
 async function closeAsCompleted(req: ImportingRequest, tally: HandoffTally): Promise<void> {
   const issueNumber = issueNumberOf(req);
   const label = req.activeDownloadName || (issueNumber ? `Issue #${issueNumber}` : 'Download');
+  // A batch serves every request on the link, so the pack's title is the same string for all of
+  // them and its file count is the batch's, not this request's. The title leads with the issue this
+  // request is for, and falls back to the pack's own name when the request names no issue (#240
+  // review, hankscafe).
+  const title = issueNumber
+    ? `Issue #${issueNumber}${req.activeDownloadName ? ` — ${req.activeDownloadName}` : ''}`
+    : tally.imported > 0
+      ? `${label} - ${tally.imported} File${tally.imported > 1 ? 's' : ''}`
+      : label;
 
   await prisma.request.update({
     where: { id: req.id },
     data: { status: 'COMPLETED', progress: 100, notified: false }
   });
   await SystemNotifier.sendAlert('comic_available', {
-    title: tally.imported > 0 ? `${label} - ${tally.imported} File${tally.imported > 1 ? 's' : ''}` : label,
+    title,
     imageUrl: req.imageUrl,
     user: req.user?.username,
     email: req.user?.email,
     description: tally.reason === 'recheck'
       ? `The pack has imported since the review — ${issueNumber ? `issue #${issueNumber} is` : 'your issue is'} now in your library and ready to read.`
-      : `The download has finished importing — ${issueNumber ? `issue #${issueNumber} is` : 'your issue is'} now in your library and ready to read.`,
+      : `The download has finished importing — ${whatArrived(issueNumber, tally)} now in your library and ready to read.`,
     date: new Date().toLocaleString()
   }).catch(() => {});
   Logger.log(
     tally.reason === 'recheck'
       ? `[Import Handoff] Reviewed request ${req.id} (${label}) is COMPLETED: the issue is in the library now, without a second import.`
-      : `[Import Handoff] Request ${req.id} (${label}) is COMPLETED: the sweep imported ${tally.imported} file(s)${tally.unmatched > 0 ? `, ${tally.unmatched} parked in unmatched` : ''} and the issue is in the library.`,
+      : `[Import Handoff] Request ${req.id} (${label}) is COMPLETED: the sweep imported ${tally.imported} file(s)${tally.unmatched > 0 ? `, ${tally.unmatched} parked in unmatched` : ''}${issueNumber ? ' and the issue is in the library' : ` and the batch's own rows say it arrived`}.`,
     'info'
   );
 }
@@ -129,14 +177,22 @@ async function closeAsCompleted(req: ImportingRequest, tally: HandoffTally): Pro
 /**
  * Close one IMPORTING request on what the library says. Same question the dedupe asks before it
  * settles a consumed link (`issueIsInLibrary`), asked once the import has had its chance to land.
+ *
+ * A request that names no issue is decided by the batch's tally instead: `issueIsInLibrary` is
+ * false for it by definition (nothing to look up), and those requests are exactly the ones most
+ * likely to come down as a pack and go through the batch path — a manual pack link, a MAL/AniList
+ * title import, the admin torrent auto-import (review round, hankscafe). Files that reached the
+ * library are an arrival; none is not.
  */
 async function closeImportingRequest(req: ImportingRequest, tally: HandoffTally): Promise<'completed' | 'review'> {
   const issueNumber = issueNumberOf(req);
-  const owned = await issueIsInLibrary({
-    volumeId: req.volumeId,
-    metadataSource: req.metadataSource,
-    issueNumber
-  });
+  const owned = issueNumber
+    ? await issueIsInLibrary({
+        volumeId: req.volumeId,
+        metadataSource: req.metadataSource,
+        issueNumber
+      })
+    : tally.imported > 0;
 
   const label = req.activeDownloadName || (issueNumber ? `Issue #${issueNumber}` : 'Download');
 
@@ -145,6 +201,7 @@ async function closeImportingRequest(req: ImportingRequest, tally: HandoffTally)
     return 'completed';
   }
 
+  const missing = issueNumber ? `issue #${issueNumber}` : 'the pack';
   await prisma.request.update({ where: { id: req.id }, data: { status: 'NEEDS_REVIEW' } });
   await SystemNotifier.sendAlert('import_needs_review', {
     title: label,
@@ -152,25 +209,59 @@ async function closeImportingRequest(req: ImportingRequest, tally: HandoffTally)
     user: req.user?.username,
     email: req.user?.email,
     description: tally.reason === 'handoff'
-      ? `The download finished, but ${issueNumber ? `issue #${issueNumber}` : 'the issue'} did not reach your library` + (tally.unmatched > 0 ? ` — ${tally.unmatched} file${tally.unmatched > 1 ? 's' : ''} of the batch went to the unmatched folder for review.` : '.') + ' Nothing was imported; check the request on the Requests page.'
-      : `The import of this download never reported back, and ${issueNumber ? `issue #${issueNumber}` : 'the issue'} is not in your library. Nothing was imported; check the request on the Requests page.`,
+      ? (tally.pending
+          // The batch never finished reporting: say so rather than claim it was handled.
+          ? `The download stalled: ${tally.pending} file${tally.pending > 1 ? 's' : ''} of the batch never reported back${tally.unmatched > 0 ? `, and ${tally.unmatched} went to the unmatched folder` : ''}, and ${missing} did not reach your library. Nothing was imported; check the request on the Requests page.`
+          : `The download finished, but ${missing} did not reach your library` + (tally.unmatched > 0 ? ` — ${tally.unmatched} file${tally.unmatched > 1 ? 's' : ''} of the batch went to the unmatched folder for review.` : '.') + ' Nothing was imported; check the request on the Requests page.')
+      : `The import of this download never reported back, and ${missing} is not in your library. Nothing was imported; check the request on the Requests page.`,
     date: new Date().toLocaleString()
   }).catch(() => {});
   Logger.log(
-    `[Import Handoff] Request ${req.id} (${label}) is NEEDS_REVIEW: ${tally.reason === 'handoff' ? `${tally.imported} imported / ${tally.unmatched} unmatched` : 'no handoff row ever reported an outcome'} and the issue is not in the library.`,
+    `[Import Handoff] Request ${req.id} (${label}) is NEEDS_REVIEW: ${tally.reason === 'handoff' ? `${tally.imported} imported / ${tally.unmatched} unmatched${tally.pending ? ` / ${tally.pending} still pending` : ''}` : 'no handoff row ever reported an outcome'} and ${issueNumber ? 'the issue is' : 'the batch reported nothing'} not in the library.`,
     'warn'
   );
   return 'review';
 }
 
 /**
+ * The rows of the batch a row-less request joined. A request that joined the wait AFTER its batch
+ * was routed has no row of its own — the importer writes one row per file and lists every request
+ * on the link in it — so the batch to wait on is the one belonging to the other requests on its
+ * download link. Only the newest batch there is consulted: an older settled batch under the same
+ * link must not answer for this one.
+ */
+async function joinedBatchRows(req: { id: string; downloadLink?: string | null }): Promise<HandoffRow[]> {
+  if (!req.downloadLink || req.downloadLink === 'PENDING_MATCH') return [];
+
+  const siblings = await prisma.request.findMany({
+    where: { downloadLink: req.downloadLink, id: { not: req.id } },
+    select: { id: true }
+  });
+  if (siblings.length === 0) return [];
+
+  const rows = await prisma.importHandoff.findMany({
+    where: { OR: siblings.map(s => ({ requestIds: { contains: `"${s.id}"` } })) },
+    select: { outcome: true, batchId: true, createdAt: true }
+  });
+  if (rows.length === 0) return [];
+
+  const newest = rows.reduce((a, r) => ((r.createdAt ?? new Date(0)) > (a.createdAt ?? new Date(0)) ? r : a), rows[0]);
+  return rows.filter(r => r.batchId === newest.batchId);
+}
+
+/**
  * The reconciler, called from the existing cron. Closes every request held at IMPORTING on what the
  * handoff reported:
- *   - any row still PENDING → the sweep is not done with this batch; wait (this is the "still
- *     pending" state — a batch whose sweep never runs stays here for the health check to flag).
- *   - no row at all → the request joined an in-flight batch, or predates the handoff; wait out the
- *     grace period, then judge it by the library rather than leave it IMPORTING forever.
- *   - every row settled → COMPLETED when the issue is in the library, NEEDS_REVIEW when it is not.
+ *   - any row still PENDING → the sweep is not done with this batch; wait — but only for
+ *     IMPORTING_STALE_MS: past that the batch is judged like any other, so a sweep that never ran
+ *     (or an old engine that never stamps) cannot hold a request at IMPORTING forever. The health
+ *     check flags the wait either way.
+ *   - no row at all → the request joined a batch that was already routed: wait on THAT batch (its
+ *     rows are the sibling requests' rows), and only fall back to the 30-minute grace when no
+ *     sibling batch can be found. Judging a joiner on the clock alone announces a failed import
+ *     while the sweep is still running — the incident's sweeps ran 26 minutes to 3 hours behind.
+ *   - every row settled → COMPLETED when the issue is in the library (or, for a request that names
+ *     no issue, when the batch imported something), NEEDS_REVIEW when it is not.
  *
  * It also re-asks the library for every request already parked at NEEDS_REVIEW, and closes it as
  * COMPLETED the moment the issue is really there: that verdict was true when it was made, not
@@ -189,48 +280,55 @@ export async function reconcileImportHandoffs(
       issueNumber: true,
       activeDownloadName: true,
       imageUrl: true,
+      downloadLink: true,
       updatedAt: true,
       user: { select: { username: true, email: true } }
     }
   });
 
   const result = { completed: 0, review: 0, waiting: 0 };
-  if (importing.length > 0) {
-    for (const req of importing) {
-      // Request ids are stored as a JSON array, so the quotes make this an exact id match.
-      const rows = await prisma.importHandoff.findMany({
-        where: { requestIds: { contains: `"${req.id}"` } },
-        select: { outcome: true }
-      });
+  for (const req of importing) {
+    const waited = now.getTime() - req.updatedAt.getTime();
 
-      if (rows.length === 0) {
-        if (now.getTime() - req.updatedAt.getTime() < IMPORT_RECONCILE_GRACE_MS) {
+    // Request ids are stored as a JSON array, so the quotes make this an exact id match.
+    const rows = await prisma.importHandoff.findMany({
+      where: { requestIds: { contains: `"${req.id}"` } },
+      select: { outcome: true }
+    });
+
+    if (rows.length === 0) {
+      const joined = await joinedBatchRows(req);
+      if (joined.length > 0) {
+        if (joined.some(r => r.outcome === HANDOFF_PENDING)) {
           result.waiting++;
           continue;
         }
-        const outcome = await closeImportingRequest(req, { imported: 0, unmatched: 0, reason: 'no-handoff' });
+        const outcome = await closeImportingRequest(req, tallyOf(joined));
         if (outcome === 'completed') result.completed++; else result.review++;
         continue;
       }
-
-      const pending = rows.filter(r => r.outcome === HANDOFF_PENDING).length;
-      if (pending > 0) {
+      if (waited < IMPORT_RECONCILE_GRACE_MS) {
         result.waiting++;
         continue;
       }
-
-      const tally: HandoffTally = {
-        imported: rows.filter(r => r.outcome === HANDOFF_IMPORTED).length,
-        unmatched: rows.filter(r => r.outcome === HANDOFF_UNMATCHED).length,
-        reason: 'handoff'
-      };
-      const outcome = await closeImportingRequest(req, tally);
+      const outcome = await closeImportingRequest(req, { imported: 0, unmatched: 0, reason: 'no-handoff' });
       if (outcome === 'completed') result.completed++; else result.review++;
+      continue;
     }
+
+    const pending = rows.filter(r => r.outcome === HANDOFF_PENDING).length;
+    if (pending > 0 && waited < IMPORTING_STALE_MS) {
+      result.waiting++;
+      continue;
+    }
+
+    const outcome = await closeImportingRequest(req, tallyOf(rows));
+    if (outcome === 'completed') result.completed++; else result.review++;
   }
 
   const reviewed = await prisma.request.findMany({
-    where: { status: 'NEEDS_REVIEW' },
+    // Recently touched rows only: see IMPORT_REVIEW_RECHECK_WINDOW_MS.
+    where: { status: 'NEEDS_REVIEW', updatedAt: { gte: new Date(now.getTime() - IMPORT_REVIEW_RECHECK_WINDOW_MS) } },
     select: {
       id: true,
       volumeId: true,
@@ -256,6 +354,20 @@ export async function reconcileImportHandoffs(
     await closeAsCompleted(req, { imported: 0, unmatched: 0, reason: 'recheck' });
     result.completed++;
   }
+
+  // Settled rows are never consulted again once their request has left IMPORTING: drop the ones
+  // that have outlived the retention window so the table (and the id scan above) stays flat.
+  await prisma.importHandoff
+    .deleteMany({
+      where: {
+        outcome: { not: HANDOFF_PENDING },
+        createdAt: { lt: new Date(now.getTime() - IMPORT_HANDOFF_RETENTION_MS) }
+      }
+    })
+    .then(deleted => {
+      if (deleted?.count) Logger.log(`[Import Handoff] Pruned ${deleted.count} settled handoff row(s) older than 30 days.`, 'debug');
+    })
+    .catch(() => {});
 
   return result;
 }

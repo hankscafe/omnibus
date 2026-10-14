@@ -31,6 +31,7 @@ export const SYSTEM_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
   { id: "request_approved", label: "Request Approved", desc: "Includes admin username, cover image, and synopsis." },
   { id: "comic_available", label: "Comic Available", desc: "Includes requester username, cover image, and synopsis." },
+  { id: "import_needs_review", label: "Import Needs Review", desc: "Alerts when a download finished but its issue did not reach the library." },
   { id: "download_failed", label: "Comic Download Failed", desc: "Alerts when Prowlarr or the download client fails." },
   { id: "pending_account", label: "Pending Account", desc: "Includes new user's username, email, and registration date." },
   { id: "account_approved", label: "Account Approved", desc: "Alerts when an admin approves a new user account." },

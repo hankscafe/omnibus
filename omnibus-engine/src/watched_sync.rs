@@ -274,11 +274,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
         
         if let Some(info) = file_data.meta {
             if info.series.is_none() {
-                if move_to_unmatched(&path, &unmatched_dir).is_ok() {
+                if park_to_unmatched(&db, &watched_dir, &handoff_path, &path, &unmatched_dir).await {
                     unmatched_count += 1;
-                    // #240 PR B: the file is in /unmatched — not a library issue, but handled, so the
-                    // request waiting on it is closed instead of left IMPORTING forever.
-                    record_handoff(&db, &watched_dir, &handoff_path, HANDOFF_UNMATCHED, None, None).await;
                 }
                 continue;
             }
@@ -341,11 +338,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
 
             if meta_source == "LOCAL" || meta_id.is_empty() {
                 log::info!("[Watched Sync] '{}' has no ComicVine/Metron ID; routing to unmatched for review.", series_name);
-                if move_to_unmatched(&path, &unmatched_dir).is_ok() {
+                if park_to_unmatched(&db, &watched_dir, &handoff_path, &path, &unmatched_dir).await {
                     unmatched_count += 1;
-                    // #240 PR B: the file is in /unmatched — not a library issue, but handled, so the
-                    // request waiting on it is closed instead of left IMPORTING forever.
-                    record_handoff(&db, &watched_dir, &handoff_path, HANDOFF_UNMATCHED, None, None).await;
                 }
                 continue;
             }
@@ -424,11 +418,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 let folder_values = comicinfo_naming(&info, year, info.imprint.clone(), &issue_num, None);
                 let Some(segments) = naming::folder_segments(&naming_settings.folder, &folder_values) else {
                     log::warn!("[Watched Sync] The folder pattern \"{}\" gives no folder inside the library for '{}'; routing to unmatched for review.", naming_settings.folder, series_name);
-                    if move_to_unmatched(&path, &unmatched_dir).is_ok() {
+                    if park_to_unmatched(&db, &watched_dir, &handoff_path, &path, &unmatched_dir).await {
                         unmatched_count += 1;
-                        // #240 PR B: the file is in /unmatched — not a library issue, but handled, so the
-                        // request waiting on it is closed instead of left IMPORTING forever.
-                        record_handoff(&db, &watched_dir, &handoff_path, HANDOFF_UNMATCHED, None, None).await;
                     }
                     continue;
                 };
@@ -468,7 +459,7 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
             let file_values = comicinfo_naming(&info, year, Some(effective_imprint.clone()), &issue_num, issue_release);
             let Some(new_filename) = naming::file_name(pattern_to_use, &file_values, naming_settings.padding) else {
                 log::warn!("[Watched Sync] The file pattern \"{}\" leaves no name for '{}'; routing to unmatched for review.", pattern_to_use, series_name);
-                if move_to_unmatched(&path, &unmatched_dir).is_ok() { unmatched_count += 1; }
+                if park_to_unmatched(&db, &watched_dir, &handoff_path, &path, &unmatched_dir).await { unmatched_count += 1; }
                 continue;
             };
 
@@ -672,11 +663,8 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
                 log::warn!("Skipping file {:?}. It might be locked by another program or cross-drive move failed.", path.file_name());
             }
         } else {
-            if move_to_unmatched(&path, &unmatched_dir).is_ok() {
+            if park_to_unmatched(&db, &watched_dir, &handoff_path, &path, &unmatched_dir).await {
                 unmatched_count += 1;
-                // #240 PR B: the file is in /unmatched — not a library issue, but handled, so the
-                // request waiting on it is closed instead of left IMPORTING forever.
-                record_handoff(&db, &watched_dir, &handoff_path, HANDOFF_UNMATCHED, None, None).await;
             }
         }
     }
@@ -837,6 +825,23 @@ fn unique_unmatched_dest(unmatched_dir: &Path, file_name: &std::ffi::OsStr) -> O
     (1..=MAX_UNMATCHED_COPIES)
         .map(|n| unmatched_dir.join(copy_name(file_name, n)))
         .find(|candidate| !taken(candidate))
+}
+
+/// #240 PR B: every exit that parks a file in /unmatched stamps its handoff row before leaving the
+/// file behind — the sweep did handle it, so a request waiting on that file is closed on this
+/// outcome instead of waiting on a PENDING row nothing will ever touch. Returns whether the file
+/// actually moved (the caller counts it as unmatched when it did).
+///
+/// One helper because there are five such exits, and one of them (the file pattern leaving no name)
+/// used to move the file without stamping, which left its whole batch PENDING forever and the
+/// request waiting on it IMPORTING until a person looked (#240 review, hankscafe).
+async fn park_to_unmatched(db: &Db, watched_dir: &str, handoff_path: &Path, path: &Path, unmatched_dir: &str) -> bool {
+    if move_to_unmatched(path, unmatched_dir).is_ok() {
+        record_handoff(db, watched_dir, handoff_path, HANDOFF_UNMATCHED, None, None).await;
+        true
+    } else {
+        false
+    }
 }
 
 fn move_to_unmatched(src: &Path, unmatched_dir: &str) -> Result<()> {
@@ -1346,13 +1351,9 @@ mod handoff_tests {
     use super::*;
     use std::io::Write as _;
 
-    /// #240 PR B: the sweep's whole job in the handoff is to stamp a file's outcome under the key
-    /// the importer wrote (its name relative to the watched folder), on Prisma's real SQLite column
-    /// types — the two processes share one database file.
-    #[tokio::test]
-    async fn stamps_the_newest_pending_handoff_row_for_the_relative_path() {
-        let base = std::env::temp_dir().join(format!("omnibus_handoff_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&base).expect("create temp dir");
+    /// A file-backed sqlite of its own holding the `ImportHandoff` table exactly as Prisma creates
+    /// it on SQLite: TEXT ids, DATETIME (epoch-ms) timestamps — the two processes share one file.
+    async fn handoff_db(base: &Path) -> Db {
         let db_file = base.join("handoff.db");
         std::fs::File::create(&db_file).expect("pre-create sqlite file");
         let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
@@ -1377,6 +1378,18 @@ mod handoff_tests {
         .execute(&db.pool)
         .await
         .expect("create handoff table");
+
+        db
+    }
+
+    /// #240 PR B: the sweep's whole job in the handoff is to stamp a file's outcome under the key
+    /// the importer wrote (its name relative to the watched folder), on Prisma's real SQLite column
+    /// types — the two processes share one database file.
+    #[tokio::test]
+    async fn stamps_the_newest_pending_handoff_row_for_the_relative_path() {
+        let base = std::env::temp_dir().join(format!("omnibus_handoff_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let db = handoff_db(&base).await;
 
         let watched = base.join("watched");
         std::fs::create_dir_all(&watched).unwrap();
@@ -1427,6 +1440,48 @@ mod handoff_tests {
             .await
             .expect("read settled row");
         assert_eq!(outcome, "IMPORTED");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// #240 review (hankscafe): the fifth exit — the file pattern leaving no name — used to move the
+    /// file to /unmatched without stamping its row, which left the whole batch PENDING forever and
+    /// the request waiting on it IMPORTING until a person looked. Every park now goes through
+    /// `park_to_unmatched`, so this pins the shared behaviour: the file lands in /unmatched AND its
+    /// row is settled.
+    #[tokio::test]
+    async fn parking_a_file_settles_its_pending_handoff_row() {
+        let base = std::env::temp_dir().join(format!("omnibus_handoff_park_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let db = handoff_db(&base).await;
+
+        let watched = base.join("watched");
+        let unmatched = base.join("unmatched");
+        std::fs::create_dir_all(&watched).unwrap();
+        // The sweep creates this up front (`process_watched_folder`); the park needs it to exist.
+        std::fs::create_dir_all(&unmatched).unwrap();
+        let watched_str = watched.to_string_lossy().to_string();
+        let file = watched.join("Pack #1.cbz");
+        std::fs::File::create(&file).and_then(|mut f| f.write_all(b"x")).expect("write fixture file");
+
+        sqlx::query(
+            r#"INSERT INTO "ImportHandoff" (id, "batchId", "requestIds", "relPath", outcome, "createdAt", "updatedAt")
+               VALUES ('row1', 'b1', '["req_1"]', 'Pack #1.cbz', 'PENDING', 1000, 1000)"#,
+        )
+        .execute(&db.pool)
+        .await
+        .expect("seed handoff row");
+
+        let moved = park_to_unmatched(&db, &watched_str, &file, &file, &unmatched.to_string_lossy()).await;
+
+        assert!(moved, "the file left the watched folder");
+        assert!(!file.exists());
+        assert!(unmatched.join("Pack #1.cbz").exists(), "and it is parked in /unmatched");
+        let (outcome,): (String,) = sqlx::query_as(r#"SELECT outcome FROM "ImportHandoff" WHERE id = 'row1'"#)
+            .fetch_one(&db.pool)
+            .await
+            .expect("read the row");
+        assert_eq!(outcome, "UNMATCHED", "the batch settles instead of waiting on a PENDING row");
 
         let _ = std::fs::remove_dir_all(&base);
     }

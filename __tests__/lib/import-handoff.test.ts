@@ -9,6 +9,9 @@ import {
     watchedRelativePath,
     newImportBatchId,
     IMPORT_RECONCILE_GRACE_MS,
+    IMPORTING_STALE_MS,
+    IMPORT_REVIEW_RECHECK_WINDOW_MS,
+    IMPORT_HANDOFF_RETENTION_MS,
 } from '@/lib/import-handoff';
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +19,9 @@ const mocks = vi.hoisted(() => ({
     requestUpdate: vi.fn(),
     handoffFindMany: vi.fn(),
     handoffCreate: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+    handoffDeleteMany: vi.fn(async (_args: {
+        where: { outcome: { not: string }; createdAt: { lt: Date } };
+    }) => ({ count: 0 })),
     transaction: vi.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
     sendAlert: vi.fn().mockResolvedValue(undefined),
     issueIsInLibrary: vi.fn(),
@@ -24,7 +30,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         request: { findMany: mocks.requestFindMany, update: mocks.requestUpdate },
-        importHandoff: { findMany: mocks.handoffFindMany, create: mocks.handoffCreate },
+        importHandoff: {
+            findMany: mocks.handoffFindMany,
+            create: mocks.handoffCreate,
+            deleteMany: mocks.handoffDeleteMany,
+        },
         $transaction: mocks.transaction,
     }
 }));
@@ -58,12 +68,36 @@ const importingRequest = (over: Record<string, unknown> = {}) => ({
 const reviewedRequest = (over: Record<string, unknown> = {}) =>
     importingRequest({ status: 'NEEDS_REVIEW', ...over });
 
-// The reconciler asks the request table twice (IMPORTING, then NEEDS_REVIEW). The mock honours the
-// query, so a row can never be answered by the population it is not in.
+// The reconciler asks the request table twice (IMPORTING, then NEEDS_REVIEW), and once more per
+// row-less request for the siblings on its link. The mock honours the query, so a row can never be
+// answered by the population it is not in — and a re-check window that stops asking is visible.
 const requestsAt = (rows: Record<string, unknown>[]) =>
-    mocks.requestFindMany.mockImplementation(async (args: { where?: { status?: string } }) =>
-        rows.filter(r => !args?.where?.status || r.status === args.where.status)
-    );
+    mocks.requestFindMany.mockImplementation(async (args: {
+        where?: { status?: string; updatedAt?: { gte?: Date }; downloadLink?: string; id?: { not?: string } };
+    }) => {
+        const where = args?.where ?? {};
+        return rows.filter(r => {
+            if (where.status && r.status !== where.status) return false;
+            if (where.downloadLink && r.downloadLink !== where.downloadLink) return false;
+            if (where.id?.not && r.id === where.id.not) return false;
+            if (where.updatedAt?.gte && new Date(r.updatedAt as Date).getTime() < where.updatedAt.gte.getTime()) return false;
+            return true;
+        });
+    });
+
+// Handoff rows, each tagged with the request ids its batch was written for. The mock answers both
+// questions the reconciler asks — "my rows" (requestIds contains my id) and "the batch I joined"
+// (requestIds contains a sibling's id) — from the same list, so a row is never invented by the test.
+const handoffRows = (rows: Record<string, unknown>[]) =>
+    mocks.handoffFindMany.mockImplementation(async (args: {
+        where?: { requestIds?: { contains?: string }; OR?: { requestIds: { contains: string } }[] };
+    }) => {
+        const where = args?.where ?? {};
+        const asked = where.requestIds?.contains
+            ? [where.requestIds.contains.replace(/"/g, '')]
+            : (where.OR ?? []).map(c => c.requestIds.contains.replace(/"/g, ''));
+        return rows.filter(r => asked.some(id => (r.requestIds as string[] | undefined)?.includes(id)));
+    });
 
 describe('reconcileImportHandoffs', () => {
     beforeEach(() => {
@@ -103,7 +137,7 @@ describe('reconcileImportHandoffs', () => {
         });
         expect(mocks.sendAlert).toHaveBeenCalledTimes(1);
         expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
-            title: expect.stringContaining('1 File'),
+            title: 'Issue #37 — X-Men #34-40 (2004)',
             user: 'nicolas',
             email: 'n@example.test'
         }));
@@ -197,7 +231,7 @@ describe('reconcileImportHandoffs', () => {
         });
         expect(mocks.sendAlert).toHaveBeenCalledTimes(1);
         expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
-            title: 'X-Men #34-40 (2004)',
+            title: 'Issue #37 — X-Men #34-40 (2004)',
             description: expect.stringContaining('since the review')
         }));
         // It was never an IMPORTING request, so no handoff row is consulted for it.
@@ -228,6 +262,151 @@ describe('reconcileImportHandoffs', () => {
             volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '38'
         });
         expect(mocks.requestUpdate).not.toHaveBeenCalled();
+    });
+
+    // hankscafe's first review point: `issueIsInLibrary` is false by definition for a request that
+    // names no issue, so a pack-shaped request whose files are on disk closed NEEDS_REVIEW. The
+    // batch's own tally answers for it instead: something imported is an arrival, nothing is not.
+    it('closes a request that names no issue on the batch itself: files that reached the library are an arrival', async () => {
+        requestsAt([importingRequest({ id: 'req_pack', issueNumber: null, activeDownloadName: 'Invincible Vol. 1-25' })]);
+        handoffRows([
+            { outcome: 'IMPORTED', requestIds: ['req_pack'] },
+            { outcome: 'IMPORTED', requestIds: ['req_pack'] },
+            { outcome: 'IMPORTED', requestIds: ['req_pack'] },
+        ]);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 1, review: 0, waiting: 0 });
+
+        // Nothing to look up: the library is never asked for a request with no issue number.
+        expect(mocks.issueIsInLibrary).not.toHaveBeenCalled();
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_pack' },
+            data: { status: 'COMPLETED', progress: 100, notified: false }
+        });
+        expect(mocks.sendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+            title: 'Invincible Vol. 1-25 - 3 Files'
+        }));
+    });
+
+    it('and closes it NEEDS_REVIEW when the batch imported nothing', async () => {
+        requestsAt([importingRequest({ id: 'req_pack', issueNumber: null, activeDownloadName: 'Invincible Vol. 1-25' })]);
+        handoffRows([{ outcome: 'UNMATCHED', requestIds: ['req_pack'] }]);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_pack' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
+            description: expect.stringContaining('the pack did not reach your library')
+        }));
+    });
+
+    // hankscafe's second review point: a batch whose rows are never stamped (an old engine, a sweep
+    // that never ran, the one exit that used to park a file without stamping) waited forever.
+    it('judges a batch that never finished stamping once the import is past IMPORTING_STALE_MS', async () => {
+        requestsAt([importingRequest({ updatedAt: new Date(Date.now() - IMPORTING_STALE_MS - 60_000) })]);
+        handoffRows([{ outcome: 'IMPORTED', requestIds: ['req_1'] }, { outcome: 'PENDING', requestIds: ['req_1'] }]);
+        mocks.issueIsInLibrary.mockResolvedValue(true);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 1, review: 0, waiting: 0 });
+    });
+
+    it('and hands it to a person, saying the batch never reported back, when nothing arrived', async () => {
+        requestsAt([importingRequest({ updatedAt: new Date(Date.now() - IMPORTING_STALE_MS - 60_000) })]);
+        handoffRows([{ outcome: 'PENDING', requestIds: ['req_1'] }]);
+        mocks.issueIsInLibrary.mockResolvedValue(false);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
+        expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
+            description: expect.stringContaining('never reported back')
+        }));
+    });
+
+    it('still waits on a young batch that is only partly stamped', async () => {
+        requestsAt([importingRequest({ updatedAt: new Date(Date.now() - 5 * 60_000) })]);
+        handoffRows([{ outcome: 'IMPORTED', requestIds: ['req_1'] }, { outcome: 'PENDING', requestIds: ['req_1'] }]);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 0, waiting: 1 });
+    });
+
+    // hankscafe's third review point: a joiner has no rows, so it was judged 30 minutes after the
+    // join although the batch it joined may run for hours. It waits on that batch now.
+    it('waits on the batch a row-less request joined, past its own grace, while that batch is still PENDING', async () => {
+        requestsAt([
+            importingRequest({
+                id: 'req_joiner', downloadLink: 'https://host/pack',
+                updatedAt: new Date(Date.now() - IMPORT_RECONCILE_GRACE_MS - 60_000),
+            }),
+            importingRequest({ id: 'req_lead', downloadLink: 'https://host/pack' }),
+        ]);
+        handoffRows([{ outcome: 'PENDING', requestIds: ['req_lead'] }]);
+
+        // Both stay: the lead because its file is unstamped, the joiner because it waits on it.
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 0, waiting: 2 });
+        expect(mocks.requestUpdate).not.toHaveBeenCalled();
+        expect(mocks.sendAlert).not.toHaveBeenCalled();
+    });
+
+    it('judges the joiner on the joined batch once it settled — not with the "never reported back" alert', async () => {
+        requestsAt([
+            importingRequest({ id: 'req_joiner', downloadLink: 'https://host/pack' }),
+            importingRequest({ id: 'req_lead', downloadLink: 'https://host/pack' }),
+        ]);
+        handoffRows([{ outcome: 'UNMATCHED', batchId: 'b1', requestIds: ['req_lead'], createdAt: new Date() }]);
+        mocks.issueIsInLibrary.mockResolvedValue(false);
+
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 2, waiting: 0 });
+        expect(mocks.sendAlert).not.toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
+            description: expect.stringContaining('never reported back')
+        }));
+    });
+
+    it('answers a joiner with the newest batch on its link, never with an older settled one', async () => {
+        requestsAt([
+            importingRequest({
+                id: 'req_joiner', issueNumber: null, activeDownloadName: 'Invincible Vol. 1-25',
+                downloadLink: 'https://host/pack',
+            }),
+            importingRequest({ id: 'req_lead', downloadLink: 'https://host/pack' }),
+        ]);
+        handoffRows([
+            { outcome: 'IMPORTED', batchId: 'b_old', requestIds: ['req_lead'], createdAt: new Date('2026-01-01') },
+            { outcome: 'UNMATCHED', batchId: 'b_new', requestIds: ['req_lead'], createdAt: new Date('2026-10-01') },
+        ]);
+        mocks.issueIsInLibrary.mockResolvedValue(false);
+
+        // The last batch said nothing arrived, so the joiner is not closed as done on the older
+        // batch's imported file.
+        await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 2, waiting: 0 });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW' } });
+    });
+
+    // The three smaller points of the same review: the re-check window, and pruning settled rows.
+    it('stops re-checking a NEEDS_REVIEW row once it is older than the re-check window', async () => {
+        requestsAt([
+            reviewedRequest({
+                id: 'req_old',
+                updatedAt: new Date(Date.now() - IMPORT_REVIEW_RECHECK_WINDOW_MS - 60_000),
+            }),
+            reviewedRequest({ id: 'req_new', issueNumber: '38' }),
+        ]);
+        mocks.issueIsInLibrary.mockResolvedValue(false);
+
+        await reconcileImportHandoffs();
+
+        expect(mocks.issueIsInLibrary).toHaveBeenCalledTimes(1);
+        expect(mocks.issueIsInLibrary).toHaveBeenCalledWith({
+            volumeId: '101', metadataSource: 'COMICVINE', issueNumber: '38'
+        });
+    });
+
+    it('prunes settled handoff rows past the retention window, and never a pending one', async () => {
+        await reconcileImportHandoffs();
+
+        // The cutoff is a moving Date, so assert the bound it was given rather than the instant.
+        const { where } = mocks.handoffDeleteMany.mock.calls[0][0];
+        expect(where.outcome).toEqual({ not: 'PENDING' });
+        const age = Date.now() - where.createdAt.lt.getTime();
+        expect(age).toBeGreaterThanOrEqual(IMPORT_HANDOFF_RETENTION_MS);
+        expect(age).toBeLessThan(IMPORT_HANDOFF_RETENTION_MS + 60_000);
     });
 });
 

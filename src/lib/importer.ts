@@ -357,14 +357,17 @@ export const Importer = {
         // each row is written as its own file is routed, so a sweep starting mid-routing finds it.
         const batchId = newImportBatchId();
         // Every request this download was made for: the pack is shared, so the batch is closed for
-        // all of them (and each one on its own issue, once the library can answer).
-        const siblingRequests = req.downloadLink && req.downloadLink !== "PENDING_MATCH"
-            ? await prisma.request.findMany({
-                where: { downloadLink: req.downloadLink, status: { in: ['DOWNLOADING', 'IMPORTING'] } },
-                select: { id: true }
-            })
-            : [];
-        const batchRequestIds = Array.from(new Set([requestId, ...siblingRequests.map(r => r.id)]));
+        // all of them (and each one on its own issue, once the library can answer). Read once here
+        // because the rows written during the routing need the ids — and again just before the
+        // IMPORTING update, because a request can park on the link *while* the pack is being moved.
+        const requestsOnTheLink = async () =>
+            req.downloadLink && req.downloadLink !== "PENDING_MATCH"
+                ? await prisma.request.findMany({
+                    where: { downloadLink: req.downloadLink, status: { in: ['DOWNLOADING', 'IMPORTING'] } },
+                    select: { id: true }
+                })
+                : [];
+        const batchRequestIds = Array.from(new Set([requestId, ...(await requestsOnTheLink()).map(r => r.id)]));
         const handoffContext = {
             batchId,
             requestIds: batchRequestIds,
@@ -488,8 +491,18 @@ export const Importer = {
             return false;
         }
 
+        // Read the link once more: a request that parked on it while the files were being moved is
+        // not in the list taken at the start, and nothing else closes a parked request (#240 PR B) —
+        // it would sit at DOWNLOADING, and for a torrent the cron's client loop could match the
+        // finished torrent and route the pack a second time. They need no rows of their own: the
+        // reconciler's joined-batch path waits on the newest batch on their link.
+        const importingRequestIds = Array.from(new Set([
+            ...batchRequestIds,
+            ...(await requestsOnTheLink()).map(r => r.id)
+        ]));
+
         await prisma.request.updateMany({
-            where: { id: { in: batchRequestIds } },
+            where: { id: { in: importingRequestIds } },
             data: { status: 'IMPORTING', progress: 100, notified: false }
         });
 
@@ -500,7 +513,7 @@ export const Importer = {
             });
         } catch(e) {}
 
-        Logger.log(`[Importer] Successfully routed ${moveSuccessCount} files to Watched folder. Batch ${batchId} handed off; ${batchRequestIds.length} request(s) stay IMPORTING until the sweep reports back.`, 'success');
+        Logger.log(`[Importer] Successfully routed ${moveSuccessCount} files to Watched folder. Batch ${batchId} handed off; ${importingRequestIds.length} request(s) stay IMPORTING until the sweep reports back.`, 'success');
 
         // CRITICAL: Only add trackingHash (Torrents) to the ignore list so DDLs can be re-downloaded later if needed!
         if (trackingHash) {

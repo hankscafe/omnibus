@@ -532,9 +532,11 @@ describe('File System: Importer Engine', () => {
         });
         // A DDL pack: the source is found under the GetComics folder (not at the client root), so the
         // importer MOVES the files and isFromClient stays false — the case where the file leaves the
-        // download folder as it is routed.
+        // download folder as it is routed. Windows builds that path with backslashes (path.join), so
+        // normalise the separator first: matching on the raw string made existsSync answer false there
+        // and every folder-batch test bailed out before routing.
         vi.mocked(fs.existsSync).mockImplementation(((p: string) =>
-            p.endsWith('GetComics/Invincible Vol. 1-25')
+            String(p).replace(/\\/g, '/').endsWith('GetComics/Invincible Vol. 1-25')
         ) as unknown as typeof fs.existsSync);
         // That source resolves to a FOLDER holding several archives (a scene pack), not to an archive.
         vi.mocked(fs.statSync).mockImplementation(((p: string) => ({
@@ -609,6 +611,40 @@ describe('File System: Importer Engine', () => {
         expect(mocks.rekeyPendingHandoff).toHaveBeenCalledTimes(1);
         expect(mocks.rekeyPendingHandoff).toHaveBeenCalledWith('batch_test', 'Fake.cbr', 'Fake.cbz');
 
+        releaseFolderBatchMocks();
+    });
+
+    it('takes a request that parks on the link while the pack is being routed into the same batch', async () => {
+        armFolderBatch(['Invincible 01.cbz', 'Invincible 02.cbz']);
+        mocks.findUniqueRequest.mockReset();
+        mocks.findUniqueRequest.mockResolvedValue({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Invincible Vol. 1-25', downloadLink: 'https://host/pack'
+        });
+        // The link is read before the first file moves, because the rows need the batch id and the
+        // request ids. A request that parks on that link *while* the pack is being routed is not in
+        // that first read — and since #240 PR B nothing else closes a parked request, so it would sit
+        // at DOWNLOADING and, for a torrent, the cron's client loop could match the finished torrent
+        // and route the pack a second time.
+        const { prisma } = await import('@/lib/db');
+        const onTheLink: { id: string }[] = [{ id: 'req_1' }];
+        vi.mocked(prisma.request.findMany).mockImplementation((async () => [...onTheLink]) as never);
+        vi.mocked(fs.move).mockImplementationOnce((async () => {
+            onTheLink.push({ id: 'req_late' });
+        }) as never);
+
+        expect(await Importer.importRequest('req_1')).toBe(true);
+
+        const toImporting = mocks.updateManyRequest.mock.calls
+            .map(([args]) => args as { where: { id: { in: string[] } }; data: { status?: string } })
+            .filter(a => a.data.status === 'IMPORTING');
+        expect(toImporting.flatMap(a => a.where.id.in)).toContain('req_late');
+        // They need no rows of their own: the reconciler's joined-batch path already waits on the
+        // newest batch on their link, so the rows keep the list the routing started with.
+        expect(mocks.recordPendingHandoff).toHaveBeenCalledWith(expect.objectContaining({
+            requestIds: ['req_1']
+        }));
+
+        vi.mocked(prisma.request.findMany).mockResolvedValue([] as never);
         releaseFolderBatchMocks();
     });
 

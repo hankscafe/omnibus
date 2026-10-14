@@ -5,6 +5,23 @@
 
 let nextAvailableSearchTime = Date.now();
 
+// #240 finding 3 (hankscafe): BullMQ serves the plain wait list BEFORE the prioritized set — the
+// worker's `moveToActive-11.lua` pops `wait` first and only then `ZPOPMIN`s `prioritized` — so a job
+// with no priority is taken before any prioritized job. Searches are the bulk of this queue, so they
+// are the ones given a LOW priority (10, out of 2^21; a higher number means later) and every scheduled
+// job — the per-batch watched-folder trigger, the 15-minute sweep, the reconciler — jumps ahead of the
+// search backlog instead of waiting behind it.
+//
+// The 5-second throttle below delays a search rather than dropping it, and a delayed job keeps this
+// priority: when the worker promotes it out of `delayed`, `promoteDelayedJobs.lua` reads the job's own
+// priority and puts it in the prioritized set rather than the wait list. (The bulk
+// `moveJobsToWait-8.lua`, used by the queue API and not by workers, is the one that ignores
+// priorities — that is not the path a search takes here.)
+//
+// Consequence to keep in mind: a queued search now sits in the `prioritized` state, so anything that
+// looks it up by state has to ask for it — the cancel and retry routes do (see `getJobs` there).
+export const SEARCH_JOB_PRIORITY = 10;
+
 export async function searchAndDownload(requestId: string, name: string, year: string, publisher?: string, isManga: boolean = false, skipIndexers: boolean = false) {
   const now = Date.now();
   if (nextAvailableSearchTime < now) {
@@ -31,7 +48,8 @@ export async function searchAndDownload(requestId: string, name: string, year: s
     requestId, name, year, publisher, isManga, skipIndexers
   }, {
     jobId,
-    delay: delayMs
+    delay: delayMs,
+    priority: SEARCH_JOB_PRIORITY
   });
 }
 

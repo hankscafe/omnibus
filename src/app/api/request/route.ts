@@ -710,7 +710,7 @@ export async function DELETE(request: NextRequest) {
     // 2. KILL PENDING BACKGROUND JOBS IN BULLMQ
     try {
         const { omnibusQueue } = await import('@/lib/queue');
-        const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused']);
+        const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused', 'prioritized']);
         for (const job of existingJobs) {
             if (job.id === `SEARCH_${id}` || job.data?.requestId === id) {
                 // job.remove() works on waiting jobs. Active jobs will be caught by the status check in automation.ts

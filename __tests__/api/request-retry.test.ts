@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
     scrapeDeepLinkViaEngine: vi.fn(),
     fetch: vi.fn(),
     log: vi.fn(),
+    // The queue's ghost-job purge (#240 finding 3): honours the states it is asked for, so a job can
+    // never be found by a state list that does not include its own.
+    queueGetJobs: vi.fn(async (_states: string[]) => [] as { id: string; state: string; data?: { requestId?: string }; remove: () => Promise<void> }[]),
 }));
 
 vi.mock('@/lib/db', () => ({
@@ -29,7 +32,7 @@ vi.mock('@/lib/db', () => ({
 vi.mock('next-auth/jwt', () => ({ getToken: vi.fn().mockResolvedValue({ id: 'user_1', role: 'ADMIN' }) }));
 vi.mock('@/lib/download-clients', () => ({ DownloadService: { downloadDirectFile: mocks.downloadDirectFile } }));
 vi.mock('@/lib/importer', () => ({ Importer: { importRequest: mocks.importRequest } }));
-vi.mock('@/lib/queue', () => ({ omnibusQueue: { getJobs: vi.fn().mockResolvedValue([]) } }));
+vi.mock('@/lib/queue', () => ({ omnibusQueue: { getJobs: mocks.queueGetJobs, add: vi.fn() } }));
 vi.mock('@/lib/getcomics', () => ({
     enabledHostersFromSetting: vi.fn().mockReturnValue(['getcomics_direct', 'getcomics_main', 'mediafire']),
     scrapeDeepLinkViaEngine: mocks.scrapeDeepLinkViaEngine,
@@ -104,6 +107,20 @@ describe('API Route: Request Retry (engine recovery search)', () => {
             data: expect.objectContaining({ status: 'MANUAL_DDL', downloadLink: 'https://getcomics.org/dls/x' })
         }));
         expect(mocks.downloadDirectFile).not.toHaveBeenCalled();
+    });
+
+    // #240 finding 3: a queued search now carries a priority, so it waits in BullMQ's `prioritized`
+    // state — a state list without it no longer finds the request's own queued search to purge.
+    it('purges a queued search that is waiting in the prioritized state', async () => {
+        const remove = vi.fn().mockResolvedValue(undefined);
+        mocks.queueGetJobs.mockImplementation(async (states: string[]) => [
+            { id: 'SEARCH_req_1', state: 'prioritized', data: { requestId: 'req_1' }, remove }
+        ].filter(job => states.includes(job.state)));
+
+        await retryRequest();
+
+        expect(mocks.queueGetJobs).toHaveBeenCalledWith(expect.arrayContaining(['prioritized']));
+        expect(remove).toHaveBeenCalled();
     });
 
     it('returns the lost-link error when the engine is unreachable', async () => {

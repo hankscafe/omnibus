@@ -4,7 +4,7 @@
 // queue.ts -> /api/automation/search). The legacy full-Node search
 // (executeSearchAndDownload) was deleted as dead code.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { searchAndDownload, processAutomationQueue } from '@/lib/automation';
+import { searchAndDownload, processAutomationQueue, SEARCH_JOB_PRIORITY } from '@/lib/automation';
 
 const mocks = vi.hoisted(() => ({
     queueAdd: vi.fn().mockResolvedValue({}),
@@ -79,6 +79,23 @@ describe('Core Logic: Automation (engine handoff)', () => {
 
             // Second job must be scheduled at least ~5s after the first
             expect(delayB - delayA).toBeGreaterThanOrEqual(4000);
+        });
+
+        // #240 finding 3: the searches take a LOW priority, because BullMQ serves the plain wait list
+        // before the prioritized set — a job with no priority is taken before any prioritized one, so
+        // the scheduled jobs (per-batch trigger, 15-minute sweep, reconciler) jump the search backlog.
+        it('gives every search the low priority that keeps the scheduled jobs ahead of it', async () => {
+            await searchAndDownload('req_p1', 'Batman', '2024');
+            await searchAndDownload('req_p2', 'Superman', '2024'); // throttled: enqueued with a delay
+
+            expect(SEARCH_JOB_PRIORITY).toBe(10);
+            for (const call of mocks.queueAdd.mock.calls) {
+                expect(call[2]).toEqual(expect.objectContaining({ priority: 10 }));
+            }
+            // The throttled one is delayed AND prioritized: BullMQ stores the priority on the job and
+            // the worker's promotion out of `delayed` puts it in the prioritized set, so the 5 s
+            // spacing does not quietly drop the priority.
+            expect(mocks.queueAdd.mock.calls[1][2].delay).toBeGreaterThan(0);
         });
     });
 

@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
         // --- NEW: PURGE GHOST JOBS ---
         // Find any delayed/waiting automated jobs in BullMQ related to this specific request and obliterate them
         try {
-            const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused']);
+            const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused', 'prioritized']);
             let purged = 0;
             for (const job of existingJobs) {
                 if (job.id === `SEARCH_${id}` || job.data?.requestId === id) {

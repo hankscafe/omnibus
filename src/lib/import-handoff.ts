@@ -66,6 +66,10 @@ export function watchedRelativePath(watchedDir: string, filePath: string): strin
 /**
  * Record one row per routed file, before the sweep is asked to run. Writing rows first is what makes
  * the handoff race-free: a sweep that starts immediately still finds them.
+ *
+ * For the paths this process routes itself, the row now goes in per file, BEFORE its move
+ * (`recordPendingHandoff`) — see that helper. This bulk form is left for the engine-first extraction,
+ * whose file names only exist once the engine has written them.
  */
 export async function recordImportHandoff(opts: {
   batchId: string;
@@ -96,6 +100,76 @@ export async function recordImportHandoff(opts: {
     'info'
   );
   return relPaths.length;
+}
+
+type HandoffRowContext = {
+  batchId: string;
+  requestIds: string[];
+  volumeId?: string | null;
+  metadataSource?: string | null;
+};
+
+/**
+ * One PENDING row, for ONE file, written BEFORE that file is moved into the watched folder (#240
+ * review). The order is the point: a sweep that starts while the pack is still being routed finds
+ * the row and stamps it, instead of importing a file whose row only appears afterwards — a row
+ * nothing will ever settle, which reads as "the batch never reported back" and leaves a request
+ * NEEDS_REVIEW over files that are already in the library (and unnumbered requests have no library
+ * fallback to rescue them). Best-effort, like the engine's own stamp: a busy database must not fail
+ * the import itself.
+ */
+export async function recordPendingHandoff(opts: HandoffRowContext & { relativePath: string }): Promise<boolean> {
+  if (!opts.relativePath) return false;
+  try {
+    await prisma.importHandoff.create({
+      data: {
+        batchId: opts.batchId,
+        requestIds: JSON.stringify(opts.requestIds),
+        relPath: opts.relativePath,
+        volumeId: opts.volumeId ?? null,
+        metadataSource: opts.metadataSource ?? null,
+        outcome: HANDOFF_PENDING
+      }
+    });
+    return true;
+  } catch (e: unknown) {
+    Logger.log(`[Import Handoff] Could not write the row for "${opts.relativePath}" before routing it: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+    return false;
+  }
+}
+
+/**
+ * The file never landed in the watched folder after all (the move failed), so take its row back: a
+ * PENDING row that names a file nobody can find is exactly the lie the reconciler then reports as a
+ * batch that never came back.
+ */
+export async function dropPendingHandoff(batchId: string, relativePath: string): Promise<void> {
+  if (!relativePath) return;
+  try {
+    await prisma.importHandoff.deleteMany({
+      where: { batchId, relPath: relativePath, outcome: HANDOFF_PENDING }
+    });
+  } catch (e: unknown) {
+    Logger.log(`[Import Handoff] Could not withdraw the row for "${relativePath}": ${e instanceof Error ? e.message : String(e)}`, 'warn');
+  }
+}
+
+/**
+ * The signature fix renamed the file right after it landed (an extension that lied about its
+ * format), so its row has to move to the name the engine will actually read. Only a PENDING row is
+ * re-keyed: once the sweep has stamped it, the stamp is the truth and the row stays where the
+ * engine found it.
+ */
+export async function rekeyPendingHandoff(batchId: string, from: string, to: string): Promise<void> {
+  if (!from || !to || from === to) return;
+  try {
+    await prisma.importHandoff.updateMany({
+      where: { batchId, relPath: from, outcome: HANDOFF_PENDING },
+      data: { relPath: to }
+    });
+  } catch (e: unknown) {
+    Logger.log(`[Import Handoff] Could not re-key the row for "${from}" -> "${to}": ${e instanceof Error ? e.message : String(e)}`, 'warn');
+  }
 }
 
 type ImportingRequest = {

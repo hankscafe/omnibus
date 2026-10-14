@@ -24,7 +24,7 @@ import { readZipEntryNames } from '@/lib/utils/archive-pages';
 import { fixMagicNumberSync } from '@/lib/utils/archive-signature';
 import { storedFolderProblem } from '@/lib/utils/stored-folder';
 import { requeueWithNextRelease } from '@/lib/requeue';
-import { newImportBatchId, recordImportHandoff, watchedRelativePath } from '@/lib/import-handoff';
+import { dropPendingHandoff, newImportBatchId, recordImportHandoff, recordPendingHandoff, rekeyPendingHandoff, watchedRelativePath } from '@/lib/import-handoff';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -353,6 +353,25 @@ export const Importer = {
         // (#240 PR B): the engine stamps each one's outcome under exactly this key.
         const routedRelPaths: string[] = [];
 
+        // The batch, and the requests it closes for, exist BEFORE its first file does (#240 review):
+        // each row is written as its own file is routed, so a sweep starting mid-routing finds it.
+        const batchId = newImportBatchId();
+        // Every request this download was made for: the pack is shared, so the batch is closed for
+        // all of them (and each one on its own issue, once the library can answer).
+        const siblingRequests = req.downloadLink && req.downloadLink !== "PENDING_MATCH"
+            ? await prisma.request.findMany({
+                where: { downloadLink: req.downloadLink, status: { in: ['DOWNLOADING', 'IMPORTING'] } },
+                select: { id: true }
+            })
+            : [];
+        const batchRequestIds = Array.from(new Set([requestId, ...siblingRequests.map(r => r.id)]));
+        const handoffContext = {
+            batchId,
+            requestIds: batchRequestIds,
+            volumeId: req.volumeId,
+            metadataSource: req.metadataSource
+        };
+
         if (isBatchFolder) {
             for (const file of batchFiles) {
                 Logger.log(`[Importer Debug] Routing nested file to Watched: ${path.basename(file)}`, 'debug');
@@ -360,6 +379,11 @@ export const Importer = {
                 if (fs.existsSync(finalDest)) {
                     finalDest = path.join(watchedDir, `${Date.now()}_${path.basename(file)}`);
                 }
+                // The row goes in BEFORE the file does (#240 review): a sweep that starts while the
+                // pack is still being routed finds it and stamps it. The other order leaves the sweep
+                // importing files whose row appears a moment later — and nothing ever settles it.
+                const plannedRel = watchedRelativePath(watchedDir, finalDest);
+                await recordPendingHandoff({ ...handoffContext, relativePath: plannedRel });
                 try {
                     if (isFromClient || trackingHash) {
                         await fs.copy(file, finalDest, { overwrite: true });
@@ -368,10 +392,18 @@ export const Importer = {
                     }
                     
                     finalDest = fixMagicNumberSync(finalDest);
-                    routedRelPaths.push(watchedRelativePath(watchedDir, finalDest));
+                    // A lying extension is corrected by a rename, so the row follows the name the
+                    // engine will actually read.
+                    const finalRel = watchedRelativePath(watchedDir, finalDest);
+                    if (finalRel !== plannedRel) await rekeyPendingHandoff(batchId, plannedRel, finalRel);
+                    routedRelPaths.push(finalRel);
 
                     moveSuccessCount++;
                 } catch(err: any) {
+                    // Nothing landed: withdraw the row rather than leave a PENDING one the sweep can
+                    // never stamp (that is the "batch never reported back" verdict, over a file that
+                    // was never handed over).
+                    await dropPendingHandoff(batchId, plannedRel);
                     Logger.log(`[Importer Debug] Failed to route ${path.basename(file)} to Watched folder: ${err.message}`, 'warn');
                 }
             }
@@ -385,6 +417,11 @@ export const Importer = {
             if (engineExtract?.files) {
                 moveSuccessCount = engineExtract.files.length;
                 routedRelPaths.push(...engineExtract.files.map(f => watchedRelativePath(watchedDir, f)));
+                // Known residual (#240 review): the engine names and writes these files itself, so
+                // their rows can only follow the extraction. Closing it means the engine owning the
+                // insert (it would need the batch context in the request), which is a change of its
+                // own. Recorded as one bulk write so the batch is still fully handed over.
+                await recordImportHandoff({ ...handoffContext, relativePaths: routedRelPaths });
                 if (!isFromClient && !trackingHash) {
                     try { await fs.remove(sourcePath); } catch(e) {}
                 }
@@ -406,18 +443,33 @@ export const Importer = {
                             if (fs.existsSync(finalDest)) {
                                 finalDest = path.join(watchedDir, `${Date.now()}_${fileName}`);
                             }
-                            fs.writeFileSync(finalDest, entry.getData());
+                            // Same rule as the folder path above: the row is in place before the file
+                            // is, so a sweep that starts mid-extraction stamps it instead of importing
+                            // a file whose row lands afterwards and is never settled.
+                            const plannedRel = watchedRelativePath(watchedDir, finalDest);
+                            await recordPendingHandoff({ ...handoffContext, relativePath: plannedRel });
+                            try {
+                                fs.writeFileSync(finalDest, entry.getData());
 
-                            finalDest = fixMagicNumberSync(finalDest);
-                            routedRelPaths.push(watchedRelativePath(watchedDir, finalDest));
+                                finalDest = fixMagicNumberSync(finalDest);
+                                const finalRel = watchedRelativePath(watchedDir, finalDest);
+                                if (finalRel !== plannedRel) await rekeyPendingHandoff(batchId, plannedRel, finalRel);
+                                routedRelPaths.push(finalRel);
 
-                            moveSuccessCount++;
+                                moveSuccessCount++;
+                            } catch (writeErr: unknown) {
+                                await dropPendingHandoff(batchId, plannedRel);
+                                throw writeErr;
+                            }
                         }
                     }
                     if (!isFromClient && !trackingHash) {
                         await fs.remove(sourcePath);
                     }
                 } catch (err: any) {
+                    // The batch did not make it: withdraw the rows of the files already written, so
+                    // the requests are left to the download checker with nothing half-promised.
+                    for (const rel of routedRelPaths) await dropPendingHandoff(batchId, rel);
                     Logger.log(`[Importer] Failed to extract batch archive: ${err.message}`, 'error');
                     return false;
                 }
@@ -436,28 +488,9 @@ export const Importer = {
             return false;
         }
 
-        const batchId = newImportBatchId();
-        // Every request this download was made for: the pack is shared, so the batch is closed for
-        // all of them (and each one on its own issue, once the library can answer).
-        const siblingRequests = req.downloadLink && req.downloadLink !== "PENDING_MATCH"
-            ? await prisma.request.findMany({
-                where: { downloadLink: req.downloadLink, status: { in: ['DOWNLOADING', 'IMPORTING'] } },
-                select: { id: true }
-            })
-            : [];
-        const batchRequestIds = Array.from(new Set([requestId, ...siblingRequests.map(r => r.id)]));
-
         await prisma.request.updateMany({
             where: { id: { in: batchRequestIds } },
             data: { status: 'IMPORTING', progress: 100, notified: false }
-        });
-
-        await recordImportHandoff({
-            batchId,
-            requestIds: batchRequestIds,
-            relativePaths: routedRelPaths,
-            volumeId: req.volumeId,
-            metadataSource: req.metadataSource
         });
 
         try {

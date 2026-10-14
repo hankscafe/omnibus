@@ -6,6 +6,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
     reconcileImportHandoffs,
     recordImportHandoff,
+    recordPendingHandoff,
+    dropPendingHandoff,
+    rekeyPendingHandoff,
     watchedRelativePath,
     newImportBatchId,
     IMPORT_RECONCILE_GRACE_MS,
@@ -22,6 +25,7 @@ const mocks = vi.hoisted(() => ({
     handoffDeleteMany: vi.fn(async (_args: {
         where: { outcome: { not: string }; createdAt: { lt: Date } };
     }) => ({ count: 0 })),
+    handoffUpdateMany: vi.fn(async (_args: { where: Record<string, unknown>; data: { relPath: string } }) => ({ count: 1 })),
     transaction: vi.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
     sendAlert: vi.fn().mockResolvedValue(undefined),
     issueIsInLibrary: vi.fn(),
@@ -34,6 +38,7 @@ vi.mock('@/lib/db', () => ({
             findMany: mocks.handoffFindMany,
             create: mocks.handoffCreate,
             deleteMany: mocks.handoffDeleteMany,
+            updateMany: mocks.handoffUpdateMany,
         },
         $transaction: mocks.transaction,
     }
@@ -503,5 +508,70 @@ describe('the handoff key', () => {
         const a = newImportBatchId();
         expect(a).toMatch(/^WATCHED_SYNC_BATCH_\d+_[a-z0-9]+$/);
         expect(newImportBatchId()).not.toBe(a);
+    });
+});
+
+// ==== #240 review: the row a file gets BEFORE it is moved into the watched folder, and the two
+// corrections it can need afterwards (a move that failed, a rename by the signature fix). ====
+
+describe('the per-file row (written before the move)', () => {
+    it('records one PENDING row for one file, under the batch the request will be closed on', async () => {
+        const written = await recordPendingHandoff({
+            batchId: 'batch_1',
+            requestIds: ['req_1', 'req_2'],
+            relativePath: 'Invincible 01.cbz',
+            volumeId: 'vol_9',
+            metadataSource: 'COMICVINE'
+        });
+
+        expect(written).toBe(true);
+        expect(mocks.handoffCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+            batchId: 'batch_1',
+            requestIds: JSON.stringify(['req_1', 'req_2']),
+            relPath: 'Invincible 01.cbz',
+            volumeId: 'vol_9',
+            metadataSource: 'COMICVINE',
+            outcome: 'PENDING'
+        }) });
+    });
+
+    it('never fails the import when the row itself cannot be written', async () => {
+        mocks.handoffCreate.mockRejectedValueOnce(new Error('database is locked'));
+
+        const written = await recordPendingHandoff({
+            batchId: 'batch_1', requestIds: ['req_1'], relativePath: 'Invincible 01.cbz'
+        });
+
+        // The file still has to be routed: the sweep is what settles the row, and a busy table must
+        // not turn a pack import into an error.
+        expect(written).toBe(false);
+    });
+
+    it('takes the row back for a file that never landed, and only a PENDING one', async () => {
+        await dropPendingHandoff('batch_1', 'Invincible 01.cbz');
+
+        expect(mocks.handoffDeleteMany).toHaveBeenCalledWith({ where: {
+            batchId: 'batch_1',
+            relPath: 'Invincible 01.cbz',
+            outcome: 'PENDING'
+        } });
+    });
+
+    it('moves the row to the name the signature fix wrote, while it is still PENDING', async () => {
+        await rekeyPendingHandoff('batch_1', 'Fake.cbr', 'Fake.cbz');
+
+        // The PENDING filter is the point: once the sweep has stamped the row, the stamp is the truth
+        // and the row stays under the name it was stamped by.
+        expect(mocks.handoffUpdateMany).toHaveBeenCalledWith({
+            where: { batchId: 'batch_1', relPath: 'Fake.cbr', outcome: 'PENDING' },
+            data: { relPath: 'Fake.cbz' }
+        });
+    });
+
+    it('does nothing when the file kept its name, or when there is no key to follow', async () => {
+        await rekeyPendingHandoff('batch_1', 'Invincible 01.cbz', 'Invincible 01.cbz');
+        await rekeyPendingHandoff('batch_1', '', 'Fake.cbz');
+
+        expect(mocks.handoffUpdateMany).not.toHaveBeenCalled();
     });
 });

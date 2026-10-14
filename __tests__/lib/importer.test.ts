@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
     updateRequest: vi.fn(),
     updateManyRequest: vi.fn().mockResolvedValue({ count: 2 }),
     recordHandoff: vi.fn().mockResolvedValue(1),
+    // #240 review: the per-file row written before its own move, and its two corrections.
+    recordPendingHandoff: vi.fn().mockResolvedValue(true),
+    dropPendingHandoff: vi.fn().mockResolvedValue(undefined),
+    rekeyPendingHandoff: vi.fn().mockResolvedValue(undefined),
+    // The magic-number fix, identity by default: one test renames through it.
+    fixMagicNumber: vi.fn((p: string) => p),
     createIssue: vi.fn(),
     upsertSeries: vi.fn(),
     updateSeries: vi.fn(),
@@ -77,7 +83,14 @@ vi.mock('@/lib/import-handoff', async (importOriginal) => ({
     newImportBatchId: () => 'batch_test',
     watchedRelativePath: (_dir: string, filePath: string) => filePath.split(/[\\/]/).pop(),
     recordImportHandoff: mocks.recordHandoff,
+    recordPendingHandoff: mocks.recordPendingHandoff,
+    dropPendingHandoff: mocks.dropPendingHandoff,
+    rekeyPendingHandoff: mocks.rekeyPendingHandoff,
 }));
+
+// Identity by default, so the batch tests keep the name the importer planned; one test renames a file
+// through it to prove the row follows.
+vi.mock('@/lib/utils/archive-signature', () => ({ fixMagicNumberSync: mocks.fixMagicNumber }));
 
 vi.mock('@/lib/utils/path-resolver', () => ({ resolveRemotePath: vi.fn((path) => path) }));
 vi.mock('@/lib/download-clients', () => ({ DownloadService: { getAllActiveDownloads: mocks.getAllActiveDownloads } }));
@@ -491,11 +504,112 @@ describe('File System: Importer Engine', () => {
             data: expect.objectContaining({ status: 'IMPORTING' })
         }));
         // The destination keeps a collision prefix when the watched folder already holds that name,
-        // and the handoff key follows the file it actually wrote.
-        expect(mocks.recordHandoff).toHaveBeenCalledWith(expect.objectContaining({
-            relativePaths: [expect.stringMatching(/a\.cbz$/)]
+        // and the handoff key follows the file it actually wrote. #240 review: it is written per file,
+        // BEFORE the extraction writes it.
+        expect(mocks.recordPendingHandoff).toHaveBeenCalledTimes(1);
+        expect(mocks.recordPendingHandoff).toHaveBeenCalledWith(expect.objectContaining({
+            batchId: 'batch_test',
+            requestIds: ['req_1'],
+            relativePath: expect.stringMatching(/a\.cbz$/)
         }));
+        // …and it is written before the extraction writes the file it names.
+        expect(mocks.recordPendingHandoff.mock.invocationCallOrder[0])
+            .toBeLessThan(vi.mocked(fs.writeFileSync).mock.invocationCallOrder[0]);
         expect(notifierSendAlert).not.toHaveBeenCalled();
+    });
+
+    // ==== #240 review: the row must exist BEFORE the file it names does. ====
+    // The importer moved the whole pack into the watched folder and only then wrote the handoff rows,
+    // so a sweep that started inside that window imported files whose row appeared a moment later — a
+    // row nothing can ever settle. The request then reads as "the batch never reported back" and an
+    // unnumbered request (a whole-pack link, with no issue to look up in the library) closes
+    // NEEDS_REVIEW over files that are already imported. The row goes in first now, per file, before
+    // that file's own move.
+
+    function armFolderBatch(entries: string[]) {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Invincible Vol. 1-25'
+        });
+        // A DDL pack: the source is found under the GetComics folder (not at the client root), so the
+        // importer MOVES the files and isFromClient stays false — the case where the file leaves the
+        // download folder as it is routed.
+        vi.mocked(fs.existsSync).mockImplementation(((p: string) =>
+            p.endsWith('GetComics/Invincible Vol. 1-25')
+        ) as unknown as typeof fs.existsSync);
+        // That source resolves to a FOLDER holding several archives (a scene pack), not to an archive.
+        vi.mocked(fs.statSync).mockImplementation(((p: string) => ({
+            isDirectory: () => !/\.[a-z0-9]{2,4}$/i.test(p),
+            size: 1000000
+        })) as unknown as typeof fs.statSync);
+        vi.mocked(fs.promises.readdir).mockResolvedValue(
+            entries.map(name => ({ name, isDirectory: () => false })) as unknown as never
+        );
+    }
+
+    function releaseFolderBatchMocks() {
+        vi.mocked(fs.existsSync).mockReset();
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false, size: 1000000 } as unknown as ReturnType<typeof fs.statSync>);
+        vi.mocked(fs.promises.readdir).mockResolvedValue([] as unknown as never);
+    }
+
+    it("writes each file's handoff row before the file itself lands in the watched folder", async () => {
+        armFolderBatch(['Invincible 01.cbz', 'Invincible 02.cbz']);
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        // One row per file, under the name the sweep will read.
+        expect(mocks.recordPendingHandoff.mock.calls.map(c => c[0].relativePath))
+            .toEqual(['Invincible 01.cbz', 'Invincible 02.cbz']);
+        expect(mocks.recordPendingHandoff).toHaveBeenCalledWith(expect.objectContaining({
+            batchId: 'batch_test',
+            requestIds: ['req_1']
+        }));
+        // The order that closes the race: the first row exists before the first file is moved, and each
+        // row before its own file.
+        const rowOrder = mocks.recordPendingHandoff.mock.invocationCallOrder;
+        const moveOrder = vi.mocked(fs.move).mock.invocationCallOrder;
+        expect(rowOrder[0]).toBeLessThan(moveOrder[0]);
+        expect(rowOrder[1]).toBeLessThan(moveOrder[1]);
+        // Both files were handed over, so nothing is withdrawn.
+        expect(mocks.dropPendingHandoff).not.toHaveBeenCalled();
+        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), { jobId: 'batch_test' });
+
+        releaseFolderBatchMocks();
+    });
+
+    it('withdraws the row of a file the move could not route, instead of leaving a stall to report', async () => {
+        armFolderBatch(['Invincible 01.cbz', 'Invincible 02.cbz']);
+        vi.mocked(fs.move).mockImplementationOnce(async () => {
+            throw new Error('EXDEV: cross-device link not permitted');
+        });
+
+        const result = await Importer.importRequest('req_1');
+
+        // The pack still went over (one file), so the request is handed off…
+        expect(result).toBe(true);
+        expect(omnibusQueue.add).toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.any(Object), { jobId: 'batch_test' });
+        // …but the file that never landed has no row left behind it.
+        expect(mocks.recordPendingHandoff).toHaveBeenCalledTimes(2);
+        expect(mocks.dropPendingHandoff).toHaveBeenCalledTimes(1);
+        expect(mocks.dropPendingHandoff).toHaveBeenCalledWith('batch_test', 'Invincible 01.cbz');
+
+        releaseFolderBatchMocks();
+    });
+
+    it('re-keys a row when the signature fix renamed the file after it landed', async () => {
+        armFolderBatch(['Fake.cbr', 'Real.cbz']);
+        // The extension lies: the fix renames it, so the engine will read the corrected name.
+        mocks.fixMagicNumber.mockImplementationOnce((p: string) => p.replace(/\.cbr$/, '.cbz'));
+
+        const result = await Importer.importRequest('req_1');
+
+        expect(result).toBe(true);
+        expect(mocks.rekeyPendingHandoff).toHaveBeenCalledTimes(1);
+        expect(mocks.rekeyPendingHandoff).toHaveBeenCalledWith('batch_test', 'Fake.cbr', 'Fake.cbz');
+
+        releaseFolderBatchMocks();
     });
 
     // ==== #240 finding 4: a 1.2 GB pack cut short was imported as ONE issue with 0 pages. The engine

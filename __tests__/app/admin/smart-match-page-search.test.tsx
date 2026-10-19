@@ -7,7 +7,7 @@
 // number), Load more pagination, and the fallback ID path routing through the same resolver.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { ok, err, stubFetchRouter, stubImmediateTimers } from '../../helpers/fetch';
+import { ok, err, stubFetchRouter } from '../../helpers/fetch';
 
 const toast = vi.fn();
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
@@ -280,8 +280,11 @@ describe('Smart Matcher — Start Auto-Scan error handling (review of #231)', ()
 
     it('retries an ERROR row on the next scan, but not a NOT_FOUND row', async () => {
         // The scan's 1.5 s pause between rows is real time otherwise: three of them made this test
-        // flaky under a loaded full-suite run.
-        stubImmediateTimers();
+        // flaky under a loaded full-suite run. Only that pause is collapsed, so waitFor's own
+        // timeout below stays real.
+        const realSetTimeout = globalThis.setTimeout;
+        vi.stubGlobal('setTimeout', ((cb: any, ms?: number, ...args: any[]) =>
+            realSetTimeout(cb, ms === 1500 ? 0 : ms, ...args)) as any);
         const OTHER = { ...RAW_ITEM, id: 'raw_WmFnb3I', name: 'Zagor 001', folderPath: '/unmatched/Zagor 001.cbz' };
         const searches: string[] = [];
         stubFetchRouter([

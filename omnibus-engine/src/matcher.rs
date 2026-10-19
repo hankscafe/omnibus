@@ -116,12 +116,16 @@ pub async fn record_sweep_result(db: &Db, value: serde_json::Value) {
 /// from the beginning. A series created behind the cursor waits at most one lap, which is fine for
 /// an hourly job. "updatedAt" isn't read at all: the Any driver has no mapping for Prisma's
 /// DateTime columns.
-pub(crate) fn unmatched_candidates_sql() -> &'static str {
-    r#"SELECT id, name, year, "folderPath" FROM "Series"
+/// The page size is SWEEP_PAGE itself: end-of-set detection treats a page shorter than it as the
+/// end, so a LIMIT set separately could make every page look short and bring the stall back.
+pub(crate) fn unmatched_candidates_sql() -> String {
+    format!(
+        r#"SELECT id, name, year, "folderPath" FROM "Series"
        WHERE ("matchState" IS NULL OR "matchState" <> 'IGNORED')
          AND ("matchState" = 'UNMATCHED' OR "metadataId" IS NULL OR "metadataId" LIKE 'unmatched%')
          AND ($1 IS NULL OR "id" > $2)
-       ORDER BY "id" ASC LIMIT 100"#
+       ORDER BY "id" ASC LIMIT {SWEEP_PAGE}"#
+    )
 }
 
 const SWEEP_PAGE: usize = 100;
@@ -159,7 +163,7 @@ async fn clear_sweep_cursor(db: &Db) {
 }
 
 async fn fetch_unmatched_candidates(db: &Db, cursor: Option<&str>) -> anyhow::Result<Vec<sqlx::any::AnyRow>> {
-    Ok(sqlx::query(unmatched_candidates_sql())
+    Ok(sqlx::query(&unmatched_candidates_sql())
         .bind(cursor)
         .bind(cursor)
         .fetch_all(&db.pool)
@@ -557,7 +561,7 @@ mod tests {
                 .execute(&db.pool).await.expect("seed series");
         }
 
-        let rows = sqlx::query(unmatched_candidates_sql()).fetch_all(&db.pool).await.expect("candidates");
+        let rows = fetch_unmatched_candidates(&db, None).await.expect("candidates");
         let mut ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("id")).collect();
         ids.sort();
         assert_eq!(ids, vec!["s_null_id", "s_placeholder", "s_unmatched"]);

@@ -7,6 +7,7 @@ import { auditLog } from '../helpers/setup-global';
 const mocks = vi.hoisted(() => ({
     seriesFindMany: vi.fn(),
     issueFindMany: vi.fn(),
+    attachedVolumeFindMany: vi.fn(),
     libraryFindMany: vi.fn(),
     systemSettingFindMany: vi.fn(),
     seriesUpdate: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock('@/lib/db', () => ({
     prisma: {
         series: { findMany: mocks.seriesFindMany, update: mocks.seriesUpdate },
         issue: { findMany: mocks.issueFindMany, update: mocks.issueUpdate },
+        attachedVolume: { findMany: mocks.attachedVolumeFindMany },
         library: { findMany: mocks.libraryFindMany },
         systemSetting: { findMany: mocks.systemSettingFindMany }
     }
@@ -61,6 +63,8 @@ describe('API Route: Bulk Library Renamer', () => {
         // The route now resolves the manga pattern BEFORE the engine offload, so every path reads
         // settings; individual tests override with their own values.
         mocks.systemSettingFindMany.mockResolvedValue([]);
+        // No attachment keeps any series as its own unless a test says so (#239).
+        mocks.attachedVolumeFindMany.mockResolvedValue([]);
     });
 
     it('returns the engine summary without running the local loop when the engine handles the job', async () => {
@@ -301,12 +305,12 @@ describe('API Route: Bulk Library Renamer', () => {
             {
                 id: 'local_book', seriesId: 'series_1', number: '1', name: 'Vol. 1', releaseDate: null,
                 filePath: '/data/comics/DC Comics/Batman (2016)/Batman Compendium 01.cbz',
-                attachedVolume: { kind: 'COLLECTED', metadataSource: 'LOCAL', name: 'Batman Compendium' },
+                attachedVolume: { kind: 'COLLECTED', metadataSource: 'LOCAL', name: 'Batman Compendium', seriesId: 'series_1' },
             },
             {
                 id: 'cv_book', seriesId: 'series_1', number: '2', name: 'Vol. 2: City of Owls', releaseDate: '2016-06-01',
                 filePath: '/data/comics/DC Comics/Batman (2016)/Batman TPB 02.cbz',
-                attachedVolume: { kind: 'COLLECTED', metadataSource: 'COMICVINE', name: 'Batman' },
+                attachedVolume: { kind: 'COLLECTED', metadataSource: 'COMICVINE', name: 'Batman', seriesId: 'series_1' },
             },
             {
                 id: 'issue_3', seriesId: 'series_1', number: '3', name: 'Batman #3', releaseDate: '2016-03-01',
@@ -328,12 +332,70 @@ describe('API Route: Bulk Library Renamer', () => {
 
         // The route has to ask for what the rule needs: the attachment's source and name.
         expect(mocks.issueFindMany).toHaveBeenCalledWith(expect.objectContaining({
-            include: { attachedVolume: { select: expect.objectContaining({ kind: true, metadataSource: true, name: true }) } },
+            include: { attachedVolume: { select: expect.objectContaining({ kind: true, metadataSource: true, name: true, seriesId: true }) } },
         }));
         const targets = mocks.fsMove.mock.calls.map(c => path.basename(c[1]));
         expect(targets).toContain('Batman Compendium Vol. 001 (2016).cbz');
         expect(targets).toContain('Batman Vol. 002 (2016).cbz');
         expect(targets).toContain('Batman #003.cbz');
         expect(targets).not.toContain('Batman Vol. 001 (2016).cbz');
+    });
+
+    // #239: a collected volume kept as its own series ("Leave it as its own series") is Standardized
+    // from its OWN page: its books take the collected pattern in its own folder, under its own name
+    // and year, and each book keeps its own year. A row carrying ANOTHER series' attachment id (what
+    // the child's sync once adopted) is named by this series' rules, never by that foreign lane.
+    describe('a volume kept as its own series (#239)', () => {
+        const child = {
+            id: 'child', libraryId: 'lib_1', folderPath: '/data/comics/DC Comics/Absolute Batman (2025)',
+            publisher: 'DC Comics', name: 'Absolute Batman', year: 2025, isManga: false,
+            metadataSource: 'COMICVINE', metadataId: '167340',
+        };
+        const books = [
+            {
+                id: 'c1', seriesId: 'child', number: '1', name: 'The Zoo', releaseDate: '2025-03-25',
+                filePath: '/data/comics/DC Comics/Absolute Batman (2025)/Absolute Batman #01.cbz', attachedVolume: null,
+            },
+            {
+                id: 'c2', seriesId: 'child', number: '2', name: 'Abomination', releaseDate: '2026-01-20',
+                filePath: '/data/comics/DC Comics/Absolute Batman (2025)/Absolute Batman #02.cbz',
+                attachedVolume: { kind: 'COLLECTED', metadataSource: 'COMICVINE', name: 'Absolute Batman', seriesId: 'parent' },
+            },
+        ];
+        const run = async () => {
+            mocks.libraryFindMany.mockResolvedValue([{ id: 'lib_1', path: '/data/comics' }]);
+            mocks.fsExistsSync.mockImplementation((p: string | Buffer | URL) => !!p && !/Vol\. 00\d|#00\d/.test(p.toString()));
+            mocks.seriesFindMany.mockResolvedValue([child]);
+            mocks.issueFindMany.mockResolvedValue(books);
+            const req = new NextRequest('http://localhost/api/library/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seriesIds: ['child'], folderPattern: '{Publisher}/{Series} ({Year})', filePattern: '{Series} #{Issue}' }),
+            });
+            return (await POST(req)).json();
+        };
+
+        beforeEach(() => { mocks.fsMove.mockClear(); });
+
+        it('names its books as collected editions in its own folder', async () => {
+            mocks.attachedVolumeFindMany.mockResolvedValue([{ kind: 'COLLECTED' }]);
+            const data = await run();
+            expect(data).toMatchObject({ success: true, filesRenamed: 2, conflicts: 0 });
+            expect(mocks.attachedVolumeFindMany).toHaveBeenCalledWith(expect.objectContaining({
+                where: { retained: true, metadataSource: 'COMICVINE', volumeId: '167340', seriesId: { not: 'child' } },
+            }));
+            const targets = mocks.fsMove.mock.calls.map(c => c[1].toString().replace(/\\/g, '/'));
+            expect(targets).toEqual([
+                '/data/comics/DC Comics/Absolute Batman (2025)/Absolute Batman Vol. 001 (2025).cbz',
+                '/data/comics/DC Comics/Absolute Batman (2025)/Absolute Batman Vol. 002 (2026).cbz',
+            ]);
+        });
+
+        it('keeps the plain pattern when nothing keeps it, whatever a stray attachment id says', async () => {
+            const data = await run();
+            expect(data).toMatchObject({ success: true, filesRenamed: 2 });
+            const targets = mocks.fsMove.mock.calls.map(c => path.basename(c[1]));
+            expect(targets).toEqual(['Absolute Batman #001.cbz', 'Absolute Batman #002.cbz']);
+        });
     });
 });

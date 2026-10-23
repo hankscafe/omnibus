@@ -123,9 +123,78 @@ pub async fn sync_series_attachments(db: &Db, client: &Client, series_id: &str) 
     }
 }
 
+/// #239: the Series that keep a RETAINED attachment's volume as their own — the admin chose "Leave
+/// it as its own series". The child is found exactly the way the attach POST finds it (same
+/// metadataSource, metadataId = volumeId, not the parent), so a rematch or delete of the child needs
+/// no bookkeeping anywhere: the lookup simply stops matching. Empty = not retained (flag unset, a
+/// LOCAL edition, or no such child). Twin of retainedChildren (src/lib/retained-attachments.ts).
+pub(crate) async fn retained_children(db: &Db, attachment_id: &str) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>(
+        r#"SELECT s.id FROM "AttachedVolume" av
+           JOIN "Series" s ON s."metadataSource" = av."metadataSource" AND s."metadataId" = av."volumeId" AND s.id <> av."seriesId"
+           WHERE av.id = $1 AND av.retained = true AND av."metadataSource" <> 'LOCAL'
+           ORDER BY s.id"#,
+    )
+    .bind(attachment_id)
+    .fetch_all(&db.pool)
+    .await?)
+}
+
+/// #239: the kinds of the retained attachments that keep THIS series as their volume — the child's
+/// side of `retained_children`. The renamer asks it once per series: a series retained by a
+/// COLLECTED attachment names its books with the collected pattern. Twin of retainedKindsForSeries.
+pub(crate) async fn retaining_kinds(db: &Db, series_id: &str) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>(
+        r#"SELECT DISTINCT av.kind FROM "AttachedVolume" av
+           JOIN "Series" s ON s."metadataSource" = av."metadataSource" AND s."metadataId" = av."volumeId" AND s.id <> av."seriesId"
+           WHERE s.id = $1 AND av.retained = true AND av."metadataSource" <> 'LOCAL'
+           ORDER BY av.kind"#,
+    )
+    .bind(series_id)
+    .fetch_all(&db.pool)
+    .await?)
+}
+
+/// #239: puts a lane back in order before it syncs, and says whether it is retained.
+///
+/// 1. A lane row that sits in ANOTHER series is unbound from this attachment. Before the adoption
+///    guard (metadata.rs `cross_series_candidates`) the child's own metadata sync could take the
+///    parent's skeleton for a book it lacked, and the row kept the parent's attachment id: the
+///    absorb then found it as its own "twin" (delete, then update → "Record to update not found"),
+///    and a Refresh "updated" it in the child instead of recreating the parent's skeleton. Moving
+///    issues to another series from the series page (`issue/move`) can leave the same shape: it
+///    changes `seriesId` and keeps the link. Either way the row now belongs to the series it sits
+///    in, where it is simply that series' own issue, so unbinding is the right result.
+/// 2. A `retained` flag whose child no longer exists (deleted, or rematched to another volume) is
+///    cleared, so the attachment is an ordinary lane again and a returning volume is asked about
+///    afresh — the same outcome the earlier pointer design gave with `onDelete: SetNull`.
+async fn prepare_lane(db: &Db, attachment_id: &str, series_id: &str, retained_flag: bool) -> anyhow::Result<bool> {
+    let healed = sqlx::query(r#"UPDATE "Issue" SET "attachedVolumeId" = NULL WHERE "attachedVolumeId" = $1 AND "seriesId" <> $2"#)
+        .bind(attachment_id)
+        .bind(series_id)
+        .execute(&db.pool)
+        .await?
+        .rows_affected();
+    if healed > 0 {
+        log::warn!("[Attached] Unbound {} row(s) of attachment {} that sat in another series.", healed, attachment_id);
+    }
+    if !retained_flag {
+        return Ok(false);
+    }
+    if !retained_children(db, attachment_id).await?.is_empty() {
+        return Ok(true);
+    }
+    sqlx::query(r#"UPDATE "AttachedVolume" SET retained = false WHERE id = $1"#)
+        .bind(attachment_id)
+        .execute(&db.pool)
+        .await?;
+    log::info!("[Attached] Attachment {} was kept as its own series, but that series is gone — it is an ordinary lane again.", attachment_id);
+    Ok(false)
+}
+
 async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: bool) -> anyhow::Result<AttachSummary> {
     let row = match sqlx::query(
-        r#"SELECT id, "seriesId", "metadataSource", "volumeId", kind FROM "AttachedVolume" WHERE id = $1"#,
+        r#"SELECT id, "seriesId", "metadataSource", "volumeId", kind, CAST(retained AS INTEGER) AS retained FROM "AttachedVolume" WHERE id = $1"#,
     )
     .bind(attachment_id)
     .fetch_optional(&db.pool)
@@ -139,15 +208,12 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
     let source: String = row.try_get("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string());
     let volume_id: String = row.get("volumeId");
     let kind: String = row.try_get("kind").unwrap_or_else(|_| "ANNUAL".to_string());
+    let retained_flag = row.try_get::<i64, _>("retained").map(|v| v != 0).unwrap_or(false);
+    let retained = prepare_lane(db, attachment_id, &series_id, retained_flag).await?;
     // #203 LOCAL: no provider volume to fetch — the pass is the name claim plus series.json coverage.
     if source == "LOCAL" {
         return sync_local_attachment(db, attachment_id, &series_id, &kind).await;
     }
-    // #203 COLLECTED: the lane serves both kinds now, so isAnnual follows the ATTACHMENT's kind —
-    // a trade is not an annual, and flagging it as one would put it in the annual numbering domain,
-    // label it "Annual #N" in every view, and sort it among comics it merely reprints. Written as a
-    // SQL literal, not a bind: the Any driver has no portable boolean bind (the 5H lesson).
-    let annual_lit = if kind == "ANNUAL" { "true" } else { "false" };
 
     // file_metadata_priority (discussion #177) applies to an attached lane exactly as it does to the
     // parent volume: a provider sync only fills blanks that the files didn't already answer.
@@ -165,6 +231,36 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         "METRON" => fetch_metron_lane(db, client, &volume_id).await?,
         _ => fetch_comicvine_lane(db, client, &volume_id).await?,
     };
+
+    let lane = Lane { attachment_id, series_id: &series_id, source: &source, volume_id: &volume_id, kind: &kind, claim, retained, file_priority };
+    apply_lane(db, &lane, &volume, &issues).await
+}
+
+/// One provider lane's identity and how this pass may treat it.
+struct Lane<'a> {
+    attachment_id: &'a str,
+    series_id: &'a str,
+    source: &'a str,
+    volume_id: &'a str,
+    kind: &'a str,
+    claim: bool,
+    /// #239: the volume is kept as its own series. Its books are that series' rows, so this lane
+    /// creates no skeletons and claims nothing — it only refreshes rows the parent already holds.
+    retained: bool,
+    file_priority: bool,
+}
+
+/// Writes one fetched lane into the database: refresh the rows the lane already has, claim the
+/// parent's matching files, and create skeletons for the books nobody owns. Split from the fetch so
+/// the rules are testable without a provider.
+async fn apply_lane(db: &Db, lane: &Lane<'_>, volume: &LaneVolume, issues: &[LaneIssue]) -> anyhow::Result<AttachSummary> {
+    let Lane { attachment_id, series_id, source, volume_id, kind, claim, retained, file_priority } = *lane;
+    let (series_id, source, volume_id, kind) = (series_id.to_string(), source.to_string(), volume_id.to_string(), kind.to_string());
+    // #203 COLLECTED: the lane serves both kinds now, so isAnnual follows the ATTACHMENT's kind —
+    // a trade is not an annual, and flagging it as one would put it in the annual numbering domain,
+    // label it "Annual #N" in every view, and sort it among comics it merely reprints. Written as a
+    // SQL literal, not a bind: the Any driver has no portable boolean bind (the 5H lesson).
+    let annual_lit = if kind == "ANNUAL" { "true" } else { "false" };
 
     let mut summary = AttachSummary {
         attachment_id: attachment_id.to_string(),
@@ -215,19 +311,21 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         })
         .collect();
 
-    for issue in &issues {
+    for issue in issues {
         // ---- ID-anchored: the row this provider issue already owns, wherever the user moved its
-        //      number to. Nothing else in the lane is a candidate.
+        //      number to. Nothing else in the lane is a candidate — and only in THIS series (#239):
+        //      a lane row elsewhere is never this lane's to refresh (prepare_lane unbinds it).
         let existing = sqlx::query(
             r#"SELECT id, number, name, description, "releaseDate", "coverUrl", "matchState",
                       CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata",
                       CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover",
                       writers, artists, "coverArtists", colorists, letterers, characters, teams, locations,
                       inker, editor, translator, "coversIssues"
-               FROM "Issue" WHERE "attachedVolumeId" = $1 AND "metadataId" = $2"#,
+               FROM "Issue" WHERE "attachedVolumeId" = $1 AND "metadataId" = $2 AND "seriesId" = $3"#,
         )
         .bind(attachment_id)
         .bind(&issue.source_id)
+        .bind(&series_id)
         .fetch_optional(&db.pool)
         .await?;
 
@@ -238,7 +336,8 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         // Claiming and id-adoption look for LOCAL annual rows; a collected lane has no equivalent
         // (nothing on disk is flagged "collected" until it belongs to an attachment), so those
         // passes only run for annual attachments.
-        let adopted_row = if existing.is_none() && kind == "ANNUAL" {
+        // A retained lane (#239) reaches for nothing: the books are the child series' rows.
+        let adopted_row = if existing.is_none() && kind == "ANNUAL" && !retained {
             find_unbound_by_id(db, &series_id, &issue.source_id, &source).await?
         } else {
             None
@@ -250,7 +349,7 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         //      by NUMBER: an unbound annual row whose number matches. Silent by decision
         //      (2026-08-26) — the summary is the honesty, and detach / the editor's exact-id field
         //      are the undo.
-        let claimed_row = if existing.is_none() && adopted_row.is_none() && claim {
+        let claimed_row = if existing.is_none() && adopted_row.is_none() && claim && !retained {
             match find_claim_candidate_by_name(db, &series_id, &series_name, attachment_id, &name_refs, &issue.number).await? {
                 Some(r) => {
                     log::info!("[Attached] Claimed a file by NAME for volume {} #{} on series {}.", volume_id, issue.number, series_id);
@@ -264,6 +363,12 @@ async fn sync_attachment(db: &Db, client: &Client, attachment_id: &str, claim: b
         };
 
         let target = existing.as_ref().or(adopted_row.as_ref()).or(claimed_row.as_ref());
+        // #239: one row per book. The child series kept as its own already has a row for every book
+        // of its volume, so a skeleton here would list an owned book as missing on the parent's
+        // shelf (and offer to request it).
+        if target.is_none() && retained {
+            continue;
+        }
         // An id-adoption counts as a claim in the summary: from the user's side both are "a file I
         // already owned joined this volume".
         let was_claim = existing.is_none() && (adopted_row.is_some() || claimed_row.is_some());
@@ -1071,5 +1176,201 @@ mod tests {
         assert!(find_unbound_by_id(&db, "s1", "60437", "COMICVINE").await.expect("query ok").is_none());
         // The source has to agree: a Metron id of the same digits is a different provider's issue.
         assert!(find_unbound_by_id(&db, "s1", "60436", "METRON").await.expect("query ok").is_none());
+    }
+
+    // ==== #239: "Leave it as its own series" — the retained flag, and the lane rows that strayed. ====
+
+    /// The three tables with the column types Prisma creates (prisma migrate diff, SQLite), foreign
+    /// keys left out so a test can seed rows in any order.
+    async fn fixture_prisma(tag: &str) -> Db {
+        let base = std::env::temp_dir().join(format!("omnibus_av239_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create fixture dir");
+        let db_file = base.join("av.db");
+        std::fs::File::create(&db_file).expect("pre-create sqlite file");
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+        for ddl in [
+            r#"CREATE TABLE "Series" ("id" TEXT NOT NULL PRIMARY KEY, "cvId" INTEGER, "metronId" INTEGER, "metadataId" TEXT,
+                "metadataSource" TEXT NOT NULL DEFAULT 'COMICVINE', "matchState" TEXT DEFAULT 'UNMATCHED', "name" TEXT NOT NULL,
+                "year" INTEGER NOT NULL, "publisher" TEXT, "folderPath" TEXT NOT NULL, "universe" TEXT, "seriesGroup" TEXT,
+                "monitored" BOOLEAN, "isManga" BOOLEAN NOT NULL DEFAULT false, "libraryId" TEXT,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"#,
+            r#"CREATE TABLE "Issue" ("id" TEXT NOT NULL PRIMARY KEY, "seriesId" TEXT NOT NULL, "cvId" INTEGER, "metronId" INTEGER,
+                "metadataId" TEXT, "metadataSource" TEXT NOT NULL DEFAULT 'COMICVINE', "matchState" TEXT DEFAULT 'UNMATCHED',
+                "number" TEXT NOT NULL, "isAnnual" BOOLEAN NOT NULL DEFAULT false, "attachedVolumeId" TEXT,
+                "status" TEXT NOT NULL DEFAULT 'WANTED', "filePath" TEXT, "pageCount" INTEGER NOT NULL DEFAULT 0, "name" TEXT,
+                "description" TEXT, "releaseDate" TEXT, "coverUrl" TEXT, "writers" TEXT, "artists" TEXT, "coverArtists" TEXT,
+                "universe" TEXT, "colorists" TEXT, "letterers" TEXT, "characters" TEXT, "genres" TEXT, "storyArcs" TEXT,
+                "teams" TEXT, "locations" TEXT, "inker" TEXT, "editor" TEXT, "translator" TEXT, "coversIssues" TEXT,
+                "hasCustomMetadata" BOOLEAN NOT NULL DEFAULT false, "hasCustomCover" BOOLEAN NOT NULL DEFAULT false,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"#,
+            r#"CREATE TABLE "AttachedVolume" ("id" TEXT NOT NULL PRIMARY KEY, "seriesId" TEXT NOT NULL,
+                "metadataSource" TEXT NOT NULL DEFAULT 'COMICVINE', "volumeId" TEXT NOT NULL, "kind" TEXT NOT NULL DEFAULT 'ANNUAL',
+                "name" TEXT, "startYear" INTEGER, "issueCount" INTEGER NOT NULL DEFAULT 0, "retained" BOOLEAN NOT NULL DEFAULT false,
+                "lastSyncedAt" DATETIME, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+        }
+        db
+    }
+
+    /// The #239 field fixture: Absolute Batman (2024, CV 160294) with the 2025 collected volume
+    /// (CV 167340) attached, and that volume ALSO a series of its own.
+    async fn seed_absolute_batman(db: &Db, retained: bool) {
+        for (id, meta, year, folder) in [
+            ("parent", "160294", 2024, "/c/DC Comics/Absolute Batman (2024)"),
+            ("child", "167340", 2025, "/c/DC Comics/Absolute Batman (2025)"),
+        ] {
+            sqlx::query(r#"INSERT INTO "Series" (id, "metadataId", "metadataSource", name, year, "folderPath") VALUES ($1, $2, 'COMICVINE', 'Absolute Batman', $3, $4)"#)
+                .bind(id).bind(meta).bind(year).bind(folder).execute(&db.pool).await.unwrap();
+        }
+        sqlx::query(&format!(
+            r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, retained) VALUES ('att', 'parent', 'COMICVINE', '167340', 'COLLECTED', 'Absolute Batman', {})"#,
+            if retained { "true" } else { "false" }
+        ))
+        .execute(&db.pool).await.unwrap();
+    }
+
+    async fn add_issue(db: &Db, id: &str, series: &str, number: &str, meta: &str, file: Option<&str>, attached: Option<&str>) {
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "metadataId", "filePath", "attachedVolumeId", status) VALUES ($1, $2, $3, $4, $5, $6, 'WANTED')"#)
+            .bind(id).bind(series).bind(number).bind(meta).bind(file).bind(attached)
+            .execute(&db.pool).await.unwrap();
+    }
+
+    fn lane_issue(id: &str, number: &str) -> LaneIssue {
+        LaneIssue {
+            source_id: id.into(),
+            number: number.into(),
+            name: None,
+            description: None,
+            cover_url: None,
+            release_date: None,
+            credits: Default::default(),
+        }
+    }
+
+    fn lane(retained: bool) -> Lane<'static> {
+        Lane { attachment_id: "att", series_id: "parent", source: "COMICVINE", volume_id: "167340", kind: "COLLECTED", claim: true, retained, file_priority: false }
+    }
+
+    async fn rows(db: &Db) -> Vec<(String, String, Option<String>)> {
+        sqlx::query(r#"SELECT id, "seriesId", "attachedVolumeId" FROM "Issue" ORDER BY id"#)
+            .fetch_all(&db.pool).await.unwrap()
+            .iter()
+            .map(|r| (r.get("id"), r.get("seriesId"), r.get("attachedVolumeId")))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_attachment_is_retained_only_while_its_flag_is_set_and_the_child_exists() {
+        let db = fixture_prisma("retained").await;
+        seed_absolute_batman(&db, true).await;
+        assert_eq!(retained_children(&db, "att").await.unwrap(), vec!["child".to_string()]);
+        assert_eq!(retaining_kinds(&db, "child").await.unwrap(), vec!["COLLECTED".to_string()]);
+        // The parent is never its own child.
+        assert!(retaining_kinds(&db, "parent").await.unwrap().is_empty());
+
+        // The child rematched to another volume: no bookkeeping, the lookup just stops matching.
+        sqlx::query(r#"UPDATE "Series" SET "metadataId" = '999999' WHERE id = 'child'"#).execute(&db.pool).await.unwrap();
+        assert!(retained_children(&db, "att").await.unwrap().is_empty());
+        assert!(retaining_kinds(&db, "child").await.unwrap().is_empty());
+
+        // Flag unset: an ordinary lane even with the child present.
+        let db = fixture_prisma("retained_off").await;
+        seed_absolute_batman(&db, false).await;
+        assert!(retained_children(&db, "att").await.unwrap().is_empty());
+        assert!(retaining_kinds(&db, "child").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn preparing_a_lane_unbinds_its_rows_in_other_series_and_forgets_a_choice_whose_child_is_gone() {
+        let db = fixture_prisma("prepare").await;
+        seed_absolute_batman(&db, true).await;
+        // The parent's own lane row, and the skeleton the child's sync used to adopt — it sits in the
+        // child still carrying the parent's attachment id (the reproduction's state).
+        add_issue(&db, "lane_owned", "parent", "1", "9200001", Some("/c/x.cbz"), Some("att")).await;
+        add_issue(&db, "adopted", "child", "2", "9200002", None, Some("att")).await;
+
+        assert!(prepare_lane(&db, "att", "parent", true).await.unwrap(), "the child exists: still retained");
+        assert_eq!(rows(&db).await, vec![
+            ("adopted".to_string(), "child".to_string(), None),
+            ("lane_owned".to_string(), "parent".to_string(), Some("att".to_string())),
+        ]);
+
+        // The child is deleted: the flag clears itself and the lane is ordinary again.
+        sqlx::query(r#"DELETE FROM "Series" WHERE id = 'child'"#).execute(&db.pool).await.unwrap();
+        assert!(!prepare_lane(&db, "att", "parent", true).await.unwrap());
+        let flag: i64 = sqlx::query_scalar(r#"SELECT CAST(retained AS INTEGER) FROM "AttachedVolume" WHERE id = 'att'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(flag, 0);
+    }
+
+    #[tokio::test]
+    async fn a_retained_lane_creates_no_skeletons_and_claims_nothing() {
+        let db = fixture_prisma("apply_retained").await;
+        seed_absolute_batman(&db, true).await;
+        // A file-backed lane row the parent already holds is still refreshed …
+        add_issue(&db, "lane_owned", "parent", "1", "9200001", Some("/c/DC Comics/Absolute Batman (2024)/Absolute Batman Vol. 001 (2025).cbz"), Some("att")).await;
+        // … but an unbound file in the parent named after an attachment is NOT claimed: the books are the child's.
+        sqlx::query(r#"UPDATE "AttachedVolume" SET name = 'Absolute Batman Deluxe' WHERE id = 'att'"#).execute(&db.pool).await.unwrap();
+        add_issue(&db, "unbound", "parent", "2", "unmatched_x", Some("/c/DC Comics/Absolute Batman (2024)/Absolute Batman Deluxe Vol. 2.cbz"), None).await;
+        // The child's own rows for the volume.
+        add_issue(&db, "child_1", "child", "1", "9200001", Some("/c/DC Comics/Absolute Batman (2025)/Absolute Batman #01.cbz"), None).await;
+        add_issue(&db, "child_2", "child", "2", "9200002", None, None).await;
+
+        let volume = LaneVolume { name: Some("Absolute Batman Deluxe".to_string()), ..Default::default() };
+        let issues = [lane_issue("9200001", "1"), lane_issue("9200002", "2")];
+        let summary = apply_lane(&db, &lane(true), &volume, &issues).await.unwrap();
+        assert_eq!((summary.created, summary.claimed, summary.updated), (0, 0, 1));
+        let lane_rows: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "attachedVolumeId" = 'att'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(lane_rows, 1, "one row per book: no skeleton for the child's books");
+        let unbound: Option<String> = sqlx::query_scalar(r#"SELECT "attachedVolumeId" FROM "Issue" WHERE id = 'unbound'"#).fetch_one(&db.pool).await.unwrap();
+        assert!(unbound.is_none());
+
+        // The same lane NOT retained claims that file by name and creates the missing skeleton.
+        sqlx::query(r#"UPDATE "AttachedVolume" SET retained = false WHERE id = 'att'"#).execute(&db.pool).await.unwrap();
+        let summary = apply_lane(&db, &lane(false), &volume, &issues).await.unwrap();
+        assert_eq!((summary.claimed, summary.updated), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_retained_annual_lane_adopts_no_row_by_id() {
+        let db = fixture_prisma("apply_retained_annual").await;
+        seed_absolute_batman(&db, true).await;
+        sqlx::query(r#"UPDATE "AttachedVolume" SET kind = 'ANNUAL' WHERE id = 'att'"#).execute(&db.pool).await.unwrap();
+        // An unbound annual row in the parent already carrying the provider issue's id: the shape
+        // id-adoption takes. Claiming is off so only the id-adoption pass can reach it.
+        add_issue(&db, "annual_row", "parent", "2", "9200002", Some("/c/DC Comics/Absolute Batman (2024)/Absolute Batman Annual 002.cbz"), None).await;
+        sqlx::query(r#"UPDATE "Issue" SET "isAnnual" = true WHERE id = 'annual_row'"#).execute(&db.pool).await.unwrap();
+        let annual_lane = |retained| Lane { kind: "ANNUAL", claim: false, ..lane(retained) };
+
+        let summary = apply_lane(&db, &annual_lane(true), &LaneVolume::default(), &[lane_issue("9200002", "2")]).await.unwrap();
+        assert_eq!((summary.created, summary.updated), (0, 0));
+        let bound: Option<String> = sqlx::query_scalar(r#"SELECT "attachedVolumeId" FROM "Issue" WHERE id = 'annual_row'"#).fetch_one(&db.pool).await.unwrap();
+        assert!(bound.is_none(), "a retained lane reaches for nothing");
+
+        // The same lane NOT retained adopts it by id.
+        apply_lane(&db, &annual_lane(false), &LaneVolume::default(), &[lane_issue("9200002", "2")]).await.unwrap();
+        let bound: Option<String> = sqlx::query_scalar(r#"SELECT "attachedVolumeId" FROM "Issue" WHERE id = 'annual_row'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(bound.as_deref(), Some("att"));
+    }
+
+    #[tokio::test]
+    async fn the_lane_finds_its_rows_only_in_its_own_series() {
+        let db = fixture_prisma("apply_guard").await;
+        seed_absolute_batman(&db, false).await;
+        // The reproduction's damage, without the repair: a lane row that strayed into the child.
+        add_issue(&db, "adopted", "child", "2", "9200002", None, Some("att")).await;
+
+        let summary = apply_lane(&db, &lane(false), &LaneVolume::default(), &[lane_issue("9200002", "2")]).await.unwrap();
+        // The parent gets its own skeleton back instead of the sync "updating" the child's row.
+        assert_eq!((summary.created, summary.updated), (1, 0));
+        let parent_rows: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE "seriesId" = 'parent' AND "attachedVolumeId" = 'att' AND "metadataId" = '9200002'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(parent_rows, 1);
+        let adopted: (String, Option<String>) = sqlx::query(r#"SELECT "seriesId", "attachedVolumeId" FROM "Issue" WHERE id = 'adopted'"#)
+            .fetch_one(&db.pool).await.map(|r| (r.get("seriesId"), r.get("attachedVolumeId"))).unwrap();
+        assert_eq!(adopted, ("child".to_string(), Some("att".to_string())), "untouched here — prepare_lane is what unbinds it");
     }
 }

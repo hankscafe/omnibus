@@ -346,9 +346,12 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         // The in-series snapshot the pairing runs against must exclude annual rows outright.
         const snapshot = mocks.issueFindMany.mock.calls.map(c => c[0]).find(a => a?.where?.seriesId === 'series_1');
         expect(snapshot.where.isAnnual).toBe(false);
-        // The cross-series adoption probe carries the same exclusion.
+        // The cross-series adoption probe carries the same exclusion…
         const adoption = mocks.issueFindFirst.mock.calls.map(c => c[0]).find(a => a?.where?.metadataId === '300001');
         expect(adoption?.where?.isAnnual).toBe(false);
+        // …and never reaches for an attached lane's skeleton (#239): a volume kept as its own series
+        // used to take the parent's COLLECTED skeleton here, carrying the parent's attachment id along.
+        expect(adoption?.where?.attachedVolumeId).toBeNull();
     });
 
     // Library-aware recommendations (Beta A): the volume call asks for the VOLUME resource's credit

@@ -377,6 +377,11 @@ model AttachedVolume {
   name           String?  // provider volume name, cached so the UI needn't re-fetch to label an attachment
   startYear      Int?
   issueCount     Int      @default(0) // issues imported from this volume, refreshed by each sync pass
+  // #239: the admin chose "Leave it as its own series" — the volume is also a Series of its own and
+  // keeps its files, folder and rows. A flag, not a pointer: the child is found the way the attach
+  // POST finds it (same metadataSource, metadataId = volumeId, not this series), and the attachment
+  // counts as retained only while that child exists (retained-attachments.ts / attached_volumes.rs).
+  retained       Boolean  @default(false)
   lastSyncedAt   DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @default(now()) @updatedAt

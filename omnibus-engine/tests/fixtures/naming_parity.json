@@ -1,5 +1,5 @@
 {
-  "_about": "Naming parity: the engine (omnibus-engine/src/naming.rs) and Node (src/lib/utils/naming.ts) must turn the same inputs into byte-identical names. Both test suites read this file. Padding: \"none\", \"2\", \"3\"; anything else (\"\", unknown) means the default, 3.",
+  "_about": "Naming parity: the engine (omnibus-engine/src/naming.rs) and Node (src/lib/utils/naming.ts) must turn the same inputs into byte-identical names. Both test suites read this file. patternChoice: which template one issue gets (renamer.rs file_pattern_for_issue / file-pattern.ts filePatternForIssue). Padding: \"none\", \"2\", \"3\"; anything else (\"\", unknown) means the default, 3.",
   "padIssue": [
     ["1", "3", "001"], ["1", "2", "01"], ["1", "none", "1"], ["1", "", "001"], ["1", "bogus", "001"],
     ["38", "3", "038"], ["38", "2", "38"], ["38", "none", "38"],
@@ -77,5 +77,18 @@
     { "label": "a pattern that climbs out", "pattern": "../{Series}", "input": { "series": "Batman" }, "expected": null },
     { "label": "a drive prefix", "pattern": "C:/{Series}", "input": { "series": "Batman" }, "expected": null },
     { "label": "a pattern that leaves no folder", "pattern": "{SeriesGroup}", "input": { "series": "Batman" }, "expected": null }
+  ],
+  "patternChoice": [
+    {"label": "a plain issue takes the series pattern", "annual": false, "collected": false, "retainedCollected": false, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} #{Issue}"},
+    {"label": "manga takes the manga pattern", "annual": false, "collected": false, "retainedCollected": false, "manga": true, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Vol. {Issue}"},
+    {"label": "an annual takes the Mylar annual name", "annual": true, "collected": false, "retainedCollected": false, "manga": true, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Annual #{Issue} ({IssueYear})"},
+    {"label": "a collected edition's book takes the collected default", "annual": false, "collected": true, "retainedCollected": false, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Vol. {Issue} ({IssueYear})"},
+    {"label": "the collected pattern is configurable", "annual": false, "collected": true, "retainedCollected": false, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": "{Series} v{Issue}", "expected": "{Series} v{Issue}"},
+    {"label": "a blank collected pattern falls back to the default", "annual": false, "collected": true, "retainedCollected": false, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": "   ", "expected": "{Series} Vol. {Issue} ({IssueYear})"},
+    {"label": "collected outranks annual and manga", "annual": true, "collected": true, "retainedCollected": false, "manga": true, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Vol. {Issue} ({IssueYear})"},
+    {"label": "#239: a series kept as its own by a COLLECTED attachment names its books as collected editions", "annual": false, "collected": false, "retainedCollected": true, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Vol. {Issue} ({IssueYear})"},
+    {"label": "#239: a kept-as-its-own collected series uses the configured collected pattern", "annual": false, "collected": false, "retainedCollected": true, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": "{Series} v{Issue}", "expected": "{Series} v{Issue}"},
+    {"label": "#239: a kept-as-its-own collected series outranks the manga pattern", "annual": false, "collected": false, "retainedCollected": true, "manga": true, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Vol. {Issue} ({IssueYear})"},
+    {"label": "#239: an annual inside such a series keeps its annual name", "annual": true, "collected": false, "retainedCollected": true, "manga": false, "filePattern": "{Series} #{Issue}", "mangaFilePattern": "{Series} Vol. {Issue}", "collectedFilePattern": null, "expected": "{Series} Annual #{Issue} ({IssueYear})"}
   ]
 }

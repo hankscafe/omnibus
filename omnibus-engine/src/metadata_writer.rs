@@ -648,7 +648,7 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
     // Mylar-internal structure. This is half of the zero-API restore: series.json says WHICH
     // volumes are attached, the annual files' own ComicInfo says which one each file came from.
     let attachment_rows = sqlx::query(
-        r#"SELECT id, "metadataSource", "volumeId", kind, name, "startYear" FROM "AttachedVolume" WHERE "seriesId" = $1 ORDER BY "createdAt" ASC"#,
+        r#"SELECT id, "metadataSource", "volumeId", kind, name, "startYear", CAST(retained AS INTEGER) AS retained FROM "AttachedVolume" WHERE "seriesId" = $1 ORDER BY "createdAt" ASC"#,
     )
     .bind(series_id)
     .fetch_all(&db.pool)
@@ -669,6 +669,12 @@ pub(crate) async fn write_series_json(db: &Db, series_id: &str) -> bool {
             "name": r.try_get::<Option<String>, _>("name").unwrap_or(None),
             "start_year": r.try_get::<Option<i32>, _>("startYear").unwrap_or(None),
         });
+        // #239: "Leave it as its own series" survives a wipe → rebuild, or the restored library asks
+        // again and recreates the parent's skeletons. Only written when set, so every other entry
+        // stays byte-identical. A flag, so nothing needs resolving on the way back in.
+        if r.try_get::<i64, _>("retained").map(|v| v != 0).unwrap_or(false) {
+            entry["retained"] = serde_json::Value::Bool(true);
+        }
         // #203 COLLECTED coverage: which run issues each book reprints — curation, so it rides in
         // series.json and comes back with the zero-API restore. Only books that carry it.
         if kind == "COLLECTED" {
@@ -1135,7 +1141,7 @@ mod tests {
             // #203 Phase 1: the embed SELECT LEFT JOINs this for an annual's attached volume id.
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
                 "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
-                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+                "retained" BOOLEAN NOT NULL DEFAULT false, "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }
@@ -1367,7 +1373,7 @@ mod tests {
                 "metadataId" TEXT, "metadataSource" TEXT)"#,
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
                 "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
-                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+                "retained" BOOLEAN NOT NULL DEFAULT false, "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     seriesUpdate: vi.fn(),
     issueFindMany: vi.fn(),
     issueUpdate: vi.fn(),
+    issueFindFirst: vi.fn(),
     getIssueDetails: vi.fn(),
     getSeriesIssues: vi.fn(async (): Promise<Record<string, unknown>[]> => []),
     queueAdd: vi.fn(),
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         series: { findFirst: mocks.seriesFindFirst, update: mocks.seriesUpdate },
-        issue: { findMany: mocks.issueFindMany, update: mocks.issueUpdate, findFirst: vi.fn(), create: vi.fn() },
+        issue: { findMany: mocks.issueFindMany, update: mocks.issueUpdate, findFirst: mocks.issueFindFirst, create: vi.fn(async () => ({ id: 'new' })) },
         systemSetting: { findUnique: vi.fn(async ({ where }: any) => (mocks.settings.has(where.key) ? { key: where.key, value: mocks.settings.get(where.key) } : null)) },
     },
 }));
@@ -95,6 +96,18 @@ describe('Metron request-path detail pass (metadata-fetcher)', () => {
         const updates = mocks.issueUpdate.mock.calls.map(c => c[0]);
         expect(updates.find(u => u.where.id === 'r1').data.releaseDate).toBe('2012-03-21');
         expect(updates.find(u => u.where.id === 'r2').data.releaseDate).toBe('2012-04-25');
+    });
+
+    // #239: the cross-series adoption probe never reaches for an attached lane's skeleton (ComicVine twin
+    // asserted in metadata-fetcher.test.ts).
+    it("never adopts another series' attached-lane row", async () => {
+        mocks.getSeriesIssues.mockResolvedValueOnce([{ issueNumber: '2', sourceId: '9002', name: 'Saga (2012) #2', releaseDate: '2012-04-25' }]);
+
+        await syncSeriesMetadata('4000', '', 'METRON');
+
+        const probe = mocks.issueFindFirst.mock.calls.map(c => c[0]).find((a: any) => a?.where?.metadataId === '9002');
+        expect(probe?.where).toMatchObject({ metadataSource: 'METRON', seriesId: { not: 's1' }, isAnnual: false });
+        expect(probe?.where?.attachedVolumeId).toBeNull();
     });
 
     // #251: the Metron branch queued its embed unconditionally too.

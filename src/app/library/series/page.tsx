@@ -1786,6 +1786,16 @@ function SeriesContent() {
                                       <div className="min-w-0 flex-1">
                                           <p className="text-sm font-bold text-foreground truncate" title={book.name}>{book.name}</p>
                                           <p className="text-xs text-muted-foreground">Vol. {book.number}</p>
+                                          {/* #239: a book of a volume kept as its own series lives in that series. */}
+                                          {book.retainedSeries && (
+                                              <Link
+                                                  href={`/library/series?path=${encodeURIComponent(book.retainedSeries.folderPath)}`}
+                                                  onClick={(e) => e.stopPropagation()}
+                                                  className="text-xs text-muted-foreground underline-offset-2 hover:underline block truncate"
+                                              >
+                                                  In {book.retainedSeries.name}
+                                              </Link>
+                                          )}
                                           {/* #203 COLLECTED coverage: which run issues this book reprints. Admins edit it in place. */}
                                           <CoverageField
                                               issueId={book.id}
@@ -1797,7 +1807,7 @@ function SeriesContent() {
                                           />
                                       </div>
                                       {/* #215: an owned collection reads like any issue — straight into the reader. */}
-                                      {owned && <CollectedReadButton book={book} seriesFolder={folderPath || ''} />}
+                                      {owned && <CollectedReadButton book={book} seriesFolder={book.retainedSeries?.folderPath || folderPath || ''} />}
                                       {/* Collections sit outside the run's missing-issue math, so they
                                           need their own way to be asked for — searched by the book's
                                           own title, never as "{Series} #N". */}

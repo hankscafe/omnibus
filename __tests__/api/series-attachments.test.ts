@@ -1,26 +1,31 @@
 // /api/library/series/attachments (#203 Phase 1): attaching an annual volume to a series, the
 // honest result summary the attach dialog reports, and a detach that keeps every file the user owns.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { GET, POST, PUT, DELETE } from '@/app/api/library/series/attachments/route';
+import { GET, POST, PUT, PATCH, DELETE } from '@/app/api/library/series/attachments/route';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { engineFetchLong } from '@/lib/engine';
 import { omnibusQueue } from '@/lib/queue';
+import { AuditLogger } from '@/lib/audit-logger';
 import { makePostJson, getReq } from '../helpers/request';
 
 vi.mock('next-auth/next', () => ({ getServerSession: vi.fn() }));
 vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn(async () => ({})) }));
 
-vi.mock('@/lib/db', () => ({
-    prisma: {
-        series: { findUnique: vi.fn(), findFirst: vi.fn(), delete: vi.fn() },
-        attachedVolume: { findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), upsert: vi.fn(), delete: vi.fn() },
+vi.mock('@/lib/db', () => {
+    const prisma: any = {
+        series: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(async () => []), delete: vi.fn() },
+        attachedVolume: { findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), upsert: vi.fn(), update: vi.fn(), delete: vi.fn() },
         issue: { groupBy: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
+        readingListItem: { updateMany: vi.fn() },
         library: { findMany: vi.fn(async () => [{ id: 'lib1', path: '/comics' }]) },
         // No row = "Write metadata to ComicInfo.xml" at its default, on (#251).
         systemSetting: { findUnique: vi.fn(async () => null) },
-    }
-}));
+    };
+    // Interactive transactions run against the same mocks (the route only uses the tx client inside).
+    prisma.$transaction = vi.fn(async (fn: any) => fn(prisma));
+    return { prisma };
+});
 // LOCAL attachments with a sourcePath hand the move to the collision helper; the route is tested
 // for what it asks of it, the helper for what it does.
 vi.mock('@/lib/match-collision', () => ({ attachAsCollected: vi.fn() }));
@@ -247,11 +252,54 @@ describe('API: attachments — absorbing a standalone series (PUT)', () => {
         expect(data).toEqual({ success: true, moved: 1, skeletonsReplaced: 1, removedSeries: true });
         // The file-less skeleton is the disposable one.
         expect(prisma.issue.delete).toHaveBeenCalledWith({ where: { id: 'skeleton' } });
+        // Its reading-list entries move to the book replacing it first; the delete would cascade them away.
+        expect(prisma.readingListItem.updateMany).toHaveBeenCalledWith({ where: { issueId: 'skeleton' }, data: { issueId: 'owned' } });
+        expect((prisma.readingListItem.updateMany as any).mock.invocationCallOrder[0])
+            .toBeLessThan((prisma.issue.delete as any).mock.invocationCallOrder[0]);
         // The row that owns the file survives and joins the lane — progress and curation intact.
         expect(prisma.issue.update).toHaveBeenCalledWith({
             where: { id: 'owned' },
             data: { seriesId: 's_parent', attachedVolumeId: 'att2' },
         });
+    });
+
+    // #239 (reproduced on v1.4.9-beta.032): the source's own sync had adopted the parent's skeleton
+    // for a book it lacked, so that row was BOTH a source issue and a lane row. The absorb took it as
+    // its own twin, deleted it, then updated it — "Record to update not found" — after the earlier
+    // books had already been re-parented, leaving the source Series standing empty and no audit entry.
+    it('never takes a row as its own twin, and does all of it in one transaction', async () => {
+        const adopted = { id: 'adopted', metadataId: '9200002', filePath: null };
+        (prisma.issue.findMany as any).mockImplementation(async ({ where }: any) =>
+            where.seriesId === 's_tpb'
+                ? [{ id: 'owned', metadataId: '9200001', filePath: '/comics/TPB/v1.cbz' }, adopted]
+                : [{ id: 'skeleton', metadataId: '9200001', filePath: null }, adopted]);
+
+        const data = await (await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_tpb' }))).json();
+
+        expect(data).toEqual({ success: true, moved: 2, skeletonsReplaced: 1, removedSeries: true });
+        expect(prisma.issue.delete).toHaveBeenCalledTimes(1);
+        expect(prisma.issue.delete).toHaveBeenCalledWith({ where: { id: 'skeleton' } });
+        expect(prisma.issue.update).toHaveBeenCalledWith({ where: { id: 'adopted' }, data: { seriesId: 's_parent', attachedVolumeId: 'att2' } });
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves nothing half-moved when a step fails', async () => {
+        (prisma.issue.findMany as any).mockResolvedValue([{ id: 'owned', metadataId: '9', filePath: '/comics/TPB/v1.cbz' }]);
+        (prisma.$transaction as any).mockRejectedValueOnce(new Error('disk full'));
+
+        const res = await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_tpb' }));
+
+        expect(res.status).toBe(500);
+        expect(AuditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('turns a volume kept as its own series back into an ordinary lane', async () => {
+        (prisma.attachedVolume.findUnique as any).mockResolvedValue({ id: 'att2', seriesId: 's_parent', volumeId: '77', metadataSource: 'COMICVINE', kind: 'COLLECTED', retained: true });
+        (prisma.issue.findMany as any).mockResolvedValue([]);
+
+        await PUT(putReq({ attachmentId: 'att2', sourceSeriesId: 's_tpb' }));
+
+        expect(prisma.attachedVolume.update).toHaveBeenCalledWith({ where: { id: 'att2' }, data: { retained: false } });
     });
 
     it('never deletes a source series that still holds issues', async () => {
@@ -286,6 +334,118 @@ describe('API: attachments — absorbing a standalone series (PUT)', () => {
         // Reporting only — nothing has been moved or deleted.
         expect(prisma.issue.update).not.toHaveBeenCalled();
         expect(prisma.series.delete).not.toHaveBeenCalled();
+    });
+});
+
+// #239 "Leave it as its own series": a STORED choice. It used to be a dialog close, so every Refresh
+// asked again and one misclick absorbed the series.
+describe('API: attachments — keeping a volume as its own series (#239)', () => {
+    const parentAtt = { id: 'att2', seriesId: 's_parent', volumeId: '167340', metadataSource: 'COMICVINE', kind: 'COLLECTED', retained: false };
+    const child = { id: 's_child', name: 'Absolute Batman', folderPath: '/comics/DC Comics/Absolute Batman (2025)' };
+    const patchReq = (body: any) => new Request('http://localhost/api/library/series/attachments', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        (getServerSession as any).mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
+        (prisma.attachedVolume.findUnique as any).mockResolvedValue(parentAtt);
+        (prisma.series.findMany as any).mockResolvedValue([child]);
+        (prisma.attachedVolume.update as any).mockResolvedValue({});
+        (prisma.readingListItem.updateMany as any).mockResolvedValue({ count: 0 });
+        (prisma.issue.deleteMany as any).mockResolvedValue({ count: 0 });
+    });
+
+    it("stores the choice and drops the parent's skeletons, moving their reading-list entries to the child's books", async () => {
+        (prisma.issue.findMany as any).mockImplementation(async ({ where }: any) =>
+            where.seriesId === 's_parent'
+                ? [{ id: 'skel_1', metadataId: '9200001' }, { id: 'skel_2', metadataId: '9200002' }]
+                : [{ id: 'child_1', metadataId: '9200001' }]);
+
+        const data = await (await PATCH(patchReq({ attachmentId: 'att2', retain: true }))).json();
+
+        expect(data).toEqual({ success: true, retainedSeries: child, skeletonsRemoved: 2 });
+        // The child is found the way the attach POST finds it, never by a stored pointer.
+        expect(prisma.series.findMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: { metadataSource: 'COMICVINE', metadataId: '167340', id: { not: 's_parent' } },
+        }));
+        // Only the parent's FILE-LESS lane rows are candidates.
+        expect(prisma.issue.findMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: { seriesId: 's_parent', attachedVolumeId: 'att2', OR: [{ filePath: null }, { filePath: '' }] },
+        }));
+        expect(prisma.attachedVolume.update).toHaveBeenCalledWith({ where: { id: 'att2' }, data: { retained: true } });
+        // Reading lists follow the book to the child's row; with no such row the entry keeps its slot, unlinked.
+        expect(prisma.readingListItem.updateMany).toHaveBeenCalledWith({ where: { issueId: 'skel_1' }, data: { issueId: 'child_1' } });
+        expect(prisma.readingListItem.updateMany).toHaveBeenCalledWith({ where: { issueId: 'skel_2' }, data: { issueId: null } });
+        expect(prisma.issue.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['skel_1', 'skel_2'] } } });
+        expect(AuditLogger.log).toHaveBeenCalledWith('RETAIN_ATTACHED_SERIES', expect.objectContaining({ attachmentId: 'att2', keptSeriesId: 's_child', skeletonsRemoved: 2 }), 'admin1');
+    });
+
+    it('refuses a missing child, a LOCAL edition, a bad body and non-admins', async () => {
+        (prisma.series.findMany as any).mockResolvedValue([]);
+        expect((await PATCH(patchReq({ attachmentId: 'att2', retain: true }))).status).toBe(409);
+
+        (prisma.attachedVolume.findUnique as any).mockResolvedValue({ ...parentAtt, metadataSource: 'LOCAL', volumeId: '' });
+        expect((await PATCH(patchReq({ attachmentId: 'att2', retain: true }))).status).toBe(400);
+
+        expect((await PATCH(patchReq({ attachmentId: 'att2' }))).status).toBe(400);
+        (getServerSession as any).mockResolvedValue({ user: { id: 'u2', role: 'USER' } });
+        expect((await PATCH(patchReq({ attachmentId: 'att2', retain: true }))).status).toBe(403);
+        expect(prisma.attachedVolume.update).not.toHaveBeenCalled();
+    });
+
+    it('stops offering the move on Refresh once the choice is stored', async () => {
+        (prisma.series.findUnique as any).mockResolvedValue({ id: 's_parent', name: 'Absolute Batman', metadataSource: 'COMICVINE', metadataId: '160294' });
+        (prisma.attachedVolume.upsert as any).mockResolvedValue({ ...parentAtt, retained: true });
+        (prisma.series.findFirst as any).mockResolvedValue({ ...child, _count: { issues: 2 } });
+        (prisma.issue.findMany as any).mockResolvedValue([]);
+        (omnibusQueue.add as any).mockResolvedValue({});
+        (engineFetchLong as any).mockResolvedValue(engineOk({ attachment_id: 'att2', total: 2, claimed: 0, created: 0, updated: 0, unclaimed: 0 }));
+
+        const data = await (await POST(createReq({ seriesId: 's_parent', volumeId: '167340', kind: 'COLLECTED' }))).json();
+
+        expect(data.existingSeries).toBeNull();
+        expect(data.retainedSeries).toEqual(child);
+    });
+
+    it('keeps offering the move for an attachment that was never kept, even though its series exists', async () => {
+        (prisma.series.findUnique as any).mockResolvedValue({ id: 's_parent', name: 'Absolute Batman', metadataSource: 'COMICVINE', metadataId: '160294' });
+        (prisma.attachedVolume.upsert as any).mockResolvedValue(parentAtt);
+        (prisma.series.findFirst as any).mockResolvedValue({ ...child, _count: { issues: 2 } });
+        (prisma.issue.findMany as any).mockResolvedValue([]);
+        (omnibusQueue.add as any).mockResolvedValue({});
+        (engineFetchLong as any).mockResolvedValue(engineOk({ attachment_id: 'att2', total: 2, claimed: 0, created: 0, updated: 0, unclaimed: 0 }));
+
+        const posted = await (await POST(createReq({ seriesId: 's_parent', volumeId: '167340', kind: 'COLLECTED' }))).json();
+        expect(posted.existingSeries).toEqual({ ...child, issueCount: 2 });
+        expect(posted.retainedSeries).toBeNull();
+
+        (prisma.attachedVolume.findMany as any).mockResolvedValue([{ ...parentAtt, name: 'Absolute Batman', startYear: 2025, issueCount: 0, lastSyncedAt: null }]);
+        (prisma.issue.groupBy as any).mockResolvedValue([]);
+        const listed = await (await GET(getReq('http://localhost/api/library/series/attachments?seriesId=s_parent'))).json();
+        expect(listed.attachments[0]).toMatchObject({ retained: false, retainedSeries: null });
+    });
+
+    it('lists a kept attachment with the series it lives in', async () => {
+        (prisma.attachedVolume.findMany as any).mockResolvedValue([
+            { ...parentAtt, retained: true, name: 'Absolute Batman', startYear: 2025, issueCount: 0, lastSyncedAt: null },
+        ]);
+        (prisma.issue.groupBy as any).mockResolvedValue([]);
+        (prisma.issue.count as any).mockResolvedValue(2);
+
+        const data = await (await GET(getReq('http://localhost/api/library/series/attachments?seriesId=s_parent'))).json();
+
+        expect(data.attachments[0]).toMatchObject({ retained: true, retainedSeries: { ...child, issueCount: 2 } });
+    });
+
+    it('treats a flag whose series is gone as an ordinary attachment', async () => {
+        (prisma.series.findMany as any).mockResolvedValue([]);
+        (prisma.attachedVolume.findMany as any).mockResolvedValue([{ ...parentAtt, retained: true }]);
+        (prisma.issue.groupBy as any).mockResolvedValue([]);
+
+        const data = await (await GET(getReq('http://localhost/api/library/series/attachments?seriesId=s_parent'))).json();
+
+        expect(data.attachments[0]).toMatchObject({ retained: false, retainedSeries: null });
     });
 });
 

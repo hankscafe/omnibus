@@ -3,7 +3,7 @@
 // with both: a preview that promises a name the renamer doesn't produce is a bug that already
 // shipped once (annuals, caught in the beta.007 walk).
 import { describe, it, expect } from 'vitest';
-import { filePatternForIssue, seriesTokenForIssue, ANNUAL_FILE_PATTERN, COLLECTED_FILE_PATTERN } from '@/lib/utils/file-pattern';
+import { filePatternForIssue, namingAttachment, seriesTokenForIssue, ANNUAL_FILE_PATTERN, COLLECTED_FILE_PATTERN } from '@/lib/utils/file-pattern';
 
 const comic = '{Series} #{Issue}';
 const manga = '{Series} Vol. {Issue}';
@@ -72,5 +72,23 @@ describe('seriesTokenForIssue', () => {
         // Only collected books take the edition's name; a plain issue or an annual never does.
         expect(seriesTokenForIssue({ isCollected: false, attachmentSource: 'LOCAL', attachmentName: 'Batman Compendium', seriesName: 'Batman' })).toBe('Batman');
         expect(seriesTokenForIssue({ seriesName: 'Batman' })).toBe('Batman');
+    });
+});
+
+// #239: a series a COLLECTED attachment keeps as its own ("Leave it as its own series").
+describe('a kept-as-its-own collection', () => {
+    it('names its books as collected editions, after an annual and over manga', () => {
+        expect(filePatternForIssue({ isRetainedCollected: true, filePattern: comic })).toBe(COLLECTED_FILE_PATTERN);
+        expect(filePatternForIssue({ isRetainedCollected: true, filePattern: comic, collectedFilePattern: '{Series} v{Issue}' })).toBe('{Series} v{Issue}');
+        expect(filePatternForIssue({ isRetainedCollected: true, isManga: true, filePattern: comic, mangaFilePattern: manga })).toBe(COLLECTED_FILE_PATTERN);
+        expect(filePatternForIssue({ isRetainedCollected: true, isAnnual: true, filePattern: comic })).toBe(ANNUAL_FILE_PATTERN);
+    });
+
+    it("takes an issue's attachment only when it is the issue's own series'", () => {
+        const own = { kind: 'COLLECTED', seriesId: 'parent' };
+        expect(namingAttachment({ seriesId: 'parent', attachedVolume: own })).toBe(own);
+        // A row that strayed into the child still carrying the parent's attachment id.
+        expect(namingAttachment({ seriesId: 'child', attachedVolume: own })).toBeNull();
+        expect(namingAttachment({ seriesId: 'parent', attachedVolume: null })).toBeNull();
     });
 });

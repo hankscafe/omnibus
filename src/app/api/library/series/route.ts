@@ -19,6 +19,7 @@ import { safeParse } from '@/lib/utils/safe-parse';
 import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 import { arrivalStamp, rescanStamp } from '@/lib/file-added';
 import { isInsideLibraryRoot } from '@/lib/utils/paths';
+import { retainedChildren } from '@/lib/retained-attachments';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -338,19 +339,20 @@ export async function GET(request: Request) {
                 .map(async (i) => { try { await fs.promises.access(i.filePath!); existingPaths.add(i.filePath!); } catch { /* gone */ } })
         );
 
-        for (const issue of existingIssues) {
-            const fileName = issue.filePath ? path.basename(issue.filePath) : null;
-            const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
-            
-            let finalIssueCoverUrl = issue.coverUrl && (issue.coverUrl.startsWith('http') || issue.coverUrl.match(/^[a-zA-Z]:\\/))
+        const issueCoverUrl = (issue: { id: string; coverUrl: string | null }, onDisk: boolean) => {
+            const cover = issue.coverUrl && (issue.coverUrl.startsWith('http') || issue.coverUrl.match(/^[a-zA-Z]:\\/))
                 ? `/api/library/cover?path=${encodeURIComponent(issue.coverUrl)}`
                 : issue.coverUrl;
             // Local-first ingest (discussion #182): a file-backed issue with no provider cover shows
             // its own archive's first page instead of inheriting the series cover — the cover route
             // renders it via the engine and falls back to the series cover when it can't.
-            if (!finalIssueCoverUrl && issue.filePath && existingPaths.has(issue.filePath)) {
-                finalIssueCoverUrl = `/api/library/cover?issueId=${encodeURIComponent(issue.id)}`;
-            }
+            return !cover && onDisk ? `/api/library/cover?issueId=${encodeURIComponent(issue.id)}` : cover;
+        };
+
+        for (const issue of existingIssues) {
+            const fileName = issue.filePath ? path.basename(issue.filePath) : null;
+            const prog = fileName && progressMap[fileName] ? progressMap[fileName] : { readProgress: 0, isRead: false };
+            const finalIssueCoverUrl = issueCoverUrl(issue, !!issue.filePath && existingPaths.has(issue.filePath));
 
             const isCollected = (issue as any).attachedVolume?.kind === 'COLLECTED';
 
@@ -396,6 +398,75 @@ export async function GET(request: Request) {
             }
             else if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted);
             else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingIssues.push(formatted);
+        }
+
+        // #239: a collected volume kept as its own series ("Leave it as its own series") lists ITS
+        // books on this shelf. One row per book: the parent holds no skeletons for them, and a copy
+        // the parent's lane does own (a file-backed lane row) wins over the child's for the same
+        // provider issue. Owned books open in the child's folder; missing ones keep their Request.
+        const keptAttachments = await prisma.attachedVolume.findMany({ where: { seriesId: seriesRecord.id, kind: 'COLLECTED', retained: true } });
+        for (const attachment of keptAttachments) {
+            const laneRows = existingIssues.filter(i => i.attachedVolumeId === attachment.id && i.metadataId);
+            const parentOwns = new Set(laneRows.filter(i => i.filePath && existingPaths.has(i.filePath)).map(i => i.metadataId));
+            for (const child of await retainedChildren(attachment)) {
+                // The child can live in a library this viewer can't open; its books stay off the shelf then.
+                if (!canAccessPath(accessiblePaths, child.folderPath)) continue;
+                // Only the child's own books: rows of an attachment of the child's are named by that lane,
+                // not as collected editions, so Standardize and the shelf agree.
+                const books = await prisma.issue.findMany({ where: { seriesId: child.id, isAnnual: false, attachedVolumeId: null } });
+                const onDisk = new Set<string>();
+                await Promise.all(books.filter(b => b.filePath).map(async b => {
+                    try { await fs.promises.access(b.filePath!); onDisk.add(b.id); } catch { /* gone */ }
+                }));
+                const progress = userId && books.length > 0
+                    ? await prisma.readProgress.findMany({ where: { userId, issueId: { in: books.map(b => b.id) } } })
+                    : [];
+                const progressById = new Map(progress.map(p => [p.issueId, p]));
+
+                for (const book of books) {
+                    const owned = onDisk.has(book.id);
+                    const providerId = book.metadataId && !book.metadataId.startsWith('unmatched_') ? book.metadataId : null;
+                    if (!owned && !providerId) continue;
+                    if (providerId && parentOwns.has(providerId)) continue;
+                    // The parent's own skeleton for this book (from before Leave, or one a provider only
+                    // answered later) stands unless the child actually owns the book.
+                    const parentSkeleton = providerId ? laneRows.find(i => i.metadataId === providerId) : undefined;
+                    if (parentSkeleton) {
+                        if (!owned) continue;
+                        const at = missingCollectedEditions.findIndex(m => m.id === parentSkeleton.id);
+                        if (at >= 0) missingCollectedEditions.splice(at, 1);
+                    }
+                    const p = progressById.get(book.id);
+                    const total = p?.totalPages && !isNaN(p.totalPages) ? p.totalPages : 0;
+                    const formatted = {
+                        id: book.id,
+                        cvId: providerId ? parseInt(providerId) : null,
+                        name: book.name || `${child.name} Vol. ${book.number}`,
+                        isAnnual: false,
+                        attachedVolumeId: null,
+                        attachmentName: null,
+                        releaseDate: book.releaseDate ?? null,
+                        isCollected: true,
+                        collectionName: attachment.name ?? child.name,
+                        coversIssues: book.coversIssues ?? null,
+                        parsedNum: parseFloat(normalizeFractionNumbers(book.number)),
+                        number: book.number,
+                        fullPath: owned ? book.filePath : null,
+                        coverUrl: issueCoverUrl(book, owned),
+                        writers: safeParse(book.writers),
+                        artists: safeParse(book.artists),
+                        characters: safeParse(book.characters),
+                        genres: safeParse(book.genres),
+                        storyArcs: safeParse(book.storyArcs),
+                        isRead: p?.isCompleted ?? false,
+                        readProgress: total > 0 ? ((p?.currentPage ?? 0) / total) * 100 : 0,
+                        // The series the book lives in: the shelf links there and reads from its folder.
+                        retainedSeries: child,
+                    };
+                    if (owned) collectedEditions.push(formatted);
+                    else missingCollectedEditions.push(formatted);
+                }
+            }
         }
     }
 

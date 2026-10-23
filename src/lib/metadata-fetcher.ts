@@ -204,8 +204,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                         Logger.log(`[Metadata] Duplicate provider number #${issueNumStr} (${issue.sourceId}) for "${series.name}" — first listing wins, skipping.`, 'info');
                         continue;
                     }
+                    // Never an attached lane's skeleton (#239) — see the ComicVine twin below.
                     const global = await prisma.issue.findFirst({
-                        where: { metadataId: issue.sourceId, metadataSource: 'METRON', seriesId: { not: series.id }, isAnnual: false }
+                        where: { metadataId: issue.sourceId, metadataSource: 'METRON', seriesId: { not: series.id }, isAnnual: false, attachedVolumeId: null }
                     });
                     if (global && isSameIssue(global.number, issueNumStr)) { targetRecord = global; crossSeries = true; }
                 }
@@ -526,9 +527,11 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     continue;
                 }
                 // Cross-series adoption only when id AND number agree (a mispaired global id match
-                // is never a steal target).
+                // is never a steal target), and never a row bound to an attached volume (#239): that
+                // skeleton is the parent's lane's, and taking it carried the parent's attachment id
+                // into this series. Twin of the engine's cross_series_candidates (metadata.rs).
                 const global = await prisma.issue.findFirst({
-                    where: { metadataId: cvIdStr, metadataSource: 'COMICVINE', seriesId: { not: series.id }, isAnnual: false }
+                    where: { metadataId: cvIdStr, metadataSource: 'COMICVINE', seriesId: { not: series.id }, isAnnual: false, attachedVolumeId: null }
                 });
                 if (global && isSameIssue(global.number, issueNumStr)) { targetRecord = global; crossSeries = true; }
             }

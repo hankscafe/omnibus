@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { filePatternForIssue, seriesTokenForIssue } from '@/lib/utils/file-pattern';
+import { filePatternForIssue, namingAttachment, seriesTokenForIssue } from '@/lib/utils/file-pattern';
+import { retainedKindsForSeries } from '@/lib/retained-attachments';
 import path from 'path';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
@@ -47,8 +48,10 @@ export async function POST(request: NextRequest) {
                 where: { seriesId: series.id },
                 // #203 COLLECTED: the preview must know the kind — and, for a LOCAL edition, the
                 // source and name — or it promises the wrong name.
-                include: { attachedVolume: { select: { kind: true, metadataSource: true, name: true } } },
+                include: { attachedVolume: { select: { kind: true, metadataSource: true, name: true, seriesId: true } } },
             });
+            // #239: a series a COLLECTED attachment keeps as its own names its books as collected editions.
+            const retainedCollected = (await retainedKindsForSeries(series)).includes('COLLECTED');
 
             const downloadedIssues = allIssues
                 .filter((i: any) => i.filePath && i.filePath.trim() !== '')
@@ -76,10 +79,12 @@ export async function POST(request: NextRequest) {
 
             for (const issue of downloadedIssues) {
                 const ext = path.extname(issue.filePath as string);
-                const isCollected = (issue as any).attachedVolume?.kind === 'COLLECTED';
+                const attachment = namingAttachment(issue);
+                const isCollected = attachment?.kind === 'COLLECTED';
                 const patternForIssue = filePatternForIssue({
                     isAnnual: (issue as any).isAnnual,
                     isCollected,
+                    isRetainedCollected: retainedCollected && !attachment,
                     isManga: series.isManga,
                     filePattern,
                     mangaFilePattern: activeMangaFilePattern,
@@ -89,8 +94,8 @@ export async function POST(request: NextRequest) {
                 // as both renamers will produce it.
                 const seriesToken = seriesTokenForIssue({
                     isCollected,
-                    attachmentSource: (issue as any).attachedVolume?.metadataSource,
-                    attachmentName: (issue as any).attachedVolume?.name,
+                    attachmentSource: attachment?.metadataSource,
+                    attachmentName: attachment?.name,
                     seriesName: series.name || 'Unknown',
                 });
                 const stem = issueFileName(patternForIssue, {

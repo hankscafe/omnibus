@@ -1,7 +1,8 @@
 // src/app/api/library/rename/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { filePatternForIssue, seriesTokenForIssue } from '@/lib/utils/file-pattern';
+import { filePatternForIssue, namingAttachment, seriesTokenForIssue } from '@/lib/utils/file-pattern';
+import { retainedKindsForSeries } from '@/lib/retained-attachments';
 import fs from 'fs-extra';
 import path from 'path';
 import { getToken } from 'next-auth/jwt';
@@ -120,8 +121,10 @@ export async function POST(request: NextRequest) {
             where: { seriesId: s.id },
             // #203 COLLECTED: the attachment's kind decides the naming template; its source and
             // name decide what {Series} means for a LOCAL edition's books (seriesTokenForIssue).
-            include: { attachedVolume: { select: { kind: true, metadataSource: true, name: true } } },
+            include: { attachedVolume: { select: { kind: true, metadataSource: true, name: true, seriesId: true } } },
         });
+        // #239: a series a COLLECTED attachment keeps as its own names its books as collected editions.
+        const retainedCollected = (await retainedKindsForSeries(s)).includes('COLLECTED');
 
         // Only act if at least one real file exists (the recorded folder, or any issue file wherever it
         // lives). This handles series whose files are split across {SeriesGroup} subfolders, and avoids
@@ -166,10 +169,12 @@ export async function POST(request: NextRequest) {
 
             // Annual, collected, manga or plain — one shared resolver, twinned with the engine's
             // renamer.rs, so the preview and both renamers can never disagree about the result.
-            const isCollected = (issue as any).attachedVolume?.kind === 'COLLECTED';
+            const attachment = namingAttachment(issue);
+            const isCollected = attachment?.kind === 'COLLECTED';
             const patternToUse = filePatternForIssue({
                 isAnnual: (issue as any).isAnnual,
                 isCollected,
+                isRetainedCollected: retainedCollected && !attachment,
                 isManga: s.isManga,
                 filePattern: activeFilePattern,
                 mangaFilePattern: activeMangaFilePattern,
@@ -179,8 +184,8 @@ export async function POST(request: NextRequest) {
             // the only claim it has (twinned with the engine renamer + the preview).
             const seriesToken = seriesTokenForIssue({
                 isCollected,
-                attachmentSource: (issue as any).attachedVolume?.metadataSource,
-                attachmentName: (issue as any).attachedVolume?.name,
+                attachmentSource: attachment?.metadataSource,
+                attachmentName: attachment?.name,
                 seriesName: s.name || 'Unknown',
             });
             const stem = issueFileName(patternToUse, {

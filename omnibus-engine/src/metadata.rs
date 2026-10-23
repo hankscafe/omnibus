@@ -155,6 +155,31 @@ async fn stamp_credits_synced_in(tx: &mut sqlx::Transaction<'_, sqlx::Any>, db: 
     .map(|_| ())
 }
 
+/// Rows in OTHER series that carry one of these provider issue ids — the cross-series adoption
+/// candidates (a request-created skeleton that predates this series). The resolver only honors one
+/// when its number also agrees (issue #194).
+///
+/// Never an annual (#203: a different numbering domain) and never a row bound to an attached volume
+/// (#239): an attached lane's skeleton belongs to its parent's lane. Adopting it moved the row into
+/// the volume's own series still carrying the parent's attachment id — the parent's shelf lost the
+/// book, a Refresh then "updated" the row inside the other series, and absorbing that series found
+/// the row as its own twin (delete, then update → "Record to update not found").
+/// Twin of the Node adoption lookups in metadata-fetcher.ts.
+pub(crate) async fn cross_series_candidates(db: &Db, series_id: &str, source: &str, columns: &str, ids: &[String]) -> anyhow::Result<Vec<sqlx::any::AnyRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        r#"SELECT {columns} FROM "Issue" WHERE "metadataId" IN ({ids}) AND "metadataSource" = $2 AND "seriesId" <> $1 AND "isAnnual" = false AND "attachedVolumeId" IS NULL"#,
+        ids = Db::in_placeholders(3, ids.len())
+    );
+    let mut q = sqlx::query(&sql).bind(series_id).bind(source);
+    for id in ids {
+        q = q.bind(id);
+    }
+    Ok(q.fetch_all(&db.pool).await?)
+}
+
 /// One ComicVine volume GET through the shared response cache — usage-logged, and 429-flagged,
 /// only on a real upstream call. `field_list` is part of the cache key, so asking for new fields
 /// is a fresh fetch rather than a stale hit.
@@ -888,22 +913,14 @@ async fn fetch_comicvine(
             .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
             .collect();
         let mut by_cv: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
-        if !page_cv_ids.is_empty() {
-            let sql = format!(
-                r#"SELECT id, number, "seriesId", name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'COMICVINE' AND "seriesId" <> $1 AND "isAnnual" = false"#,
-                Db::in_placeholders(2, page_cv_ids.len())
-            );
-            let mut q = sqlx::query(&sql).bind(series_id);
-            for id in &page_cv_ids {
-                q = q.bind(id);
-            }
-            let rows = q
-            .fetch_all(&db.pool)
-            .await?;
-            for row in rows {
-                if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
-                    by_cv.insert(mid, row);
-                }
+        let rows = cross_series_candidates(
+            db, series_id, "COMICVINE",
+            r#"id, number, "seriesId", name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", genres, description, "metadataId", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations"#,
+            &page_cv_ids,
+        ).await?;
+        for row in rows {
+            if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
+                by_cv.insert(mid, row);
             }
         }
 
@@ -1384,22 +1401,14 @@ async fn fetch_metron(
         .filter_map(|i| i["id"].as_i64().map(|n| n.to_string()))
         .collect();
     let mut by_meta: std::collections::HashMap<String, sqlx::any::AnyRow> = std::collections::HashMap::new();
-    if !all_meta_ids.is_empty() {
-        let sql = format!(
-            r#"SELECT id, number, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres FROM "Issue" WHERE "metadataId" IN ({}) AND "metadataSource" = 'METRON' AND "seriesId" <> $1 AND "isAnnual" = false"#,
-            Db::in_placeholders(2, all_meta_ids.len())
-        );
-        let mut q = sqlx::query(&sql).bind(series_id);
-        for id in &all_meta_ids {
-            q = q.bind(id);
-        }
-        let rows = q
-        .fetch_all(&db.pool)
-        .await?;
-        for row in rows {
-            if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
-                by_meta.insert(mid, row);
-            }
+    let rows = cross_series_candidates(
+        db, series_id, "METRON",
+        r#"id, number, name, "releaseDate", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", "metadataId", "matchState", genres"#,
+        &all_meta_ids,
+    ).await?;
+    for row in rows {
+        if let Ok(Some(mid)) = row.try_get::<Option<String>, _>("metadataId") {
+            by_meta.insert(mid, row);
         }
     }
 
@@ -3144,5 +3153,45 @@ mod tests {
         assert_eq!(metron_detail_story_title(&serde_json::json!({"title": "Issue 154"})), None);
         assert_eq!(metron_detail_story_title(&serde_json::json!({"name": []})), None);
         assert_eq!(metron_detail_story_title(&serde_json::json!({})), None);
+    }
+
+    // #239: the cross-series adoption candidates never include an attached lane's skeleton. Before
+    // this, the child series' own sync took the parent's COLLECTED skeleton for a book it lacked, and
+    // the row moved into the child still carrying the parent's attachment id.
+    #[tokio::test]
+    async fn cross_series_adoption_never_takes_an_attached_lanes_row() {
+        let base = std::env::temp_dir().join(format!("omnibus_md239_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("md.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        // Issue with the column types Prisma creates (only the columns this query reads).
+        sqlx::query(
+            r#"CREATE TABLE "Issue" ("id" TEXT NOT NULL PRIMARY KEY, "seriesId" TEXT NOT NULL, "metadataId" TEXT,
+                "metadataSource" TEXT NOT NULL DEFAULT 'COMICVINE', "number" TEXT NOT NULL,
+                "isAnnual" BOOLEAN NOT NULL DEFAULT false, "attachedVolumeId" TEXT)"#,
+        )
+        .execute(&db.pool).await.unwrap();
+        for (id, series, meta, source, annual, attached) in [
+            ("lane_skeleton", "parent", "9200002", "COMICVINE", false, Some("att")), // the parent's lane
+            ("request_skel", "elsewhere", "9200003", "COMICVINE", false, None),     // the legit case
+            ("annual", "elsewhere", "9200004", "COMICVINE", true, None),            // another domain
+            ("metron", "elsewhere", "9200003", "METRON", false, None),              // another provider
+            ("own", "child", "9200005", "COMICVINE", false, None),                  // already this series'
+        ] {
+            sqlx::query(&format!(
+                r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", number, "isAnnual", "attachedVolumeId") VALUES ($1, $2, $3, $4, '1', {}, $5)"#,
+                if annual { "true" } else { "false" }
+            ))
+            .bind(id).bind(series).bind(meta).bind(source).bind(attached)
+            .execute(&db.pool).await.unwrap();
+        }
+        let ids: Vec<String> = ["9200002", "9200003", "9200004", "9200005"].iter().map(|s| s.to_string()).collect();
+        let found: Vec<String> = cross_series_candidates(&db, "child", "COMICVINE", "id", &ids).await.unwrap()
+            .iter().map(|r| r.get::<String, _>("id")).collect();
+        assert_eq!(found, vec!["request_skel".to_string()]);
+        assert!(cross_series_candidates(&db, "child", "COMICVINE", "id", &[]).await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

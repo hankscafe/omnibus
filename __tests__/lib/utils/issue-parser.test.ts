@@ -108,6 +108,14 @@ describe('Utility: Issue Number Parser', () => {
         it('should fall back to the volume number only when no other number exists', () => {
             expect(extractIssueNumber('Batman Vol 4.cbz')).toBe('4');
         });
+
+        // #239: a series kept as its own by a COLLECTED attachment names its books with the collected
+        // pattern; a rescan must still map such a file back to its #1 (the engine's scanner twin is
+        // a_retained_childs_collected_named_file_maps_back_to_its_number).
+        it('maps a collected-named book back to its number', () => {
+            expect(extractIssueNumber('Absolute Batman Vol. 001 (2025).cbz')).toBe('1');
+            expect(describeIssueFromFilename('Absolute Batman Vol. 001 (2025).cbz', 'Absolute Batman').number).toBe('1');
+        });
     });
 
     describe('parseIssueRange()', () => {

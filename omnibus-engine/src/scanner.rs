@@ -293,6 +293,8 @@ pub(crate) struct AttachedVolumeSeed {
     /// #203 COLLECTED coverage: (provider issue id, covers) per book that had coverage when the
     /// file was written — the lane sync restores it onto the recreated book rows with no calls.
     pub(crate) books: Vec<(String, String)>,
+    /// #239: the admin chose "Leave it as its own series" for this volume. Absent = false.
+    pub(crate) retained: bool,
 }
 
 fn parse_series_json(content: &str) -> Option<SeriesJsonInfo> {
@@ -339,6 +341,7 @@ fn parse_series_json(content: &str) -> Option<SeriesJsonInfo> {
                         name: e.get("name").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(str::to_string),
                         start_year: e.get("start_year").and_then(|x| x.as_i64()).map(|y| y as i32).filter(|y| *y != 0),
                         books,
+                        retained: e.get("retained").and_then(|x| x.as_bool()).unwrap_or(false),
                     })
                 })
                 .collect()
@@ -2272,9 +2275,11 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         // (as plain annual rows) and a re-attach in the UI rebuilds the lane.
         for (attachment_id, seed) in &attachment_seeds {
             if let Err(e) = sqlx::query(&format!(
-                r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", "issueCount", "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, 0, {now}, {now})
+                r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", "issueCount", retained, "createdAt", "updatedAt")
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 0, {retained}, {now}, {now})
                    ON CONFLICT DO NOTHING"#,
+                // #239: a literal, not a bind — the Any driver has no portable boolean bind.
+                retained = if seed.retained { "true" } else { "false" },
                 now = db.now_expr()
             ))
             .bind(attachment_id)
@@ -2809,9 +2814,11 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         for seed in &seeds {
             let attachment_id = Uuid::new_v4().to_string();
             if sqlx::query(&format!(
-                r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", "issueCount", "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, 0, {now}, {now})
+                r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", "issueCount", retained, "createdAt", "updatedAt")
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 0, {retained}, {now}, {now})
                    ON CONFLICT DO NOTHING"#,
+                // #239: a literal, not a bind — the Any driver has no portable boolean bind.
+                retained = if seed.retained { "true" } else { "false" },
                 now = db.now_expr()
             ))
             .bind(&attachment_id)
@@ -3895,6 +3902,18 @@ mod tests {
         assert_eq!(issue_number_from_filename("Batman Vol 4.cbz", None), "4");
     }
 
+    // #239: a series kept as its own by a COLLECTED attachment names its books with the collected
+    // pattern. Such a file must still map back to its #1 on a rescan, and the parent's name rule can
+    // never claim it (the attachment carries the parent's own name, which never matches).
+    #[test]
+    fn a_retained_childs_collected_named_file_maps_back_to_its_number() {
+        let file = "Absolute Batman Vol. 001 (2025).cbz";
+        assert_eq!(issue_number_from_filename(file, Some("Absolute Batman")), "1");
+        assert_eq!(issue_number_from_filename(file, None), "1");
+        let parent_lane = [crate::attached_volumes::AttachmentNameRef { id: "att".into(), name: "Absolute Batman".into(), kind: "COLLECTED".into() }];
+        assert!(crate::attached_volumes::attachment_for_filename(file, "Absolute Batman", &parent_lane).is_none());
+    }
+
     // #203 Phase 0: annuals are their own numbering domain — "Batman Annual 001" used to parse as
     // plain issue "1" and collide with the real #1. Mirrors the Node describeIssueFromFilename tests.
     #[test]
@@ -4324,7 +4343,7 @@ mod tests {
             // #203 Phase 1: the round-trip's embed + series.json legs both reach for it.
             r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
                 "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
-                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+                "retained" BOOLEAN NOT NULL DEFAULT false, "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }
@@ -4362,6 +4381,14 @@ mod tests {
         )
         .bind(&cbz_str)
         .execute(&db.pool).await.unwrap();
+        // #239: two attachments with no books in the lane — one the admin chose to keep as its own
+        // series ("Leave it as its own series"), one ordinary. The choice must survive the wipe.
+        sqlx::query(
+            r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name, "startYear", retained, "createdAt")
+               VALUES ('rt_att_kept', 'rt_series', 'COMICVINE', '7001', 'COLLECTED', 'Batman: The Court of Owls', 2012, true, '2026-01-01'),
+                      ('rt_att_plain', 'rt_series', 'COMICVINE', '7002', 'ANNUAL', 'Batman Annual', 2012, false, '2026-01-02')"#,
+        )
+        .execute(&db.pool).await.unwrap();
 
         // -- 1. Embed + export. NO export_series_json row exists: this also proves the flipped
         //       default (absent = ON) end-to-end — the embed job must still write series.json.
@@ -4382,10 +4409,18 @@ mod tests {
         assert_eq!(sj["metadata"]["age_rating"], "Mature 17+");
         // publication_run derives from Issue.releaseDate — the Phase 2 round-trip feeding this file.
         assert_eq!(sj["metadata"]["publication_run"], "May 2012 - May 2012");
+        // #239: only the kept attachment carries the flag; the ordinary one's entry is unchanged.
+        let avs = sj["omnibus"]["attached_volumes"].as_array().expect("attached_volumes block");
+        assert_eq!(avs.len(), 2);
+        assert_eq!(avs[0]["volume_id"], "7001");
+        assert_eq!(avs[0]["retained"], true);
+        assert_eq!(avs[1]["volume_id"], "7002");
+        assert!(avs[1].get("retained").is_none(), "an ordinary attachment's entry has no retained key");
 
         // -- 2. Wipe the database. The files are now the only source of truth.
         sqlx::query(r#"DELETE FROM "Issue""#).execute(&db.pool).await.unwrap();
         sqlx::query(r#"DELETE FROM "Series""#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"DELETE FROM "AttachedVolume""#).execute(&db.pool).await.unwrap();
 
         // -- 3. Rescan from disk alone.
         scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "rt_lib".to_string(), None)
@@ -4485,6 +4520,20 @@ mod tests {
         assert_eq!(i.get::<Option<String>, _>("locations").as_deref(), Some(r#"["Gotham City"]"#));
         assert_eq!(i.get::<Option<String>, _>("storyArcs").as_deref(), Some(r#"["Night of the Owls"]"#));
 
+        // #239: both attachments came back from series.json, and "kept as its own series" with them —
+        // a rebuilt library must not ask the admin again (or recreate the parent's skeletons).
+        let restored: Vec<(String, String, i64)> = sqlx::query(
+            r#"SELECT "volumeId", kind, CAST(retained AS INTEGER) AS retained FROM "AttachedVolume" ORDER BY "volumeId""#,
+        )
+        .fetch_all(&db.pool).await.unwrap()
+        .iter()
+        .map(|r| (r.get("volumeId"), r.get("kind"), r.get("retained")))
+        .collect();
+        assert_eq!(restored, vec![
+            ("7001".to_string(), "COLLECTED".to_string(), 1),
+            ("7002".to_string(), "ANNUAL".to_string(), 0),
+        ]);
+
         // -- 6. Zero recurring cost: the rebuilt series is file-complete, so the scheduled
         //       metadata sweep excludes it — browsing AND idling spend no provider calls.
         let complete: i64 = sqlx::query_scalar(&format!(
@@ -4493,6 +4542,24 @@ mod tests {
         ))
         .fetch_one(&db.pool).await.unwrap();
         assert_eq!(complete, 1, "the rebuilt series is excluded from the scheduled provider sweep");
+
+        // -- 7. #239, the other restore path (5J): the series is ALREADY in the database when its
+        //       series.json arrives — only the attachments are gone, and it holds an unattached
+        //       annual file. The kept choice must come back here too.
+        sqlx::query(r#"DELETE FROM "AttachedVolume""#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"UPDATE "Issue" SET "isAnnual" = 1, "attachedVolumeId" = NULL"#).execute(&db.pool).await.unwrap();
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "rt_lib".to_string(), None)
+            .await
+            .expect("rescan with the series still in place");
+        let restored: Vec<(String, i64)> = sqlx::query(
+            r#"SELECT "volumeId", CAST(retained AS INTEGER) AS retained FROM "AttachedVolume" WHERE "seriesId" = $1 ORDER BY "volumeId""#,
+        )
+        .bind(&series_id)
+        .fetch_all(&db.pool).await.unwrap()
+        .iter()
+        .map(|r| (r.get("volumeId"), r.get("retained")))
+        .collect();
+        assert_eq!(restored, vec![("7001".to_string(), 1), ("7002".to_string(), 0)]);
 
         drop(db);
         let _ = std::fs::remove_dir_all(&base);

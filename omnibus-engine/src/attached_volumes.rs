@@ -162,9 +162,10 @@ pub(crate) async fn retaining_kinds(db: &Db, series_id: &str) -> anyhow::Result<
 ///    parent's skeleton for a book it lacked, and the row kept the parent's attachment id: the
 ///    absorb then found it as its own "twin" (delete, then update → "Record to update not found"),
 ///    and a Refresh "updated" it in the child instead of recreating the parent's skeleton. Moving
-///    issues to another series from the series page (`issue/move`) can leave the same shape: it
-///    changes `seriesId` and keeps the link. Either way the row now belongs to the series it sits
-///    in, where it is simply that series' own issue, so unbinding is the right result.
+///    issues to another series from the series page (`issue/move`) left the same shape until the move
+///    learned to drop the link itself (v1.4.10-beta.006); rows moved before that still carry it.
+///    Either way the row now belongs to the series it sits in, where it is simply that series' own
+///    issue, so unbinding is the right result.
 /// 2. A `retained` flag whose child no longer exists (deleted, or rematched to another volume) is
 ///    cleared, so the attachment is an ordinary lane again and a returning volume is asked about
 ///    afresh — the same outcome the earlier pointer design gave with `onDelete: SetNull`.

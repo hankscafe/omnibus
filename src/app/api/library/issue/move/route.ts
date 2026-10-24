@@ -44,7 +44,10 @@ export async function POST(request: Request) {
 
         if (issueIds.length === 0) return NextResponse.json({ error: 'No issues selected.' }, { status: 400 });
 
-        const issues = await prisma.issue.findMany({ where: { id: { in: issueIds } }, include: { series: true } });
+        const issues = await prisma.issue.findMany({
+            where: { id: { in: issueIds } },
+            include: { series: true, attachedVolume: { select: { seriesId: true } } },
+        });
         if (issues.length === 0) return NextResponse.json({ error: 'Issues not found.' }, { status: 404 });
 
         // Resolve the target series — an existing one, or a new UNMATCHED one created from a name.
@@ -95,7 +98,15 @@ export async function POST(request: Request) {
                     continue; // leave the issue where it is rather than de-syncing the DB from disk
                 }
             }
-            await prisma.issue.update({ where: { id: issue.id }, data: { seriesId: target.id, filePath: newFilePath } });
+            // An attached volume's row (annual, collected edition) belongs to the attachment's series: moved
+            // anywhere else it is simply that series' own issue, so the link goes with the move (it used to be
+            // left for the parent's next attach sync to unbind, #239). A lane row that strayed and is moving
+            // back into its attachment's own series keeps it.
+            const leavesItsLane = !!issue.attachedVolumeId && issue.attachedVolume?.seriesId !== target.id;
+            await prisma.issue.update({
+                where: { id: issue.id },
+                data: { seriesId: target.id, filePath: newFilePath, ...(leavesItsLane ? { attachedVolumeId: null } : {}) },
+            });
             moved++;
         }
 

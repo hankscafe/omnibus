@@ -88,6 +88,60 @@ describe('POST /api/library/issue/move', () => {
         expect(mocks.move).not.toHaveBeenCalled();
     });
 
+    // An attached volume's rows (annuals, collected editions) belong to the attachment's series. Moved into
+    // another series, a row that kept the link was still that lane's row there: the parent's next attach
+    // sync had to unbind it (#239's prepare_lane), and until then the lane counted a book it no longer held.
+    describe('attachment links', () => {
+        beforeEach(() => {
+            mocks.issueUpdate.mockClear();
+            mocks.seriesFindUnique.mockResolvedValue({ id: 's2', name: 'Other Series', folderPath: '/lib/B' });
+        });
+
+        it('asks for each issue\'s attachment and which series it belongs to', async () => {
+            mocks.issueFindMany.mockResolvedValue([{ id: 'i1', seriesId: 's1', filePath: null, series: { id: 's1', libraryId: 'lib1', isManga: false } }]);
+
+            await POST(req({ issueIds: ['i1'], targetSeriesId: 's2' }));
+
+            expect(mocks.issueFindMany).toHaveBeenCalledWith(expect.objectContaining({
+                include: expect.objectContaining({ attachedVolume: { select: { seriesId: true } } }),
+            }));
+        });
+
+        it("drops the link when an attached annual moves to another series", async () => {
+            mocks.issueFindMany.mockResolvedValue([{
+                id: 'ann1', seriesId: 's1', filePath: null, attachedVolumeId: 'att1', attachedVolume: { seriesId: 's1' },
+                series: { id: 's1', libraryId: 'lib1', isManga: false },
+            }]);
+
+            await POST(req({ issueIds: ['ann1'], targetSeriesId: 's2' }));
+
+            expect(mocks.issueUpdate).toHaveBeenCalledWith({ where: { id: 'ann1' }, data: { seriesId: 's2', filePath: null, attachedVolumeId: null } });
+        });
+
+        it("keeps the link when a lane row that strayed moves back into its attachment's own series", async () => {
+            // The row sits in the kept child (the old adoption bug) carrying s2's attachment id; s2 is its home.
+            mocks.issueFindMany.mockResolvedValue([{
+                id: 'stray', seriesId: 's_child', filePath: null, attachedVolumeId: 'att2', attachedVolume: { seriesId: 's2' },
+                series: { id: 's_child', libraryId: 'lib1', isManga: false },
+            }]);
+
+            await POST(req({ issueIds: ['stray'], targetSeriesId: 's2' }));
+
+            expect(mocks.issueUpdate).toHaveBeenCalledWith({ where: { id: 'stray' }, data: { seriesId: 's2', filePath: null } });
+        });
+
+        it("leaves an ordinary issue's update as it was", async () => {
+            mocks.issueFindMany.mockResolvedValue([{
+                id: 'i1', seriesId: 's1', filePath: null, attachedVolumeId: null, attachedVolume: null,
+                series: { id: 's1', libraryId: 'lib1', isManga: false },
+            }]);
+
+            await POST(req({ issueIds: ['i1'], targetSeriesId: 's2' }));
+
+            expect(mocks.issueUpdate).toHaveBeenCalledWith({ where: { id: 'i1' }, data: { seriesId: 's2', filePath: null } });
+        });
+    });
+
     it('requires a destination (target series or new name)', async () => {
         mocks.issueFindMany.mockResolvedValue([
             { id: 'i1', seriesId: 's1', filePath: null, series: { id: 's1', libraryId: 'lib1', isManga: false } },

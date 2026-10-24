@@ -730,6 +730,28 @@ describe('Cron: BullMQ Worker Router', () => {
         expect(mocks.requestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'r_live' } }));
     });
 
+    // A search that found nothing anywhere is NOT_FOUND now; AWAITING_RELEASE is only the dateless park.
+    // Both are waiting states, so the parked sweep has to re-search either.
+    it('re-searches NOT_FOUND requests on the awaiting cadence too', async () => {
+        mocks.requestFindMany
+            .mockResolvedValueOnce([]) // Phase 3: UNRELEASED
+            .mockResolvedValueOnce([   // Phase 3b: parked
+                { id: 'r_nf', volumeId: null, activeDownloadName: 'Saga #61', status: 'NOT_FOUND', retryCount: 0, downloadLink: null },
+            ]);
+        await runMonitor([]);
+
+        type FindArgs = { where?: { status?: { in?: string[] } } } | undefined;
+        const parkedQuery = (mocks.requestFindMany.mock.calls as unknown as [FindArgs][])
+            .map(c => c[0])
+            .find(a => a?.where?.status?.in?.includes('MANUAL_DDL'));
+        expect(parkedQuery?.where?.status?.in).toEqual(expect.arrayContaining(['NOT_FOUND', 'AWAITING_RELEASE']));
+        expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'r_nf' },
+            data: expect.objectContaining({ status: 'PENDING', retryCount: 0 })
+        }));
+        expect(mocks.searchAndDownload).toHaveBeenCalledTimes(1);
+    });
+
     // A monitor run can queue hundreds of searches at once (every new issue, plus every parked request
     // past the awaiting cadence). Nobody is waiting on any one of them, so all four of its search paths
     // go to the back: a request someone makes in the meantime must not queue behind the whole run.
@@ -820,6 +842,14 @@ describe('Cron: BullMQ Worker Router', () => {
         const searchCall = mocks.engineFetch.mock.calls.find((c: any[]) => String(c[0]).includes('/api/automation/search'));
         return JSON.parse(searchCall![1].body);
     };
+
+    it('parks a released issue that no source had as NOT_FOUND, not AWAITING_RELEASE', async () => {
+        const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        await runSearchWithReleaseDate(lastYear);
+
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_p' }, data: { status: 'NOT_FOUND' } });
+        expect(mocks.requestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'AWAITING_RELEASE' } }));
+    });
 
     it('disables packs when the requested issue is brand-new (released < 30 days ago)', async () => {
         const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];

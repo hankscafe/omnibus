@@ -9,6 +9,7 @@ import { findDuplicateGroups } from '@/lib/duplicate-detector';
 import { SystemNotifier } from '@/lib/notifications';
 import packageJson from '../../package.json';
 import { readRateStatus } from '@/lib/metron/client';
+import { WAITING_STATUSES } from '@/lib/request-status';
 import { describeMetronHealth, metronCalls24h, type MetronSnapshot } from '@/lib/metron/health';
 import { metronCredentialKind } from '@/lib/metron/credentials';
 import { IMPORTING_STALE_MS } from '@/lib/import-handoff';
@@ -287,7 +288,7 @@ export async function runSystemHealthCheck() {
     }
 
     // GetComics 429 throttle — flag stamped by the engine's search/scrape backoff. A 429 clears on
-    // its own and affected searches park as AWAITING_RELEASE and re-fire on the sweep cadence, so a
+    // its own and affected searches park as NOT_FOUND and re-fire on the sweep cadence, so a
     // recent stamp is a warning (searches are degraded right now), never an error.
     const gcLimitTime = parseInt(config.getcomics_rate_limit_time || '0');
     if (gcLimitTime > Date.now() - (60 * 60 * 1000)) {
@@ -307,7 +308,7 @@ export async function runSystemHealthCheck() {
     // 8. External Client Import Errors (GENUINE failures only)
     // A STALLED request is a real problem needing intervention: a download that failed to import, or a
     // search flagged for admin disambiguation. "Searched everywhere, found nothing yet" is NOT here — it
-    // lives in AWAITING_RELEASE and is reported as informational below, because that's expected for brand-
+    // lives in NOT_FOUND and is reported as informational below, because that's expected for brand-
     // new / small-press titles and must not drive System Health to Degraded (issue #175). Snoozed items
     // (an admin dismissed the warning) are excluded until their snooze expires.
     const now = new Date();
@@ -339,10 +340,11 @@ export async function runSystemHealthCheck() {
     }
 
     // 8b. Awaiting Availability (informational — never an error)
-    // Requests that couldn't be found on any source yet. Omnibus keeps retrying on a slow cadence
+    // Requests waiting to be searched again (request-status.ts WAITING_STATUSES): not found on any
+    // source yet, or released without a date. Omnibus keeps retrying on a slow cadence
     // (awaiting_retry_days). This surfaces them without penalising overall health.
     const awaitingReqs = await prisma.request.findMany({
-        where: { status: 'AWAITING_RELEASE', ...notSnoozed },
+        where: { status: { in: [...WAITING_STATUSES] }, ...notSnoozed },
         select: { id: true, activeDownloadName: true }
     });
     if (awaitingReqs.length > 0) {
@@ -350,7 +352,7 @@ export async function runSystemHealthCheck() {
             id: 'awaiting_release',
             name: 'Awaiting Availability',
             status: 'ok',
-            message: `${awaitingReqs.length} request(s) aren't available on any source yet — Omnibus will keep retrying automatically. This is normal for brand-new or small-press titles.`,
+            message: `${awaitingReqs.length} request(s) aren't on any source yet, or have no release date yet — Omnibus will keep searching automatically. This is normal for brand-new or small-press titles.`,
             actionLink: '/admin',
             details: awaitingReqs.map(r => r.activeDownloadName || `Request ID: ${r.id}`),
             items: awaitingReqs.map(r => ({ id: r.id, name: r.activeDownloadName || `Request ID: ${r.id}` }))

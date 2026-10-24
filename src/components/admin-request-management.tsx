@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
+import { REQUEST_STATUS_FILTERS, requestStatusClass, requestStatusLabel, requestStatusMatches } from "@/lib/request-status"
 
 export function AdminRequestManagement() {
   const [requests, setRequests] = useState<any[]>([])
@@ -85,7 +86,7 @@ export function AdminRequestManagement() {
     return requests.filter(req => {
       const targetName = req.activeDownloadName || req.seriesName || "";
       const matchesSearch = targetName.toLowerCase().includes(searchQuery.toLowerCase()) || String(req.volumeId).includes(searchQuery);
-      const matchesStatus = statusFilter === "ALL" || req.status === statusFilter;
+      const matchesStatus = requestStatusMatches(req.status, statusFilter);
       const matchesUser = userFilter === "ALL" || req.userName === userFilter;
       return matchesSearch && matchesStatus && matchesUser;
     })
@@ -189,18 +190,6 @@ export function AdminRequestManagement() {
     }
   }
 
-  const getStatusColor = (status: string) => {
-    if (['IMPORTED', 'COMPLETED'].includes(status)) return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800";
-    if (status === 'DOWNLOADING') return "bg-primary/20 text-primary border-primary/30";
-    if (status === 'PENDING_APPROVAL') return "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800";
-    if (status === 'UNRELEASED') return "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800";
-    // #240 PR B: handed to the watched folder, waiting on the sweep (parity with the admin badges).
-    if (status === 'IMPORTING') return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-300 dark:border-blue-800";
-    // #240: the dedupe's terminal-but-not-done state — a person has to look at the pack.
-    if (status === 'NEEDS_REVIEW') return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800";
-    return "bg-muted text-foreground border-border";
-  }
-
   const SortIcon = ({ columnKey }: { columnKey: string }) => {
     if (sortConfig.key !== columnKey) return <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />;
     return sortConfig.direction === 'asc' ? <ChevronUp className="w-3 h-3 ml-1" /> : <ChevronDown className="w-3 h-3 ml-1" />;
@@ -281,14 +270,9 @@ export function AdminRequestManagement() {
             </SelectTrigger>
             <SelectContent className="bg-popover border-border">
               <SelectItem value="ALL" className="focus:bg-primary/10 focus:text-primary">All Statuses</SelectItem>
-              <SelectItem value="PENDING_APPROVAL" className="focus:bg-primary/10 focus:text-primary">Needs Approval</SelectItem>
-              <SelectItem value="PENDING" className="focus:bg-primary/10 focus:text-primary">Pending Search</SelectItem>
-              <SelectItem value="UNRELEASED" className="focus:bg-primary/10 focus:text-primary">Unreleased</SelectItem>
-              <SelectItem value="DOWNLOADING" className="focus:bg-primary/10 focus:text-primary">Downloading</SelectItem>
-              <SelectItem value="IMPORTED" className="focus:bg-primary/10 focus:text-primary">Imported</SelectItem>
-              <SelectItem value="STALLED" className="focus:bg-primary/10 focus:text-primary">Stalled / Failed</SelectItem>
-              <SelectItem value="IMPORTING" className="focus:bg-primary/10 focus:text-primary">Importing</SelectItem>
-              <SelectItem value="NEEDS_REVIEW" className="focus:bg-primary/10 focus:text-primary">Needs Review</SelectItem>
+              {REQUEST_STATUS_FILTERS.map(f => (
+                <SelectItem key={f.value} value={f.value} className="focus:bg-primary/10 focus:text-primary">{f.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
 
@@ -363,8 +347,8 @@ export function AdminRequestManagement() {
                     </td>
                     <td className="px-4 py-3 text-muted-foreground truncate">{req.userName}</td>
                     <td className="px-4 py-3">
-                      <Badge className={`${getStatusColor(req.status)} text-[10px] uppercase font-bold px-2 py-0.5 truncate`}>
-                        {req.status === 'PENDING_APPROVAL' ? 'Needs Approval' : req.status === 'IMPORTING' ? 'Importing…' : req.status === 'NEEDS_REVIEW' ? 'Needs Review' : req.status}
+                      <Badge className={`${requestStatusClass(req.status)} text-[10px] uppercase font-bold px-2 py-0.5 truncate`}>
+                        {requestStatusLabel(req.status)}
                       </Badge>
                       {req.status === 'STALLED' && (
                         <Badge variant="outline" className="text-[9px] uppercase font-black px-1.5 py-0 border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/20 ml-2">
@@ -439,8 +423,8 @@ export function AdminRequestManagement() {
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
                         <Users className="w-3.5 h-3.5" /> <span className="font-medium truncate">{req.userName}</span>
                       </div>
-                      <Badge className={`${getStatusColor(req.status)} text-[10px] uppercase font-bold px-2 py-0.5`}>
-                        {req.status === 'PENDING_APPROVAL' ? 'Needs Approval' : req.status === 'IMPORTING' ? 'Importing…' : req.status === 'NEEDS_REVIEW' ? 'Needs Review' : req.status}
+                      <Badge className={`${requestStatusClass(req.status)} text-[10px] uppercase font-bold px-2 py-0.5`}>
+                        {requestStatusLabel(req.status)}
                       </Badge>
                       {req.status === 'STALLED' && (
                           <div className="mt-1.5">

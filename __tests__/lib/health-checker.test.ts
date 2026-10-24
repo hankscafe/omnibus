@@ -284,11 +284,12 @@ describe('System Health & Diagnostics', () => {
             vi.mocked(fs.promises.access).mockResolvedValue(undefined);
         });
 
-        // Route the shared request.findMany mock by the status it's querying.
+        // Route the shared request.findMany mock by the status (or `{ in: [...] }` statuses) it's querying.
         const routeRequestsByStatus = (byStatus: Record<string, any[]>) => {
             mocks.findManyRequests.mockImplementation((args: any) => {
                 const status = args?.where?.status;
-                return Promise.resolve(byStatus[status] || []);
+                const statuses: string[] = typeof status === 'string' ? [status] : (status?.in ?? []);
+                return Promise.resolve(statuses.flatMap(s => byStatus[s] || []));
             });
         };
 
@@ -310,6 +311,19 @@ describe('System Health & Diagnostics', () => {
 
             // Stalled check stays green, and one "not out yet" item must not degrade the instance.
             expect(result.checks.find(c => c.id === 'stalled_dls')?.status).toBe('ok');
+            expect(result.status).toBe('HEALTHY');
+        });
+
+        it('reports NOT_FOUND items (searched everywhere, nothing yet) as informational ok too', async () => {
+            routeRequestsByStatus({
+                NOT_FOUND: [{ id: 'r3', activeDownloadName: 'Saga #61' }],
+                AWAITING_RELEASE: [{ id: 'r4', activeDownloadName: 'The Dogsitter #2' }],
+            });
+            const result = await runSystemHealthCheck();
+
+            const awaiting = result.checks.find(c => c.id === 'awaiting_release');
+            expect(awaiting?.status).toBe('ok');
+            expect(awaiting?.details).toEqual(expect.arrayContaining(['Saga #61', 'The Dogsitter #2']));
             expect(result.status).toBe('HEALTHY');
         });
 

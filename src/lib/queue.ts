@@ -8,6 +8,7 @@ import { apiClient as axios } from '@/lib/api-client';
 import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload, waitForSearchSlot } from '@/lib/automation';
 import { JOB_PRIORITY } from '@/lib/job-priority';
+import { WAITING_STATUSES } from '@/lib/request-status';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
@@ -363,12 +364,12 @@ export function initWorker() {
                                 }).catch(() => {});
                             } else {
                                 // Searched everywhere and found nothing — normal for a brand-new or small-press
-                                // title that simply isn't released/indexed anywhere yet. Park as AWAITING_RELEASE
-                                // (NOT STALLED) so the Series Monitor re-searches it on a slow cadence and it never
-                                // drives System Health to Degraded (issue #175). No failure notification — an item
-                                // that isn't out yet is not a failure.
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'AWAITING_RELEASE' } });
-                                Logger.log(`[BullMQ] No source found for ${name} yet. Parking as AWAITING_RELEASE for the monitor to retry.`, 'info');
+                                // title that isn't indexed anywhere yet. Park as NOT_FOUND (NOT STALLED) so the
+                                // Series Monitor re-searches it on a slow cadence and it never drives System Health
+                                // to Degraded (issue #175). No failure notification. (AWAITING_RELEASE used to mean
+                                // this too; it is left for the monitor's dateless park — see request-status.ts.)
+                                await prisma.request.update({ where: { id: requestId }, data: { status: 'NOT_FOUND' } });
+                                Logger.log(`[BullMQ] No source found for ${name} yet. Parking as NOT_FOUND for the monitor to retry.`, 'info');
                             }
                             break;
                         }
@@ -1056,7 +1057,8 @@ export function initWorker() {
                     // Phase 3b -- dead-request re-search sweep. Parked states are re-searched on a slow,
                     // release-friendly cadence (awaiting_retry_days, default 7) — instead of the tight
                     // per-minute retry a real download failure gets:
-                    //   AWAITING_RELEASE — searched clean, no source had it yet (issue #175);
+                    //   NOT_FOUND       — searched clean, no source had it yet (issue #175);
+                    //   AWAITING_RELEASE — released per the provider but dateless, parked unsearched;
                     //   MANUAL_DDL      — held for a manual click that never came. New hosters/releases may
                     //                     have appeared since; a one-click hold must not be a dead end;
                     //   STALLED (dead)  — only the ones the 60s retry cron can't touch: no http download
@@ -1075,7 +1077,7 @@ export function initWorker() {
                     const nowTs = new Date();
                     const parkedRequests = (await prisma.request.findMany({
                         where: {
-                            status: { in: ['AWAITING_RELEASE', 'MANUAL_DDL', 'STALLED'] },
+                            status: { in: [...WAITING_STATUSES, 'MANUAL_DDL', 'STALLED'] },
                             updatedAt: { lt: awaitingCutoff },
                             OR: [{ snoozedUntil: null }, { snoozedUntil: { lt: nowTs } }]
                         },

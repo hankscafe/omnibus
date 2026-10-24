@@ -1,5 +1,5 @@
 // src/app/api/request/snooze/route.ts
-// Persist a System Health dismissal for a request. Snoozing a STALLED / AWAITING_RELEASE item hides it
+// Persist a System Health dismissal for a request. Snoozing a STALLED / NOT_FOUND / AWAITING_RELEASE item hides it
 // from the health check and pauses its automatic retry sweep until the snooze expires (issue #175).
 import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';

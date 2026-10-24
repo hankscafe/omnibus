@@ -88,7 +88,7 @@ model Request {
   userId             String   
   volumeId           String
   metadataSource     String   @default("COMICVINE")
-  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTED, UNRELEASED, AWAITING_RELEASE, STALLED, NEEDS_REVIEW
+  status             String   // PENDING_APPROVAL, PENDING, DOWNLOADING, MANUAL_DDL, IMPORTING, IMPORTED, COMPLETED, UNRELEASED, AWAITING_RELEASE, NOT_FOUND, STALLED, NEEDS_REVIEW, CANCELLED - labels in src/lib/request-status.ts
   // NEEDS_REVIEW is terminal-but-not-done (#240): the dedupe found this request's download link
   // already consumed by a finished request and the issue never reached the library, so nothing is
   // retried automatically — a person reviews the pack. It is deliberately absent from every retry

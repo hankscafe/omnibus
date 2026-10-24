@@ -17,6 +17,7 @@ import {
 import { useToast } from "@/components/ui/use-toast"
 import { COMIC_EXT_REGEX } from "@/lib/utils/formats"
 import { runBulk } from "@/lib/utils/bulk"
+import { CANCELLABLE_STATUSES, WAITING_STATUSES, requestStatusClass, requestStatusDetail, requestStatusLabel } from "@/lib/request-status"
 import {
   Select,
   SelectContent,
@@ -25,16 +26,14 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-function RequestCard({ 
-    req, 
-    getStatusColor, 
-    onCancel, 
-    isSelectionMode, 
-    isSelected, 
-    onToggleSelect 
-}: { 
-    req: any, 
-    getStatusColor: (status: string) => string, 
+function RequestCard({
+    req,
+    onCancel,
+    isSelectionMode,
+    isSelected,
+    onToggleSelect
+}: {
+    req: any,
     onCancel: (id: string) => void,
     isSelectionMode: boolean,
     isSelected: boolean,
@@ -46,7 +45,7 @@ function RequestCard({
   const [isCancelling, setIsCancelling] = useState(false)
 
   // Enforce the rule that users can only cancel pre-processed or active items
-  const isCancellable = ['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'UNRELEASED', 'AWAITING_RELEASE'].includes(req.status);
+  const isCancellable = CANCELLABLE_STATUSES.includes(req.status);
 
   const handleShowDesc = async () => {
     if (showDesc) {
@@ -93,9 +92,12 @@ function RequestCard({
   const displayName = (req.seriesName || "Unknown Request").replace(COMIC_EXT_REGEX, '');
   const isCompleted = ['IMPORTED', 'COMPLETED'].includes(req.status);
 
-  // Parse Provider
+  // Parse Provider. A waiting request says what happens next instead of a source from an earlier try.
   let provider = "Pending Search";
-  if (req.indexer) {
+  const waitingDetail = requestStatusDetail(req.status);
+  if (waitingDetail) {
+      provider = waitingDetail;
+  } else if (req.indexer) {
       provider = req.indexer;
   } else if (req.downloadLink === 'DIRECT_GETCOMICS') {
       provider = "GetComics";
@@ -126,8 +128,6 @@ function RequestCard({
       provider = "Usenet / Torrent Indexer";
   } else if (req.status === 'PENDING_APPROVAL') {
       provider = "Awaiting Approval";
-  } else if (req.status === 'AWAITING_RELEASE') {
-      provider = "Not on any source yet — retrying automatically";
   } else if (['FAILED', 'ERROR', 'CANCELLED', 'STALLED'].includes(req.status)) {
       provider = "N/A";
   }
@@ -157,8 +157,8 @@ function RequestCard({
                 <div className="space-y-1">
                     <h3 className="font-bold text-lg sm:text-xl leading-tight line-clamp-1 text-foreground" title={displayName}>{displayName}</h3>
                     <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline" className={`${getStatusColor(req.status)} text-[10px] font-bold uppercase tracking-wider`}>
-                            {req.status === 'PENDING_APPROVAL' ? 'Needs Approval' : req.status === 'MANUAL_DDL' ? 'GETCOMICS' : req.status === 'AWAITING_RELEASE' ? 'Awaiting' : req.status === 'IMPORTING' ? 'Importing…' : req.status === 'NEEDS_REVIEW' ? 'Needs Review' : req.status}
+                        <Badge variant="outline" className={`${requestStatusClass(req.status)} text-[10px] font-bold uppercase tracking-wider`}>
+                            {requestStatusLabel(req.status)}
                         </Badge>
                         {req.status === 'DOWNLOADING' && <span className="text-[11px] font-mono text-primary font-bold bg-primary/10 px-2 py-0.5 rounded">{req.progress}%</span>}
                         {isCompleted && <span className="text-[11px] text-green-700 dark:text-green-400 flex items-center gap-1 font-bold bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded"><CheckCircle2 className="w-3 h-3"/> Ready in Library</span>}
@@ -321,24 +321,6 @@ export default function RequestsPage() {
       });
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'IMPORTED': case 'COMPLETED': return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800"
-      case 'DOWNLOADING': case 'MANUAL_DDL': return "bg-primary/20 text-primary border-primary/30"
-      case 'PENDING_APPROVAL': return "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800"
-      case 'FAILED': case 'STALLED': case 'ERROR': return "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800"
-      case 'UNRELEASED': return "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800"
-      case 'AWAITING_RELEASE': return "bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-800"
-      // #240 PR B: the pack is in the watched folder and the sweep has not reported back yet —
-      // still active work, and deliberately not an arrival.
-      case 'IMPORTING': return "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800"
-      // #240: the pack this issue came in was already consumed but the issue never reached the
-      // library — a person has to look at it, so it reads as "attention", not as a failure.
-      case 'NEEDS_REVIEW': return "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800"
-      default: return "bg-muted text-foreground border-border"
-    }
-  }
-
   const filteredRequests = useMemo(() => {
       return requests.filter(req => {
           const matchesSearch = !searchQuery || (req.activeDownloadName || req.seriesName || "").toLowerCase().includes(searchQuery.toLowerCase());
@@ -350,7 +332,8 @@ export default function RequestsPage() {
           if (activeTab === "ACTIVE") return ['DOWNLOADING', 'PENDING', 'MANUAL_DDL', 'IMPORTING'].includes(req.status);
           if (activeTab === "PENDING_APPROVAL") return req.status === 'PENDING_APPROVAL';
           if (activeTab === "UNRELEASED") return req.status === 'UNRELEASED';
-          if (activeTab === "AWAITING") return req.status === 'AWAITING_RELEASE';
+          // Both waiting states: not found on any source yet, and released without a date.
+          if (activeTab === "AWAITING") return (WAITING_STATUSES as readonly string[]).includes(req.status);
           if (activeTab === "COMPLETED") return ['IMPORTED', 'COMPLETED'].includes(req.status);
           if (activeTab === "FAILED") return ['FAILED', 'STALLED', 'ERROR'].includes(req.status);
           if (activeTab === "CANCELLED") return req.status === 'CANCELLED';
@@ -365,7 +348,7 @@ export default function RequestsPage() {
   const paginatedRequests = filteredRequests.slice((page - 1) * limit, page * limit);
   
   // Calculate which of the currently visible requests are eligible for cancellation
-  const cancellableRequests = useMemo(() => paginatedRequests.filter(r => ['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'UNRELEASED', 'AWAITING_RELEASE'].includes(r.status)), [paginatedRequests]);
+  const cancellableRequests = useMemo(() => paginatedRequests.filter(r => CANCELLABLE_STATUSES.includes(r.status)), [paginatedRequests]);
 
   return (
     <div className="container mx-auto py-10 px-6 space-y-6 max-w-5xl transition-colors duration-300">
@@ -423,9 +406,8 @@ export default function RequestsPage() {
           {paginatedRequests.map((req) => (
               <RequestCard 
                   key={req.id} 
-                  req={req} 
-                  getStatusColor={getStatusColor} 
-                  onCancel={handleCancelRequest} 
+                  req={req}
+                  onCancel={handleCancelRequest}
                   isSelectionMode={isSelectionMode}
                   isSelected={selectedRequests.has(req.id)}
                   onToggleSelect={toggleRequestSelection}

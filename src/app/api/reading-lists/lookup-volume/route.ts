@@ -30,7 +30,8 @@ export async function GET(request: Request) {
         const setting = await prisma.systemSetting.findUnique({ where: { key: 'cv_api_key' } });
         if (!setting?.value) return NextResponse.json({ volumeId: 0, year: null });
 
-        const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4040-${issueId}/`, {
+        // 4000 is ComicVine's issue type (4040 is a person: that URL only ever answered "Error in URL Format").
+        const cvRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issue/4000-${issueId}/`, {
             params: { api_key: setting.value, format: 'json', field_list: 'volume,cover_date' },
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 5000

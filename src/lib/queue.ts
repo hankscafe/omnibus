@@ -10,6 +10,7 @@ import { searchAndDownload, waitForSearchSlot } from '@/lib/automation';
 import { JOB_PRIORITY } from '@/lib/job-priority';
 import { WAITING_STATUSES } from '@/lib/request-status';
 import { NOT_FOUND_FALLBACK_NOTE, plainNote } from '@/lib/status-note';
+import { closeFulfilledParkedRequests } from '@/lib/request-fulfilment';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
@@ -957,6 +958,18 @@ export function initWorker() {
                     const skeletonsCreated = monitorData.skeletons_created || 0;
                     if (Array.isArray(monitorData.notes)) for (const n of monitorData.notes) details += `${n}\n`;
 
+                    // beta.009: a parked request whose issue reached the library some other way - matched in
+                    // by hand, dropped in and scanned - closes here, before the candidate dedupe, the
+                    // unreleased upgrade and the parked sweep read any request. The sweep used to search for
+                    // it again and download it a second time (request-fulfilment.ts).
+                    let requestsClosed = 0;
+                    try {
+                        requestsClosed = await closeFulfilledParkedRequests();
+                        if (requestsClosed > 0) details += `[CLOSED] ${requestsClosed} request(s) whose issue is already in the library.\n`;
+                    } catch (e) {
+                        Logger.log(`[BullMQ] Couldn't close the requests whose issue is already in the library: ${getErrorMessage(e)}`, 'warn');
+                    }
+
                     // Only load requests that could match a candidate (same volumeId) instead of every
                     // request ever — the dedup below never matches across different volumeIds, so a
                     // whole-table load just to filter by volumeId scaled with request history and could
@@ -1125,7 +1138,7 @@ export function initWorker() {
                             jobType: 'SERIES_MONITOR',
                             status: 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${parkedRetried} parked re-searched.`
+                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${parkedRetried} parked re-searched, ${requestsClosed} closed (already in the library).`
                         }
                     });
                     break;

@@ -5,7 +5,6 @@ import fs from 'fs';
 import axios from 'axios';
 import { makePostJson } from '../helpers/request';
 import { pinPlatform } from '../helpers/platform';
-import { notifierSendAlert } from '../helpers/setup-global';
 import { Logger } from '@/lib/logger';
 import { omnibusQueue } from '@/lib/queue';
 
@@ -31,7 +30,8 @@ const mocks = vi.hoisted(() => ({
     deleteSeries: vi.fn(),
     transaction: vi.fn(),
     safeRelocateFolder: vi.fn(),
-    moveFileSafe: vi.fn()
+    moveFileSafe: vi.fn(),
+    closeFulfilled: vi.fn().mockResolvedValue(0)
 }));
 
 // 2. Mock Server Dependencies
@@ -92,6 +92,9 @@ vi.mock('@/lib/metadata/providers/metron', () => {
 });
 
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { add: vi.fn() } }));
+
+// beta.009: which requests a match closes is request-fulfilment.ts's business (tested there).
+vi.mock('@/lib/request-fulfilment', () => ({ closeRequestsFulfilledBySeries: mocks.closeFulfilled }));
 
 // Non-destructive folder relocator — mocked so we can assert the route surfaces its conflict count.
 vi.mock('@/lib/utils/safe-fs', () => ({
@@ -830,153 +833,32 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(coverWrite).toBeTruthy();
     });
 
-    // #240 review: NEEDS_REVIEW tells the admin to look at the pack in /unmatched, and the Smart
-    // Matcher is the tool for that — but this route's close-out only looked at MANUAL_DDL, PENDING and
-    // DOWNLOADING, so the request a review was asked for stayed NEEDS_REVIEW for good. It also read
-    // the issue out of activeDownloadName, where a pack title ("Batman #31-40") parses as its first
-    // number — never the issue the request was created for.
-    describe('closing a request out on the issue the match just put on disk (#240 review)', () => {
+    // The match is what finally puts a requested issue on disk, so it closes the requests that were
+    // waiting for it - #240 review: including the NEEDS_REVIEW one a review asked for; beta.009: in
+    // every waiting state, whichever provider the request was made against. The rules (states,
+    // identity, annuals, the "available" alert) live in request-fulfilment.ts and are tested there;
+    // the match's part is to ask for the series it matched, after its files are in place.
+    describe('closing the requests the match fulfilled', () => {
         const matchReq = () => createReq({
             oldFolderPath: '/unmatched/Batman', metadataId: '4050-1234',
             name: 'Batman', year: 2016, publisher: 'DC Comics',
         });
-        // The close-out's own issue query; every other issue.findMany in the route (folder repoint,
-        // naming) keeps its empty default.
-        const onDiskIssues = (rows: { number: string; filePath?: string }[]) =>
-            mocks.findManyIssues.mockImplementation(async (args: { where?: { series?: { metadataId?: string } } }) =>
-                args?.where?.series?.metadataId ? rows : []
-            );
-        // The route's request query, honoured rather than ignored: a status the route does not ask
-        // for is never returned, so dropping NEEDS_REVIEW from that list fails these tests (which is
-        // exactly the defect a match used to leave behind).
-        type HeldRequest = {
-            id: string; status: string; issueNumber: string; activeDownloadName: string;
-            userId?: string; imageUrl?: string; user?: { username: string; email: string | null };
-        };
-        const requestsHeld = (rows: HeldRequest[]) =>
-            mocks.findManyRequests.mockImplementation(async (args: { where?: { status?: { in?: string[] } } }) =>
-                rows.filter(r => !args?.where?.status?.in || args.where.status.in.includes(r.status))
-            );
 
-        it('closes a NEEDS_REVIEW request whose pack title names a different number, and rings once', async () => {
-            requestsHeld([
-                { id: 'req_37', status: 'NEEDS_REVIEW', issueNumber: '37', activeDownloadName: 'Batman #31-40 (2016)' },
-            ]);
-            onDiskIssues([{ number: '37', filePath: '/comics/DC Comics/Batman (2016)/Batman #037.cbz' }]);
-
+        it('asks for the series it matched', async () => {
             const res = await POST(matchReq());
             expect(res.status).toBe(200);
 
-            // The stored number — not the 31 out of the pack title — matched the file, and the row
-            // was never announced as available, so it closes un-notified and the bell fires for it.
-            expect(mocks.updateManyRequests).toHaveBeenCalledWith({
-                where: { id: { in: ['req_37'] } },
-                data: { status: 'COMPLETED', progress: 100, notified: false },
-            });
+            expect(mocks.closeFulfilled).toHaveBeenCalledTimes(1);
+            expect(mocks.closeFulfilled).toHaveBeenCalledWith('series_123');
         });
 
-        // A DOWNLOADING / PENDING / MANUAL_DDL request has usually rung the bell once already
-        // ("Downloading"), and the requester who cleared it has notified: true. Closing it COMPLETED
-        // without resetting that left the "available" line silent — the importer always closes with
-        // notified: false, so a match has to as well.
-        it('rings the "available" bell for every request it closes, not only a reviewed one', async () => {
-            requestsHeld([
-                { id: 'req_pending', status: 'PENDING', issueNumber: '37', activeDownloadName: 'Batman #37' },
-                { id: 'req_downloading', status: 'DOWNLOADING', issueNumber: '37', activeDownloadName: 'Batman #31-40 (2016)' },
-                { id: 'req_manual', status: 'MANUAL_DDL', issueNumber: '37', activeDownloadName: 'Batman #37' },
-            ]);
-            onDiskIssues([{ number: '37', filePath: '/comics/DC Comics/Batman (2016)/Batman #037.cbz' }]);
+        it('never fails the match when closing its requests does', async () => {
+            mocks.closeFulfilled.mockRejectedValueOnce(new Error('database is locked'));
 
             const res = await POST(matchReq());
+
             expect(res.status).toBe(200);
-
-            const closed = new Map<string, Record<string, unknown>>();
-            for (const [args] of mocks.updateManyRequests.mock.calls as [{ where: { id: { in: string[] } }; data: Record<string, unknown> }][]) {
-                for (const id of args.where.id.in) closed.set(id, args.data);
-            }
-            for (const id of ['req_pending', 'req_downloading', 'req_manual']) {
-                expect(closed.get(id)).toEqual({ status: 'COMPLETED', progress: 100, notified: false });
-            }
-        });
-
-        it('leaves a NEEDS_REVIEW request open while its issue is not on disk', async () => {
-            requestsHeld([
-                { id: 'req_38', status: 'NEEDS_REVIEW', issueNumber: '38', activeDownloadName: 'Batman #31-40 (2016)' },
-            ]);
-            onDiskIssues([{ number: '37', filePath: '/comics/DC Comics/Batman (2016)/Batman #037.cbz' }]);
-
-            const res = await POST(matchReq());
-            expect(res.status).toBe(200);
-
-            expect(mocks.updateManyRequests).not.toHaveBeenCalled();
-            expect(notifierSendAlert).not.toHaveBeenCalled();
-        });
-
-        // A request the match completes used to ring only the in-app bell: Discord, email, Pushover,
-        // Telegram and Apprise heard nothing, while the importer alerts for every request it completes.
-        // One "available" alert per requester per match - a match often completes several at once.
-        describe('the "available" alert', () => {
-            const nicolas = { userId: 'u_nicolas', user: { username: 'nicolas', email: 'n@example.test' } };
-            const adam = { userId: 'u_adam', user: { username: 'adam', email: 'a@example.test' } };
-            const onDisk = (...numbers: string[]) =>
-                onDiskIssues(numbers.map(n => ({ number: n, filePath: `/comics/DC Comics/Batman (2016)/Batman #0${n}.cbz` })));
-
-            it('tells the requester their issue is in the library', async () => {
-                requestsHeld([{ id: 'req_37', status: 'DOWNLOADING', issueNumber: '37', activeDownloadName: 'Batman #31-40 (2016)', imageUrl: 'http://cover/37.jpg', ...nicolas }]);
-                onDisk('37');
-
-                expect((await POST(matchReq())).status).toBe(200);
-
-                expect(notifierSendAlert).toHaveBeenCalledTimes(1);
-                expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
-                    title: 'Batman #37',
-                    user: 'nicolas',
-                    email: 'n@example.test',
-                    imageUrl: 'http://cover/37.jpg',
-                    description: expect.stringContaining('Smart Matcher'),
-                }));
-            });
-
-            it('sends one alert for several issues of the same requester, listing them', async () => {
-                requestsHeld([
-                    { id: 'req_38', status: 'PENDING', issueNumber: '38', activeDownloadName: 'Batman #38', ...nicolas },
-                    { id: 'req_36', status: 'NEEDS_REVIEW', issueNumber: '36', activeDownloadName: 'Batman #31-40 (2016)', ...nicolas },
-                    { id: 'req_37', status: 'MANUAL_DDL', issueNumber: '37', activeDownloadName: 'Batman #37', ...nicolas },
-                ]);
-                onDisk('36', '37', '38');
-
-                expect((await POST(matchReq())).status).toBe(200);
-
-                expect(notifierSendAlert).toHaveBeenCalledTimes(1);
-                const [, payload] = notifierSendAlert.mock.calls[0] as [string, { title: string; description: string; email: string }];
-                expect(payload.title).toBe('Batman - 3 Issues Available!');
-                expect(payload.description).toContain('#36, #37, #38');
-                expect(payload.email).toBe('n@example.test');
-            });
-
-            it('tells each requester about their own issues', async () => {
-                requestsHeld([
-                    { id: 'req_37', status: 'DOWNLOADING', issueNumber: '37', activeDownloadName: 'Batman #37', ...nicolas },
-                    { id: 'req_38', status: 'PENDING', issueNumber: '38', activeDownloadName: 'Batman #38', ...adam },
-                ]);
-                onDisk('37', '38');
-
-                expect((await POST(matchReq())).status).toBe(200);
-
-                expect(notifierSendAlert).toHaveBeenCalledTimes(2);
-                expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({ title: 'Batman #37', user: 'nicolas', email: 'n@example.test' }));
-                expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({ title: 'Batman #38', user: 'adam', email: 'a@example.test' }));
-            });
-
-            it('never fails the match when an alert can\'t be sent', async () => {
-                notifierSendAlert.mockRejectedValueOnce(new Error('Discord webhook 500'));
-                requestsHeld([{ id: 'req_37', status: 'DOWNLOADING', issueNumber: '37', activeDownloadName: 'Batman #37', ...nicolas }]);
-                onDisk('37');
-
-                expect((await POST(matchReq())).status).toBe(200);
-                await new Promise(r => setTimeout(r, 0)); // let the detached rejection reach its catch
-                expect(mocks.updateManyRequests).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['req_37'] } } }));
-            });
+            expect(Logger.log).toHaveBeenCalledWith(expect.stringContaining('database is locked'), 'warn');
         });
     });
 });

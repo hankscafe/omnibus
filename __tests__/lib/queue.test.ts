@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
     digestHistoryCreate: vi.fn(),
     transaction: vi.fn().mockResolvedValue([]),
     engineFetch: vi.fn(),
+    closeFulfilledParked: vi.fn().mockResolvedValue(0),
     workerCb: { current: null as any }
 }));
 
@@ -71,6 +72,8 @@ vi.mock('@/lib/health-checker', () => ({ runSystemHealthCheck: mocks.runSystemHe
 vi.mock('@/lib/download-clients', () => ({ DownloadService: { addDownload: mocks.addDownload, downloadDirectFile: mocks.downloadDirectFile } }));
 vi.mock('@/lib/automation', () => ({ searchAndDownload: mocks.searchAndDownload, waitForSearchSlot: mocks.waitForSearchSlot }));
 vi.mock('@/lib/pages/page-sweep', () => ({ processPageSweepChunk: mocks.processPageSweepChunk }));
+// beta.009: which parked requests the monitor closes is request-fulfilment.ts's business (tested there).
+vi.mock('@/lib/request-fulfilment', () => ({ closeFulfilledParkedRequests: mocks.closeFulfilledParked }));
 
 // Mock the mailer for the digest
 vi.mock('@/lib/mailer', () => ({
@@ -750,6 +753,43 @@ describe('Cron: BullMQ Worker Router', () => {
             data: expect.objectContaining({ status: 'PENDING', retryCount: 0 })
         }));
         expect(mocks.searchAndDownload).toHaveBeenCalledTimes(1);
+    });
+
+    // beta.009: a parked request whose issue reached the library some other way (a Smart Matcher match,
+    // a file dropped in and scanned) was searched again on the awaiting cadence - and downloaded a second
+    // time once a source had it. The monitor closes those first, before anything reads a request.
+    it('closes the requests whose issue is already in the library before it re-searches anything', async () => {
+        mocks.closeFulfilledParked.mockResolvedValueOnce(2);
+        mocks.requestFindMany.mockImplementation(async () => []);
+        await runMonitor([{
+            volume_id: 'v1', metadata_source: 'COMICVINE', search_name: 'Spawn #360', issue_number: '360',
+            issue_year: '2026', is_released: true, has_date: true, publisher: 'Image', is_manga: false, image_url: null
+        }]);
+
+        expect(mocks.closeFulfilledParked).toHaveBeenCalledTimes(1);
+        const closedAt = mocks.closeFulfilledParked.mock.invocationCallOrder[0];
+        expect(Math.min(...mocks.requestFindMany.mock.invocationCallOrder)).toBeGreaterThan(closedAt);
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({
+                jobType: 'SERIES_MONITOR',
+                message: expect.stringMatching(/\[CLOSED\] 2 request\(s\) whose issue is already in the library[\s\S]*2 closed/),
+            })
+        }));
+    });
+
+    it('still re-searches the parked requests when closing the fulfilled ones fails', async () => {
+        mocks.closeFulfilledParked.mockRejectedValueOnce(new Error('database is locked'));
+        mocks.requestFindMany
+            .mockResolvedValueOnce([]) // Phase 3: UNRELEASED
+            .mockResolvedValueOnce([   // Phase 3b: parked
+                { id: 'r_nf', volumeId: null, activeDownloadName: 'Saga #61', status: 'NOT_FOUND', retryCount: 0, downloadLink: null },
+            ]);
+        await runMonitor([]);
+
+        expect(mocks.searchAndDownload).toHaveBeenCalledTimes(1);
+        expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ jobType: 'SERIES_MONITOR', status: 'COMPLETED' })
+        }));
     });
 
     // A monitor run can queue hundreds of searches at once (every new issue, plus every parked request

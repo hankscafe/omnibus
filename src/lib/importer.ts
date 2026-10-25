@@ -78,6 +78,15 @@ function ensureLocalCover(folder: string, archivePath: string): string | null {
     }
 }
 
+// An import that can't run (no library, a Root Path the server can't use, a folder pattern that gives
+// no folder) used to leave its request sitting at 100% with the reason only in the log (beta.008). The
+// status is left alone so the next attempt still picks it up; the note says why, in Request Management.
+async function noteImportBlocked(requestId: string, note: string): Promise<void> {
+    try {
+        await prisma.request.update({ where: { id: requestId }, data: { statusNote: note } });
+    } catch { /* the note is a courtesy: never let it break the import's own bookkeeping */ }
+}
+
 export const Importer = {
   async importRequest(requestId: string, opts?: { sourcePathOverride?: string }) {
     const req = await prisma.request.findUnique({ 
@@ -188,7 +197,7 @@ export const Importer = {
               Logger.log(`[Importer] Source file permanently missing for 20+ cycles. Marking request as STALLED.`, "warn");
               await prisma.request.update({
                   where: { id: req.id },
-                  data: { status: 'STALLED' }
+                  data: { status: 'STALLED', statusNote: `The downloaded file was never found at ${sourcePath} after 20 tries. Check the download client's path mappings.` }
               });
           } else {
               await prisma.request.update({
@@ -644,7 +653,10 @@ export const Importer = {
 
             if (knownIssues.length > 0 && !issueInVolume) {
                 Logger.log(`[Importer] Aborting import: "${req.activeDownloadName}" does not match requested series "${series.name}" (series words missing and issue #${parsedIssue} not in this volume). Holding for manual review.`, 'warn');
-                await prisma.request.update({ where: { id: req.id }, data: { status: 'STALLED' } });
+                await prisma.request.update({
+                    where: { id: req.id },
+                    data: { status: 'STALLED', statusNote: `The downloaded file "${req.activeDownloadName}" doesn't match ${series.name}, so it wasn't imported. Grab the right release with Interactive Search.` }
+                });
                 await SystemNotifier.sendAlert('download_failed', {
                     title: series.name,
                     imageUrl: req.imageUrl ?? undefined,
@@ -679,6 +691,7 @@ export const Importer = {
 
     if (!libraryRoot) {
       Logger.log("[Importer] No Library Path found for this import! Please add a Library in Settings.", "error");
+      await noteImportBlocked(req.id, 'Downloaded, but there is no library to import into. Add one in Settings → Library & Files.');
       return false;
     }
 
@@ -688,6 +701,7 @@ export const Importer = {
     const rootProblem = storedFolderProblem(libraryRoot, { example: '/data/comics' });
     if (rootProblem) {
       Logger.log(`[Importer] Can't import into library "${targetLibrary.name || 'Unnamed'}": ${rootProblem} Fix its Root Path in Settings → Library & Files.`, "error");
+      await noteImportBlocked(req.id, `Downloaded, but library "${targetLibrary.name || 'Unnamed'}" can't be used: ${rootProblem} Fix its Root Path in Settings → Library & Files.`);
       return false;
     }
 
@@ -737,6 +751,7 @@ export const Importer = {
     const folderParts = seriesFolderSegments(folderPattern, seriesValues);
     if (!folderParts) {
         Logger.log(`[Importer] The folder pattern "${folderPattern}" gives no folder inside the library for ${seriesNameFromMeta}. Check Settings > Library & Files.`, "error");
+        await noteImportBlocked(req.id, `Downloaded, but the folder pattern "${folderPattern}" gives no folder for ${seriesNameFromMeta}. Check Settings → Library & Files.`);
         return false;
     }
     const idealDestFolder = path.join(libraryRoot, ...folderParts);

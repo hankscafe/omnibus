@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client'
 import { SECRET_SETTING_KEYS } from './secret-keys'
 import { tunedSqliteUrl } from './sqlite-url'
+import { withStatusNoteRule } from './status-note'
 
 // Transparently decrypt SystemSetting credential values on read, so every consumer across the app
 // (~35 call sites) gets plaintext without per-site changes. Values are encrypted at rest by the
@@ -47,6 +48,19 @@ function createPrismaClient() {
         },
         async findFirst({ args, query }) {
           return decryptSettingRow(await query(args), (args as any)?.where?.key)
+        },
+      },
+      // Request.statusNote belongs to the status it was written with: a write that changes the
+      // status without a note of its own clears it (status-note.ts), so no call site has to.
+      request: {
+        async update({ args, query }) {
+          return query({ ...args, data: withStatusNoteRule(args.data) })
+        },
+        async updateMany({ args, query }) {
+          return query({ ...args, data: withStatusNoteRule(args.data) })
+        },
+        async upsert({ args, query }) {
+          return query({ ...args, update: withStatusNoteRule(args.update) })
         },
       },
     },

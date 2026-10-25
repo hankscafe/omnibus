@@ -9,6 +9,7 @@ import { isReleasedYet } from '@/lib/utils';
 import { searchAndDownload, waitForSearchSlot } from '@/lib/automation';
 import { JOB_PRIORITY } from '@/lib/job-priority';
 import { WAITING_STATUSES } from '@/lib/request-status';
+import { NOT_FOUND_FALLBACK_NOTE, plainNote } from '@/lib/status-note';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
@@ -352,7 +353,11 @@ export function initWorker() {
                             if (resultData.stall_for_review) {
                                 // Editions WERE found — this is a genuine failure needing admin disambiguation.
                                 // Keep it STALLED (counts against System Health) and notify.
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
+                                await prisma.request.update({
+                                    where: { id: requestId },
+                                    // The reason rides along for Request Management (beta.008).
+                                    data: { status: 'STALLED', statusNote: plainNote(resultData.stall_reason) ?? 'Several different editions were found. Pick the right one with Interactive Search.' }
+                                });
                                 Logger.log(`[BullMQ] Search for ${name} needs admin review (${resultData.stall_reason ? 'multi-pack ambiguity' : 'multiple distinct editions'}). Stalling.`, 'warn');
                                 await SystemNotifier.sendAlert('download_failed', {
                                     title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
@@ -368,7 +373,12 @@ export function initWorker() {
                                 // Series Monitor re-searches it on a slow cadence and it never drives System Health
                                 // to Degraded (issue #175). No failure notification. (AWAITING_RELEASE used to mean
                                 // this too; it is left for the monitor's dateless park — see request-status.ts.)
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'NOT_FOUND' } });
+                                // The engine's per-source summary ("GetComics: nothing found · Prowlarr: 12
+                                // results, none matched") is the request's note: WHY it wasn't found (beta.008).
+                                await prisma.request.update({
+                                    where: { id: requestId },
+                                    data: { status: 'NOT_FOUND', statusNote: resultData.search_note || NOT_FOUND_FALLBACK_NOTE }
+                                });
                                 Logger.log(`[BullMQ] No source found for ${name} yet. Parking as NOT_FOUND for the monitor to retry.`, 'info');
                             }
                             break;

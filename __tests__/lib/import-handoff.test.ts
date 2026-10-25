@@ -154,15 +154,17 @@ describe('reconcileImportHandoffs', () => {
         mocks.issueIsInLibrary.mockResolvedValue(false);
 
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({
-            where: { id: 'req_1' },
-            data: { status: 'NEEDS_REVIEW' }
-        });
         expect(mocks.sendAlert).toHaveBeenCalledTimes(1);
         expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
             title: 'X-Men #34-40 (2004)',
             description: expect.stringContaining('#37')
         }));
+        // beta.008: the request keeps the alert's reason as its note, for Request Management.
+        const reason = mocks.sendAlert.mock.calls[0][1].description;
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_1' },
+            data: { status: 'NEEDS_REVIEW', statusNote: reason }
+        });
     });
 
     it('decides on the issue, not on the batch: an imported file whose issue never arrived is not "done"', async () => {
@@ -171,7 +173,9 @@ describe('reconcileImportHandoffs', () => {
         mocks.issueIsInLibrary.mockResolvedValue(false);
 
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_1' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_1' }, data: { status: 'NEEDS_REVIEW', statusNote: expect.stringContaining('did not reach your library') }
+        });
     });
 
     it('waits out the grace period for a request that joined a batch and has no row of its own', async () => {
@@ -186,7 +190,7 @@ describe('reconcileImportHandoffs', () => {
             importingRequest({ updatedAt: new Date(Date.now() - IMPORT_RECONCILE_GRACE_MS - 60_000) })
         ]);
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_1' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_1' }, data: { status: 'NEEDS_REVIEW', statusNote: expect.any(String) } });
         expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
             description: expect.stringContaining('never reported back')
         }));
@@ -298,7 +302,7 @@ describe('reconcileImportHandoffs', () => {
         handoffRows([{ outcome: 'UNMATCHED', requestIds: ['req_pack'] }]);
 
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_pack' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_pack' }, data: { status: 'NEEDS_REVIEW', statusNote: expect.any(String) } });
         expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
             description: expect.stringContaining('the pack did not reach your library')
         }));
@@ -381,7 +385,7 @@ describe('reconcileImportHandoffs', () => {
         // The last batch said nothing arrived, so the joiner is not closed as done on the older
         // batch's imported file.
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 2, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW', statusNote: expect.any(String) } });
     });
 
     // hankscafe's round-2 probe, verbatim: a joiner and its lead, both past the stale window, on a
@@ -397,7 +401,7 @@ describe('reconcileImportHandoffs', () => {
         mocks.issueIsInLibrary.mockResolvedValue(false);
 
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 2, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_joiner' }, data: { status: 'NEEDS_REVIEW', statusNote: expect.any(String) } });
         // The joined batch's own pending count gives the joiner the same wording as the lead.
         expect(mocks.sendAlert).toHaveBeenCalledWith('import_needs_review', expect.objectContaining({
             description: expect.stringContaining('never reported back')

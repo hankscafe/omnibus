@@ -111,7 +111,7 @@ describe('the reconciler, with the real request-dedupe', () => {
         ]);
 
         await expect(reconcileImportHandoffs()).resolves.toEqual({ completed: 0, review: 1, waiting: 0 });
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_pack' }, data: { status: 'NEEDS_REVIEW' } });
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_pack' }, data: { status: 'NEEDS_REVIEW', statusNote: expect.any(String) } });
     });
 
     // The other half of the same question, through the same real helper: a request that DOES name an

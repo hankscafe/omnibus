@@ -524,7 +524,7 @@ describe('Cron: BullMQ Worker Router', () => {
         expect(mocks.addDownload).not.toHaveBeenCalled();
         expect(mocks.requestUpdate).toHaveBeenCalledWith(expect.objectContaining({
             where: { id: 'req_2' },
-            data: { status: 'NEEDS_REVIEW' }
+            data: { status: 'NEEDS_REVIEW', statusNote: expect.stringContaining('already used') }
         }));
     });
 
@@ -825,13 +825,13 @@ describe('Cron: BullMQ Worker Router', () => {
     // ==== Pack guard: packs bypass the single-issue number check and the off-series reverse
     // guard, so they must not be considered for an issue too fresh for any pack to contain. ====
 
-    const runSearchWithReleaseDate = async (releaseDate: string) => {
+    const runSearchWithReleaseDate = async (releaseDate: string, engineAnswer: Record<string, unknown> = { success: false }) => {
         initWorker();
         mocks.requestFindUnique.mockResolvedValue({ id: 'req_p', volumeId: '101', metadataSource: 'COMICVINE', activeDownloadName: 'Spawn #360', failedLinks: '[]' });
         mocks.seriesFindFirst.mockResolvedValue({ id: 's1', metadataId: '101', metadataSource: 'COMICVINE' });
         mocks.issueCount.mockResolvedValue(0); // zero files owned → packs would normally be allowed
         mocks.issueFindMany.mockResolvedValue([{ number: '360', releaseDate }]);
-        mocks.engineFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false }) });
+        mocks.engineFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => engineAnswer });
 
         await mocks.workerCb.current({
             id: 'job_search_pack',
@@ -847,8 +847,32 @@ describe('Cron: BullMQ Worker Router', () => {
         const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
         await runSearchWithReleaseDate(lastYear);
 
-        expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'req_p' }, data: { status: 'NOT_FOUND' } });
-        expect(mocks.requestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'AWAITING_RELEASE' } }));
+        // An engine that sends no per-source summary (an older one) still leaves a reason.
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_p' }, data: { status: 'NOT_FOUND', statusNote: 'Searched every enabled source; none had it.' }
+        });
+        expect(mocks.requestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'AWAITING_RELEASE' }) }));
+    });
+
+    // beta.008: WHY it wasn't found - the engine's per-source summary becomes the request's note.
+    it("keeps the engine's per-source summary as the NOT_FOUND request's note", async () => {
+        const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        await runSearchWithReleaseDate(lastYear, { success: false, search_note: 'GetComics: nothing found · Prowlarr: 12 results, none matched' });
+
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_p' }, data: { status: 'NOT_FOUND', statusNote: 'GetComics: nothing found · Prowlarr: 12 results, none matched' }
+        });
+    });
+
+    it("keeps a stall's reason as its note, without the alert's bold markers", async () => {
+        const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        await runSearchWithReleaseDate(lastYear, {
+            success: false, stall_for_review: true, stall_reason: 'GetComics lists **Spawn #360** only on a multi-pack page.'
+        });
+
+        expect(mocks.requestUpdate).toHaveBeenCalledWith({
+            where: { id: 'req_p' }, data: { status: 'STALLED', statusNote: 'GetComics lists Spawn #360 only on a multi-pack page.' }
+        });
     });
 
     it('disables packs when the requested issue is brand-new (released < 30 days ago)', async () => {

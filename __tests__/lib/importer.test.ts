@@ -163,6 +163,51 @@ describe('File System: Importer Engine', () => {
         expect(fs.copy).not.toHaveBeenCalled();
         expect(vi.mocked(fs.ensureDir).mock.calls.some(([p]) => String(p).includes('C:\\Comics'))).toBe(false);
         expect(mocks.createIssue).not.toHaveBeenCalled();
+        // beta.008: the request says why (it used to sit at 100% with the reason only in the log), and
+        // its status is left alone so the next import attempt can still pick it up.
+        expect(mocks.updateRequest).toHaveBeenCalledWith({
+            where: { id: 'req_1' },
+            data: { statusNote: expect.stringMatching(/library "Standard Comics".*Windows path.*Settings → Library & Files/) }
+        });
+    });
+
+    it('notes a request that has no library to import into, without touching its status', async () => {
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+        });
+        mocks.findFirstSeries.mockResolvedValueOnce({
+            id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: null, isManga: false
+        });
+        mocks.findManyLibraries.mockResolvedValue([]);
+
+        expect(await Importer.importRequest('req_1')).toBe(false);
+        expect(mocks.updateRequest).toHaveBeenCalledWith({
+            where: { id: 'req_1' },
+            data: { statusNote: expect.stringContaining('no library to import into') }
+        });
+    });
+
+    it('notes a request whose folder pattern gives no folder, without touching its status', async () => {
+        // {Imprint} alone, for a series with no imprint, leaves nothing to make a folder from.
+        mocks.findManySettings.mockResolvedValue([
+            { key: 'download_path', value: '/downloads' },
+            { key: 'folder_naming_pattern', value: '{Imprint}' },
+            { key: 'file_naming_pattern', value: '{Series} #{Issue}' }
+        ]);
+        mocks.findUniqueRequest.mockResolvedValueOnce({
+            id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date()
+        });
+        mocks.findFirstSeries.mockResolvedValueOnce({
+            id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false
+        });
+        vi.mocked(fs.copy).mockClear();
+
+        expect(await Importer.importRequest('req_1')).toBe(false);
+        expect(mocks.updateRequest).toHaveBeenCalledWith({
+            where: { id: 'req_1' },
+            data: { statusNote: expect.stringMatching(/folder pattern "\{Imprint\}" gives no folder for Batman/) }
+        });
+        expect(fs.copy).not.toHaveBeenCalled();
     });
 
     it('should stall the request if the downloaded file is missing from the hard drive', async () => {
@@ -179,9 +224,9 @@ describe('File System: Importer Engine', () => {
         const result = await Importer.importRequest('req_1');
         
         expect(result).toBe(false);
-        // Assert it marked the request as stalled after 20+ missing attempts
+        // Assert it marked the request as stalled after 20+ missing attempts, saying why (beta.008)
         expect(mocks.updateRequest).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({ status: 'STALLED' })
+            data: expect.objectContaining({ status: 'STALLED', statusNote: expect.stringContaining('path mappings') })
         }));
     });
 

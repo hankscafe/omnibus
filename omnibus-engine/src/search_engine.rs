@@ -90,6 +90,84 @@ pub fn parse_search_source_order(value: Option<&str>) -> Vec<String> {
     if out.is_empty() { default() } else { out }
 }
 
+/// What one source did in a search that found nothing downloadable (v1.4.10-beta.008). Node stores
+/// the summary line as the request's note, so an admin sees WHY it is Not Found Yet. `found` counts
+/// what the source returned (GetComics' own relevance filter has already run), `blocked` how many of
+/// those were skipped as previously failed releases.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceSummary {
+    pub source: String,
+    pub outcome: &'static str,
+    pub found: usize,
+    pub blocked: usize,
+}
+
+/// The facts the search handler gathers about one source; `kept` is what was left after the blocklist,
+/// `no_hoster` a GetComics match that resolved to no enabled file host.
+pub struct SourceRun {
+    pub source: &'static str,
+    pub errored: bool,
+    pub found: usize,
+    pub kept: usize,
+    pub no_hoster: bool,
+}
+
+/// One source's outcome: "off" (not in the source order), "error" (its search failed), "empty" (no
+/// results), "blocked" (every result a previously failed release), "no_hoster" (a match with no
+/// enabled file host), "rejected" (results, none matched). A source that is in the order but switched
+/// off downstream (GetComics' ddl_enabled, an unconfigured Prowlarr) reads as "empty".
+pub fn source_outcome(ran: bool, errored: bool, found: usize, blocked: usize, no_hoster: bool) -> &'static str {
+    if !ran {
+        "off"
+    } else if errored {
+        "error"
+    } else if found == 0 {
+        "empty"
+    } else if blocked >= found {
+        "blocked"
+    } else if no_hoster {
+        "no_hoster"
+    } else {
+        "rejected"
+    }
+}
+
+/// Every source's outcome, in the configured order, then the sources that weren't in it.
+pub fn summarize_search(order: &[String], runs: &[SourceRun]) -> Vec<SourceSummary> {
+    let summary = |r: &SourceRun, ran: bool| {
+        let blocked = r.found.saturating_sub(r.kept);
+        SourceSummary { source: r.source.to_string(), outcome: source_outcome(ran, r.errored, r.found, blocked, r.no_hoster), found: r.found, blocked }
+    };
+    let mut out: Vec<SourceSummary> = order.iter()
+        .filter_map(|o| runs.iter().find(|r| r.source == o.as_str()))
+        .map(|r| summary(r, true))
+        .collect();
+    out.extend(runs.iter().filter(|r| !order.iter().any(|o| o == r.source)).map(|r| summary(r, false)));
+    out
+}
+
+/// The summary as one line: "GetComics: nothing found · Prowlarr: 12 results, none matched · Anna's Archive: off".
+pub fn describe_search_summary(summary: &[SourceSummary]) -> String {
+    let results = |n: usize| if n == 1 { "1 result".to_string() } else { format!("{} results", n) };
+    summary.iter().map(|s| {
+        let name = match s.source.as_str() {
+            "getcomics" => "GetComics",
+            "prowlarr" => "Prowlarr",
+            "annas_archive" => "Anna's Archive",
+            other => other,
+        };
+        let what = match s.outcome {
+            "off" => "off".to_string(),
+            "error" => "search failed".to_string(),
+            "empty" => "nothing found".to_string(),
+            "blocked" => format!("{}, all failed before", results(s.found)),
+            "no_hoster" => "found, but no enabled file host".to_string(),
+            _ => format!("{}, none matched", results(s.found)),
+        };
+        format!("{}: {}", name, what)
+    }).collect::<Vec<_>>().join(" · ")
+}
+
 pub async fn get_custom_acronyms(db: &sqlx::AnyPool) -> anyhow::Result<HashMap<String, String>> {
     let mut ac_map = HashMap::new();
     ac_map.insert("tmnt".to_string(), "teenage mutant ninja turtles".to_string());
@@ -879,6 +957,59 @@ fn calculate_score(res: &ProwlarrResult, rules: &[ScoringRule]) -> f64 {
         }
     }
     score
+}
+
+#[cfg(test)]
+mod search_summary_tests {
+    use super::*;
+
+    // Why a request is Not Found Yet (v1.4.10-beta.008): what each source did in a search that found
+    // nothing downloadable.
+    #[test]
+    fn a_sources_outcome_in_a_search_that_found_nothing() {
+        assert_eq!(source_outcome(false, false, 0, 0, false), "off");
+        assert_eq!(source_outcome(true, true, 0, 0, false), "error");
+        assert_eq!(source_outcome(true, true, 5, 0, false), "error", "a failed search outranks whatever came back");
+        assert_eq!(source_outcome(true, false, 0, 0, false), "empty");
+        assert_eq!(source_outcome(true, false, 3, 3, false), "blocked");
+        assert_eq!(source_outcome(true, false, 3, 1, true), "no_hoster");
+        assert_eq!(source_outcome(true, false, 12, 0, false), "rejected");
+        assert_eq!(source_outcome(true, false, 3, 1, false), "rejected", "some blocked, the rest didn't match");
+    }
+
+    fn run(source: &'static str, errored: bool, found: usize, kept: usize, no_hoster: bool) -> SourceRun {
+        SourceRun { source, errored, found, kept, no_hoster }
+    }
+
+    #[test]
+    fn the_summary_follows_the_configured_order_then_lists_the_sources_that_were_off() {
+        let order = vec!["prowlarr".to_string(), "getcomics".to_string()];
+        let summary = summarize_search(&order, &[
+            run("getcomics", false, 0, 0, false),
+            run("annas_archive", false, 0, 0, false),
+            run("prowlarr", false, 12, 10, false),
+        ]);
+        let got: Vec<(&str, &str, usize, usize)> = summary.iter().map(|s| (s.source.as_str(), s.outcome, s.found, s.blocked)).collect();
+        assert_eq!(got, vec![
+            ("prowlarr", "rejected", 12, 2),
+            ("getcomics", "empty", 0, 0),
+            ("annas_archive", "off", 0, 0),
+        ]);
+    }
+
+    #[test]
+    fn the_search_note_names_every_source_and_what_it_did() {
+        let s = |source: &str, outcome: &'static str, found: usize, blocked: usize| SourceSummary { source: source.into(), outcome, found, blocked };
+        assert_eq!(
+            describe_search_summary(&[s("getcomics", "empty", 0, 0), s("prowlarr", "rejected", 12, 0), s("annas_archive", "off", 0, 0)]),
+            "GetComics: nothing found · Prowlarr: 12 results, none matched · Anna's Archive: off"
+        );
+        assert_eq!(describe_search_summary(&[s("getcomics", "rejected", 1, 0)]), "GetComics: 1 result, none matched");
+        assert_eq!(
+            describe_search_summary(&[s("prowlarr", "blocked", 2, 2), s("getcomics", "error", 0, 0), s("annas_archive", "no_hoster", 1, 0)]),
+            "Prowlarr: 2 results, all failed before · GetComics: search failed · Anna's Archive: found, but no enabled file host"
+        );
+    }
 }
 
 #[cfg(test)]

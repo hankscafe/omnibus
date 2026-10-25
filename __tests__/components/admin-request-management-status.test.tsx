@@ -20,7 +20,7 @@ describe('Request Management: status labels', () => {
     beforeEach(() => {
         stubFetchRouter([
             ['/api/admin/requests', () => ok([
-                row('r1', 'NOT_FOUND', 'Saga #61'),
+                { ...row('r1', 'NOT_FOUND', 'Saga #61'), statusNote: 'GetComics: nothing found · Prowlarr: 12 results, none matched' },
                 row('r2', 'AWAITING_RELEASE', 'The Dogsitter #2'),
                 row('r3', 'MANUAL_DDL', 'X-Men #5'),
                 row('r4', 'STALLED', 'Spawn #360'),
@@ -38,5 +38,12 @@ describe('Request Management: status labels', () => {
         for (const raw of ['NOT_FOUND', 'AWAITING_RELEASE', 'MANUAL_DDL', 'STALLED']) {
             expect(screen.queryByText(raw)).toBeNull();
         }
+    });
+
+    // beta.008: why it's in that state, under its status (table and phone layout).
+    it("shows a request's note under its status", async () => {
+        await act(async () => { render(<AdminRequestManagement />); });
+
+        expect(screen.getAllByText('GetComics: nothing found · Prowlarr: 12 results, none matched').length).toBeGreaterThan(0);
     });
 });

@@ -110,6 +110,11 @@ model Request {
   // Set when an admin dismisses/snoozes the System Health warning for this request. Snoozed items are
   // excluded from health flagging and from the AWAITING_RELEASE retry sweep until this timestamp passes.
   snoozedUntil       DateTime?
+  // WHY the request is where it is, for admins (Request Management): the sources a search tried, a
+  // stall's or a review's reason, an import that can't run. Cleared by any later status change that
+  // doesn't write its own (src/lib/status-note.ts, applied in db.ts).
+  statusNote         String?
+  statusNoteAt       DateTime?
   imageUrl           String?
   notified           Boolean  @default(false)  
   createdAt          DateTime @default(now())

@@ -137,6 +137,10 @@ struct SearchResponse {
     // in order at download time, falling back to the next hoster if one fails. Empty for torrents/usenet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ddl_candidates: Vec<DdlCandidate>,
+    // Nothing downloadable anywhere: what each source did, as one line ("GetComics: nothing found ·
+    // Prowlarr: 12 results, none matched"). Node keeps it as the request's note (beta.008).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -239,6 +243,33 @@ mod auth_tests {
         assert!(!secrets_match("short", "longer-value")); // differing lengths must not panic
         assert!(secrets_match("", ""));
         assert!(!secrets_match("x", ""));
+    }
+}
+
+#[cfg(test)]
+mod search_note_tests {
+    use super::*;
+
+    // beta.008: a search that finds nothing answers WHY, source by source. Only Prowlarr is in the
+    // source order and it isn't configured, so the search returns at once without touching a network.
+    #[tokio::test]
+    async fn a_search_that_finds_nothing_says_what_each_source_did() {
+        let base = std::env::temp_dir().join(format!("omnibus_search_note_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("s.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('search_source_priority', '["prowlarr"]')"#).execute(&db.pool).await.unwrap();
+        let state = Arc::new(AppState { db, limiter: Arc::new(rate_limiter::RateLimiter::new()), internal_secret: None });
+        let payload: AutomationRequest = serde_json::from_value(serde_json::json!({ "name": "Zzqx Probe #1", "request_id": "req_probe" })).unwrap();
+
+        let Json(answer) = handle_search(State(state), Json(payload)).await;
+
+        assert!(!answer.success);
+        assert_eq!(answer.search_note.as_deref(), Some("Prowlarr: nothing found · GetComics: off · Anna's Archive: off"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 
@@ -1429,6 +1460,9 @@ async fn handle_search(
             f == &r.title || f == &r.download_url || f == &r.guid || r.info_hash.as_deref() == Some(f.as_str())
         })
     };
+    // What each source answered, before the blocklist - for the no-match summary (beta.008).
+    let found = |raw: &anyhow::Result<Vec<prowlarr::ProwlarrResult>>| (raw.is_err(), raw.as_ref().map_or(0, |v| v.len()));
+    let ((get_err, get_found), (annas_err, annas_found), (prow_err, prow_found)) = (found(&get_res_raw), found(&annas_res_raw), found(&prow_res_raw));
     let get_res: Vec<prowlarr::ProwlarrResult> = get_res_raw.unwrap_or_default().into_iter().filter(|r| not_blocked(r)).collect();
     let annas_res: Vec<prowlarr::ProwlarrResult> = annas_res_raw.unwrap_or_default().into_iter().filter(|r| not_blocked(r)).collect();
     let prow_res: Vec<prowlarr::ProwlarrResult> = prow_res_raw.unwrap_or_default().into_iter().filter(|r| not_blocked(r)).collect();
@@ -1463,7 +1497,7 @@ async fn handle_search(
                     get_res.iter().map(|r| search_engine::normalize_edition_title(&r.title)).collect();
                 if get_res.len() > 1 && editions.len() > 1 {
                     log::warn!("Multiple distinct DDL editions found for {}. Stalling for admin review.", payload.name);
-                    return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, stall_reason: None, manual_ddl: None, ddl_candidates: Vec::new() });
+                    return Json(SearchResponse { success: false, best_match: None, stall_for_review: true, stall_reason: None, manual_ddl: None, ddl_candidates: Vec::new(), search_note: None });
                 }
 
                 // GetComics results are already relevance-filtered in getcomics::search → operator
@@ -1491,6 +1525,7 @@ async fn handle_search(
                                 )),
                                 manual_ddl: None,
                                 ddl_candidates: Vec::new(),
+                                search_note: None,
                             });
                         }
                         getcomics::DeepLinkOutcome::Links(c) => c,
@@ -1541,20 +1576,28 @@ async fn handle_search(
 
     // DDL deep-links are already resolved above; Prowlarr results are torrents/usenet, returned as-is.
     if let Some(best) = best_match {
-        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, stall_reason: None, manual_ddl: None, ddl_candidates });
+        return Json(SearchResponse { success: true, best_match: Some(best), stall_for_review: false, stall_reason: None, manual_ddl: None, ddl_candidates, search_note: None });
     }
 
     // Nothing auto-downloadable. If we held a GetComics link and GetComics is an enabled hoster, surface
     // it for manual download (parity with the automation.ts MANUAL_DDL fallback).
+    let gc_no_hoster = manual_fallback.is_some();
     if let Some((url, name)) = manual_fallback {
         if getcomics::is_getcomics_enabled(&state.db.pool).await {
             log::warn!("No downloadable release for {}. Reverting to the GetComics manual DDL fallback.", payload.name);
-            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new() });
+            return Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: Some(ManualDdl { url, name }), ddl_candidates: Vec::new(), search_note: None });
         }
     }
 
-    log::warn!("No valid release found for {} after checking all sources.", payload.name);
-    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: None, ddl_candidates: Vec::new() })
+    // WHY nothing was found, source by source (beta.008): logged, and returned for the request's note.
+    let summary = search_engine::summarize_search(&source_order, &[
+        search_engine::SourceRun { source: "getcomics", errored: get_err, found: get_found, kept: get_res.len(), no_hoster: gc_no_hoster },
+        search_engine::SourceRun { source: "annas_archive", errored: annas_err, found: annas_found, kept: annas_res.len(), no_hoster: false },
+        search_engine::SourceRun { source: "prowlarr", errored: prow_err, found: prow_found, kept: prow_res.len(), no_hoster: false },
+    ]);
+    let note = search_engine::describe_search_summary(&summary);
+    log::warn!("No valid release found for {} after checking all sources: {}", payload.name, note);
+    Json(SearchResponse { success: false, best_match: None, stall_for_review: false, stall_reason: None, manual_ddl: None, ddl_candidates: Vec::new(), search_note: Some(note) })
 }
 
 async fn handle_interactive_search(

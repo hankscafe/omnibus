@@ -57,7 +57,9 @@ export async function GET(request: Request) {
         createdAt: req.createdAt,
         updatedAt: req.updatedAt,
         status: req.status,
-        progress: req.progress, 
+        // WHY it is in that state (beta.008): admins only - My Requests' route doesn't pass it on.
+        statusNote: req.statusNote ?? null,
+        progress: req.progress,
         downloadLink: req.downloadLink,
         imageUrl: req.imageUrl && req.imageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(req.imageUrl)}` : req.imageUrl,
         retryCount: req.retryCount || 0 

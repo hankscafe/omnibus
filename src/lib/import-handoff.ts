@@ -278,18 +278,20 @@ async function closeImportingRequest(req: ImportingRequest, tally: HandoffTally)
   }
 
   const missing = issueNumber ? `issue #${issueNumber}` : 'the pack';
-  await prisma.request.update({ where: { id: req.id }, data: { status: 'NEEDS_REVIEW' } });
+  const reason = tally.reason === 'handoff'
+    ? (tally.pending
+        // The batch never finished reporting: say so rather than claim it was handled.
+        ? `The download stalled: ${tally.pending} file${tally.pending > 1 ? 's' : ''} of the batch never reported back${tally.unmatched > 0 ? `, and ${tally.unmatched} went to the unmatched folder` : ''}, and ${missing} did not reach your library. Nothing was imported; check the request on the Requests page.`
+        : `The download finished, but ${missing} did not reach your library` + (tally.unmatched > 0 ? ` — ${tally.unmatched} file${tally.unmatched > 1 ? 's' : ''} of the batch went to the unmatched folder for review.` : '.') + ' Nothing was imported; check the request on the Requests page.')
+    : `The import of this download never reported back, and ${missing} is not in your library. Nothing was imported; check the request on the Requests page.`;
+  // The alert's reason stays on the request for Request Management (beta.008).
+  await prisma.request.update({ where: { id: req.id }, data: { status: 'NEEDS_REVIEW', statusNote: reason } });
   await SystemNotifier.sendAlert('import_needs_review', {
     title: label,
     imageUrl: req.imageUrl,
     user: req.user?.username,
     email: req.user?.email,
-    description: tally.reason === 'handoff'
-      ? (tally.pending
-          // The batch never finished reporting: say so rather than claim it was handled.
-          ? `The download stalled: ${tally.pending} file${tally.pending > 1 ? 's' : ''} of the batch never reported back${tally.unmatched > 0 ? `, and ${tally.unmatched} went to the unmatched folder` : ''}, and ${missing} did not reach your library. Nothing was imported; check the request on the Requests page.`
-          : `The download finished, but ${missing} did not reach your library` + (tally.unmatched > 0 ? ` — ${tally.unmatched} file${tally.unmatched > 1 ? 's' : ''} of the batch went to the unmatched folder for review.` : '.') + ' Nothing was imported; check the request on the Requests page.')
-      : `The import of this download never reported back, and ${missing} is not in your library. Nothing was imported; check the request on the Requests page.`,
+    description: reason,
     date: new Date().toLocaleString()
   }).catch(() => {});
   Logger.log(

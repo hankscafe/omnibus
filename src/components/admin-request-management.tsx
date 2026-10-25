@@ -350,6 +350,9 @@ export function AdminRequestManagement() {
                       <Badge className={`${requestStatusClass(req.status)} text-[10px] uppercase font-bold px-2 py-0.5 truncate`}>
                         {requestStatusLabel(req.status)}
                       </Badge>
+                      {req.statusNote && (
+                        <p className="text-[10px] text-muted-foreground mt-1 leading-snug line-clamp-2 whitespace-normal" title={req.statusNote}>{req.statusNote}</p>
+                      )}
                       {req.status === 'STALLED' && (
                         <Badge variant="outline" className="text-[9px] uppercase font-black px-1.5 py-0 border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/20 ml-2">
                             Perform Interactive Search
@@ -426,6 +429,9 @@ export function AdminRequestManagement() {
                       <Badge className={`${requestStatusClass(req.status)} text-[10px] uppercase font-bold px-2 py-0.5`}>
                         {requestStatusLabel(req.status)}
                       </Badge>
+                      {req.statusNote && (
+                        <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug" title={req.statusNote}>{req.statusNote}</p>
+                      )}
                       {req.status === 'STALLED' && (
                           <div className="mt-1.5">
                               <Badge variant="outline" className="text-[9px] uppercase font-black px-1.5 py-0 border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/20">

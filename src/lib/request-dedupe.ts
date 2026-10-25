@@ -162,7 +162,10 @@ export async function settleDuplicateOnLink(link: string | null | undefined, req
       // already notified, and stay quiet. A request meeting another user's finished link closes
       // with `notified: false`: nobody ever announced this issue to them.
       ? { status: 'COMPLETED', progress: 100, notified: notifiedOnSettle(siblings, req?.userId) }
-      : { status: 'NEEDS_REVIEW' }
+      : {
+          status: 'NEEDS_REVIEW',
+          statusNote: `Its download was already used by a finished request, and ${issueNumber ? `issue #${issueNumber}` : 'the issue'} never reached the library. Check the unmatched folder for the pack.`,
+        }
   });
   Logger.log(
     verdict.reason === 'in-library'

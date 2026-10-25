@@ -186,7 +186,8 @@ describe('settleDuplicateOnLink', () => {
         });
         expect(mocks.requestUpdate).toHaveBeenCalledWith({
             where: { id: 'req_new' },
-            data: { status: 'NEEDS_REVIEW' }
+            // beta.008: Request Management shows why it needs review.
+            data: { status: 'NEEDS_REVIEW', statusNote: expect.stringContaining('unmatched folder') }
         });
     });
 

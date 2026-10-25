@@ -4,7 +4,7 @@
 // (empty fields only, mathematically incapable of overwriting curation).
 import { describe, it, expect } from 'vitest';
 import { seedValue, providerFillPlan } from '@/components/smart-match-metadata-dialog';
-import { acceptableForBulk, nameSimilarity, yearTerm, seriesQueryFromName, rankSearchResults, pickSuggestion } from '@/lib/utils/smart-match-search';
+import { acceptableForBulk, closedRequestsNote, nameSimilarity, yearTerm, seriesQueryFromName, rankSearchResults, pickSuggestion } from '@/lib/utils/smart-match-search';
 
 describe('seedValue', () => {
     const filePrefill = { value: 'Dylan Dog', source: 'comicinfo' };
@@ -55,6 +55,19 @@ describe('acceptableForBulk — Accept All candidates (ignore state)', () => {
 });
 
 // ==== Suggestion ranking (robotshavehearts2): the auto-scan stops taking results[0]. ====
+
+// beta.010: an Accept (or Accept All) says how many open requests it closed.
+describe('closedRequestsNote — what the Accept toast adds', () => {
+    it('says nothing when no request closed', () => {
+        expect(closedRequestsNote(0)).toBe('');
+        expect(closedRequestsNote(undefined)).toBe('');
+    });
+
+    it('counts the requests it closed', () => {
+        expect(closedRequestsNote(1)).toBe(' Closed 1 open request.');
+        expect(closedRequestsNote(3)).toBe(' Closed 3 open requests.');
+    });
+});
 
 describe('nameSimilarity — exact twin of matcher.rs name_similarity', () => {
     it('reproduces the engine test cases token for token', () => {

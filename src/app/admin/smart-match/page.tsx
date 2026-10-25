@@ -17,7 +17,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion } from "@/lib/utils/smart-match-search"
+import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion, closedRequestsNote } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import { FolderCollisionDialog, type FolderCollision, type CollisionResolution } from "@/components/folder-collision-dialog"
 import { AttachLocalCollectedDialog } from "@/components/attach-local-collected-dialog"
@@ -585,9 +585,9 @@ export default function SmartMatchPage() {
                         variant: result.conflicts > 0 ? "destructive" : undefined,
                     });
                 } else if (result.conflicts > 0) {
-                    toast({ title: "Matched with conflicts", description: `${suggestion.name} was linked, but ${result.conflicts} duplicate file(s) were left in place (not overwritten). Check the logs.`, variant: "destructive" });
+                    toast({ title: "Matched with conflicts", description: `${suggestion.name} was linked, but ${result.conflicts} duplicate file(s) were left in place (not overwritten). Check the logs.${closedRequestsNote(result.requestsClosed)}`, variant: "destructive" });
                 } else {
-                    toast({ title: "Matched Successfully!", description: `${suggestion.name} has been linked and organized.` });
+                    toast({ title: "Matched Successfully!", description: `${suggestion.name} has been linked and organized.${closedRequestsNote(result.requestsClosed)}` });
                 }
                 setUnmatched(prev => prev.filter(s => s.id !== series.id));
                 return true;
@@ -658,12 +658,13 @@ export default function SmartMatchPage() {
         if (targets.length === 0) return;
         setAcceptAllProgress({ done: 0, total: targets.length });
         let successCount = 0;
+        let requestsClosed = 0;
         const failedItems: string[] = [];
 
         try {
             for (let i = 0; i < targets.length; i += ACCEPT_ALL_CHUNK) {
                 const chunk = targets.slice(i, i + ACCEPT_ALL_CHUNK);
-                let results: Array<{ ok: boolean; error?: string }> = [];
+                let results: Array<{ ok: boolean; requestsClosed?: number; error?: string }> = [];
                 try {
                     const res = await fetch('/api/library/match-series/bulk', {
                         method: 'POST',
@@ -680,7 +681,7 @@ export default function SmartMatchPage() {
 
                 const succeededIds = new Set(chunk.filter((_, idx) => results[idx]?.ok).map(s => s.id));
                 chunk.forEach((s, idx) => {
-                    if (results[idx]?.ok) successCount++;
+                    if (results[idx]?.ok) { successCount++; requestsClosed += results[idx].requestsClosed || 0; }
                     else failedItems.push(`${s.name}${results[idx]?.error ? ` (${results[idx].error})` : ''}`);
                 });
                 if (succeededIds.size > 0) {
@@ -695,11 +696,11 @@ export default function SmartMatchPage() {
         if (failedItems.length > 0) {
             toast({
                 title: "Accept All finished with errors",
-                description: `Matched ${successCount} of ${targets.length}. Failed: ${failedItems.slice(0, 3).join('; ')}${failedItems.length > 3 ? ` and ${failedItems.length - 3} more` : ''}`,
+                description: `Matched ${successCount} of ${targets.length}. Failed: ${failedItems.slice(0, 3).join('; ')}${failedItems.length > 3 ? ` and ${failedItems.length - 3} more` : ''}.${closedRequestsNote(requestsClosed)}`,
                 variant: "destructive"
             });
         } else {
-            toast({ title: "Accept All complete", description: `Successfully matched all ${successCount} suggested series.` });
+            toast({ title: "Accept All complete", description: `Successfully matched all ${successCount} suggested series.${closedRequestsNote(requestsClosed)}` });
         }
     };
 

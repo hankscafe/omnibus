@@ -10,12 +10,17 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
 import { 
-  Search, Trash2, ExternalLink, Info, Loader2, ChevronsUpDown, AlertTriangle, 
-  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, Users
+  Search, Trash2, ExternalLink, Info, Loader2, ChevronsUpDown, AlertTriangle,
+  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, Users, CheckCircle2
 } from "lucide-react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
-import { REQUEST_STATUS_FILTERS, requestStatusClass, requestStatusLabel, requestStatusMatches } from "@/lib/request-status"
+import { COMPLETABLE_STATUSES, REQUEST_STATUS_FILTERS, requestStatusClass, requestStatusLabel, requestStatusMatches } from "@/lib/request-status"
+
+// beta.010: a request still waiting for its issue can be marked completed - what the Smart Matcher and
+// the Series Monitor can't tie to a series (a MyAnimeList import, a request against the other provider,
+// a trade). Not a running download or an import.
+const canComplete = (req: { status: string }) => COMPLETABLE_STATUSES.includes(req.status)
 
 export function AdminRequestManagement() {
   const [requests, setRequests] = useState<any[]>([])
@@ -39,6 +44,12 @@ export function AdminRequestManagement() {
   const [idsToDelete, setIdsToDelete] = useState<string[]>([])
   const [isDeleting, setIsDeleting] = useState(false)
 
+  // Mark completed (beta.010)
+  const [completeOpen, setCompleteOpen] = useState(false)
+  const [idsToComplete, setIdsToComplete] = useState<string[]>([])
+  const [notifyRequester, setNotifyRequester] = useState(true)
+  const [isCompleting, setIsCompleting] = useState(false)
+
   // Details Modal
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [selectedComicDetails, setSelectedComicDetails] = useState<any>(null)
@@ -55,7 +66,7 @@ export function AdminRequestManagement() {
     status: 140,
     createdAt: 100,
     updatedAt: 100,
-    actions: 120
+    actions: 170
   })
   const [isResizing, setIsResizing] = useState<string | null>(null)
   const startXRef = useRef<number>(0)
@@ -143,6 +154,48 @@ export function AdminRequestManagement() {
         fetchRequests();
       }
     } finally { setIsDeleting(false); }
+  }
+
+  // The selected requests that can be marked completed (a selection can include any status).
+  const selectedCompletable = useMemo(
+    () => requests.filter(r => selectedIds.has(r.id) && canComplete(r)).map(r => r.id),
+    [requests, selectedIds]
+  )
+
+  const initiateComplete = (ids: string[]) => {
+    setIdsToComplete(ids);
+    setNotifyRequester(true);
+    setCompleteOpen(true);
+  }
+
+  const handleConfirmedComplete = async () => {
+    if (idsToComplete.length === 0) return;
+    setIsCompleting(true);
+    try {
+      const res = await fetch('/api/admin/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'complete', ids: idsToComplete, notify: notifyRequester })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: "Couldn't mark completed", description: data.error || `HTTP ${res.status}`, variant: "destructive" });
+        return;
+      }
+      const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+      toast({
+        title: "Marked completed",
+        description: `${data.completed} request(s) marked completed${notifyRequester ? ', and the requester was told' : ''}.`
+          + (skipped > 0 ? ` ${skipped} skipped: no longer waiting for their issue.` : ''),
+      });
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        for (const id of idsToComplete) next.delete(id);
+        return next;
+      });
+      setCompleteOpen(false);
+      fetchRequests();
+    } finally { setIsCompleting(false); }
   }
 
   const toggleAll = () => {
@@ -241,14 +294,22 @@ export function AdminRequestManagement() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-6">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-foreground">Request Management</h2>
-          <p className="text-sm text-muted-foreground">Manage, filter, and delete all user requests.</p>
+          <p className="text-sm text-muted-foreground">Manage, filter, complete, and delete all user requests.</p>
         </div>
-        
+
         {selectedIds.size > 0 && (
-          <Button variant="destructive" onClick={() => initiateDelete(Array.from(selectedIds))} disabled={isDeleting} className="h-12 sm:h-10 font-bold w-full sm:w-auto animate-in fade-in zoom-in-95 shadow-lg">
-            {isDeleting ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2" /> : <Trash2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />}
-            Delete ({selectedIds.size})
-          </Button>
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            {selectedCompletable.length > 0 && (
+              <Button onClick={() => initiateComplete(selectedCompletable)} disabled={isCompleting} className="h-12 sm:h-10 font-bold w-full sm:w-auto animate-in fade-in zoom-in-95 shadow-lg bg-green-600 hover:bg-green-700 text-white">
+                {isCompleting ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />}
+                Mark completed ({selectedCompletable.length})
+              </Button>
+            )}
+            <Button variant="destructive" onClick={() => initiateDelete(Array.from(selectedIds))} disabled={isDeleting} className="h-12 sm:h-10 font-bold w-full sm:w-auto animate-in fade-in zoom-in-95 shadow-lg">
+              {isDeleting ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2" /> : <Trash2 className="w-5 h-5 sm:w-4 sm:h-4 mr-2" />}
+              Delete ({selectedIds.size})
+            </Button>
+          </div>
         )}
       </div>
 
@@ -377,6 +438,11 @@ export function AdminRequestManagement() {
                               <Search className="w-4 h-4" />
                             </Button>
                         )}
+                        {canComplete(req) && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600" title="Mark completed" onClick={() => initiateComplete([req.id])}>
+                              <CheckCircle2 className="w-4 h-4" />
+                            </Button>
+                        )}
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted text-primary" onClick={() => openDetails(req)}>
                           <Info className="w-4 h-4" />
                         </Button>
@@ -466,6 +532,11 @@ export function AdminRequestManagement() {
                             <Search className="w-4 h-4 sm:w-3 sm:h-3 mr-1" /> Search
                         </Button>
                     )}
+                    {canComplete(req) && (
+                        <Button variant="outline" size="sm" className="h-10 w-10 sm:h-9 sm:w-9 text-green-600 border-green-200 hover:bg-green-50 dark:border-green-900/50 dark:hover:bg-green-900/30" title="Mark completed" onClick={() => initiateComplete([req.id])}>
+                          <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4" />
+                        </Button>
+                    )}
                     <Button variant="outline" size="sm" className="h-10 w-10 sm:h-9 sm:w-9 text-primary border-border hover:bg-muted" onClick={() => openDetails(req)}>
                       <Info className="w-5 h-5 sm:w-4 sm:h-4" />
                     </Button>
@@ -547,6 +618,25 @@ export function AdminRequestManagement() {
         }
         confirmText={idsToDelete.length > 1 ? "Permanently Delete" : "Delete Request"}
       />
+
+      <ConfirmationDialog
+        isOpen={completeOpen}
+        onClose={() => setCompleteOpen(false)}
+        onConfirm={handleConfirmedComplete}
+        isLoading={isCompleting}
+        variant="default"
+        title={idsToComplete.length > 1 ? `Mark ${idsToComplete.length} Requests Completed?` : "Mark Request Completed?"}
+        description="Only do this when the issue is in your library: Omnibus then counts it as owned (in Discover and search, for example). The request keeps its history and notes who closed it."
+        confirmText="Mark Completed"
+      >
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 p-3">
+          <Checkbox id="notify-requester" className="mt-0.5" checked={notifyRequester} onCheckedChange={(c) => setNotifyRequester(c === true)} />
+          <div className="space-y-0.5">
+            <label htmlFor="notify-requester" className="text-sm font-bold text-foreground cursor-pointer">Tell the requester</label>
+            <p className="text-xs text-muted-foreground">They get the &quot;available&quot; alert and a notification bell entry.</p>
+          </div>
+        </div>
+      </ConfirmationDialog>
 
       {interactiveSearchReq && (
         <InteractiveSearchModal 

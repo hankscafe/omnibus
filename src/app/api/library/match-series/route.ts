@@ -747,12 +747,14 @@ export async function POST(request: Request) {
         }
     } catch (err) {}
 
+    // How many it closed goes back to the Smart Matcher's Accept toast (beta.010).
+    let requestsClosed = 0;
     try {
         // The match is what finally puts a requested issue on disk, so it closes the requests that
         // were waiting for it (#240 review: the NEEDS_REVIEW one a review asked for, found by the
         // number it stored rather than a pack title). beta.009: in every waiting state, made against
         // either provider, and the alert rings once per requester - request-fulfilment.ts.
-        if (existingRecord?.id) await closeRequestsFulfilledBySeries(existingRecord.id);
+        if (existingRecord?.id) requestsClosed = await closeRequestsFulfilledBySeries(existingRecord.id);
     } catch (e) {
         Logger.log(`[Match Series] Couldn't close the requests this match fulfilled: ${getErrorMessage(e)}`, 'warn');
     }
@@ -818,7 +820,7 @@ export async function POST(request: Request) {
     }
 
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
-    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts });
+    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts, requestsClosed });
 
   } catch (error: unknown) {
     Logger.log(`[Match Series API] Error: ${getErrorMessage(error)}`, 'error');

@@ -17,6 +17,13 @@ export const WAITING_STATUSES = ['NOT_FOUND', 'AWAITING_RELEASE'] as const;
 /** Statuses a requester may cancel from My Requests: nothing has been imported yet. */
 export const CANCELLABLE_STATUSES: readonly string[] = ['PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'UNRELEASED', ...WAITING_STATUSES];
 
+/** Statuses an admin may mark completed from Request Management (beta.010): still waiting for the
+ *  issue. Not a running download or an import - the download would go on, and the importer refuses a
+ *  completed request - and FAILED / ERROR are older rows' dead ends. */
+export const COMPLETABLE_STATUSES: readonly string[] = [
+    'PENDING_APPROVAL', 'PENDING', 'MANUAL_DDL', 'NEEDS_REVIEW', 'STALLED', 'UNRELEASED', 'FAILED', 'ERROR', ...WAITING_STATUSES,
+];
+
 const LABELS: Record<string, string> = {
     PENDING_APPROVAL: 'Needs Approval',
     PENDING: 'Pending',

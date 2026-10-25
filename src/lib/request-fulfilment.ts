@@ -27,7 +27,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { isSameIssue } from '@/lib/utils/issue-parser';
 import { ownedCoverageBySeries } from '@/lib/coverage-ownership';
 import { issueNumberOf } from '@/lib/request-dedupe';
-import { WAITING_STATUSES } from '@/lib/request-status';
+import { COMPLETABLE_STATUSES, WAITING_STATUSES } from '@/lib/request-status';
 
 /** A match closes a request in any state that is still waiting for its issue: all but IMPORTING, whose
  *  pack the watched-folder handoff is settling (import-handoff.ts). */
@@ -208,22 +208,31 @@ function announce(closing: Closing[], via: Via): void {
             description = `${lead}${labels.join(', ')} ${labels.length === 1 ? 'is' : 'are'} in your library and ready to read.`;
         } else {
             const names = [...new Set(items.map(c => `${c.series.name} ${labelOf(c)}`))];
-            const shown = names.slice(0, 5);
             title = `${names.length} Requested Issues Available!`;
-            description = `${lead}${shown.join(', ')}${names.length > shown.length ? ` and ${names.length - shown.length} more` : ''} are in your library and ready to read.`;
+            description = `${lead}${listOf(names)} are in your library and ready to read.`;
         }
-
-        SystemNotifier.sendAlert('comic_available', {
-            title,
-            imageUrl: first.req.imageUrl,
-            user: first.req.user?.username,
-            email: first.req.user?.email,
-            description,
-            publisher: single?.publisher || undefined,
-            year: single?.year ? String(single.year) : undefined,
-            date: new Date().toLocaleString(),
-        }).catch((e: unknown) => Logger.log(`[Requests] Couldn't send the "available" alert to ${first.req.user?.username || 'the requester'}: ${getErrorMessage(e)}`, 'warn'));
+        sendAvailableAlert(first.req, title, description, single);
     }
+}
+
+/** The first five names, then "and N more". */
+function listOf(names: string[]): string {
+    const shown = names.slice(0, 5);
+    return `${shown.join(', ')}${names.length > shown.length ? ` and ${names.length - shown.length} more` : ''}`;
+}
+
+/** One "available" alert, never awaited, so an unreachable webhook or mail server can't fail or slow a close. */
+function sendAvailableAlert(req: Candidate, title: string, description: string, series?: SeriesRow | null): void {
+    SystemNotifier.sendAlert('comic_available', {
+        title,
+        imageUrl: req.imageUrl,
+        user: req.user?.username,
+        email: req.user?.email,
+        description,
+        publisher: series?.publisher || undefined,
+        year: series?.year ? String(series.year) : undefined,
+        date: new Date().toLocaleString(),
+    }).catch((e: unknown) => Logger.log(`[Requests] Couldn't send the "available" alert to ${req.user?.username || 'the requester'}: ${getErrorMessage(e)}`, 'warn'));
 }
 
 /** The Smart Matcher: close every request the series it just matched answers to whose issue is now in
@@ -245,4 +254,43 @@ export async function closeRequestsFulfilledBySeries(seriesId: string): Promise<
 /** The Series Monitor: close every parked request whose issue is in the library, before it re-searches any. */
 export async function closeFulfilledParkedRequests(): Promise<number> {
     return closeFulfilled({ volumeId: { notIn: ['0', ''] } }, CLOSE_ON_MONITOR_STATUSES, 'monitor');
+}
+
+/**
+ * Request Management's "Mark completed" (beta.010): close the requests an admin chose, of those still
+ * waiting for their issue (COMPLETABLE_STATUSES), whatever the rule above could tie them to - a
+ * MyAnimeList import with no series id, a request against the other provider, a trade. The admin's
+ * word is the evidence here. The requester is told once, by each request's own name, unless the admin
+ * said not to; the note says who closed it. Returns what closed and the ids it left alone.
+ */
+export async function markRequestsCompleted(ids: string[], opts: { notify: boolean; by: string }): Promise<{ completed: Candidate[]; skipped: string[] }> {
+    const open = await prisma.request.findMany({
+        where: { id: { in: ids }, status: { in: [...COMPLETABLE_STATUSES] } },
+        select: REQUEST_FIELDS,
+    });
+    const skipped = ids.filter(id => !open.some(r => r.id === id));
+    if (open.length === 0) return { completed: [], skipped };
+
+    // notified: true when the admin chose quiet - as far as the bell is concerned, already told.
+    await prisma.request.updateMany({
+        where: { id: { in: open.map(r => r.id) }, status: { in: [...COMPLETABLE_STATUSES] } },
+        data: { status: 'COMPLETED', progress: 100, notified: !opts.notify, statusNote: `Marked completed by ${opts.by}` },
+    });
+    const names = open.map(r => r.activeDownloadName || r.id);
+    Logger.log(
+        `[Requests] ${opts.by} marked ${open.length} request(s) completed${opts.notify ? '' : ' without telling the requester'}: ` +
+        `${names.slice(0, 10).join(', ')}${names.length > 10 ? ` and ${names.length - 10} more` : ''}.`,
+        'info'
+    );
+
+    if (opts.notify) {
+        const byUser = new Map<string, Candidate[]>();
+        for (const r of open) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
+        for (const items of byUser.values()) {
+            const own = [...new Set(items.map(r => r.activeDownloadName || 'Your request'))].sort((a, b) => a.localeCompare(b));
+            const title = own.length === 1 ? own[0] : `${own.length} Requested Issues Available!`;
+            sendAvailableAlert(items[0], title, `${listOf(own)} ${own.length === 1 ? 'is' : 'are'} in your library and ready to read.`);
+        }
+    }
+    return { completed: open, skipped };
 }

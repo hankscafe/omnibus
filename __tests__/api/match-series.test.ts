@@ -859,6 +859,16 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
 
             expect(res.status).toBe(200);
             expect(Logger.log).toHaveBeenCalledWith(expect.stringContaining('database is locked'), 'warn');
+            expect((await res.json()).requestsClosed).toBe(0);
+        });
+
+        // beta.010: the Accept toast says what the match closed.
+        it('says how many requests it closed', async () => {
+            mocks.closeFulfilled.mockResolvedValueOnce(2);
+
+            const res = await POST(matchReq());
+
+            expect((await res.json()).requestsClosed).toBe(2);
         });
     });
 });

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Loader2 } from "lucide-react"
+import type { ReactNode } from "react"
 
 interface ConfirmationDialogProps {
   isOpen: boolean
@@ -21,6 +22,8 @@ interface ConfirmationDialogProps {
   cancelText?: string
   variant?: "default" | "destructive"
   isLoading?: boolean
+  /** Extra controls between the description and the buttons (an option the action takes). */
+  children?: ReactNode
 }
 
 export function ConfirmationDialog({
@@ -33,6 +36,7 @@ export function ConfirmationDialog({
   cancelText = "Cancel",
   variant = "destructive",
   isLoading = false,
+  children,
 }: ConfirmationDialogProps) {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && !isLoading && onClose()}>
@@ -46,6 +50,7 @@ export function ConfirmationDialog({
             {description}
           </DialogDescription>
         </DialogHeader>
+        {children}
         <DialogFooter className="mt-4">
           <Button variant="outline" onClick={onClose} disabled={isLoading} className="border-border hover:bg-muted text-foreground">
             {cancelText}

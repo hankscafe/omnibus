@@ -48,7 +48,7 @@ describe('API Route: bulk match accept (/api/library/match-series/bulk)', () => 
 
     it('loops the single-series handler per item and maps outcomes in order', async () => {
         mocks.singlePost
-            .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, conflicts: 2 }), { status: 200 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, conflicts: 2, requestsClosed: 3 }), { status: 200 }))
             .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'No libraries configured.' }), { status: 400 }))
             .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), { status: 200 }));
 
@@ -56,10 +56,11 @@ describe('API Route: bulk match accept (/api/library/match-series/bulk)', () => 
         const data = await res.json();
 
         expect(res.status).toBe(200);
+        // beta.010: each accept's closed requests ride along, for Accept All's summary.
         expect(data.results).toEqual([
-            { ok: true, conflicts: 2 },
+            { ok: true, conflicts: 2, requestsClosed: 3 },
             { ok: false, error: 'No libraries configured.' },
-            { ok: true, conflicts: 0 },
+            { ok: true, conflicts: 0, requestsClosed: 0 },
         ]);
         expect(mocks.singlePost).toHaveBeenCalledTimes(3);
         // Each inner request carried the item as its JSON body.

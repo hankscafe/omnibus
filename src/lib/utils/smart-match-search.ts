@@ -153,6 +153,12 @@ export function acceptableForBulk<T extends { id: string; isIgnored?: boolean }>
     });
 }
 
+/** What an Accept (or Accept All) toast adds about the open requests the match closed (beta.010). */
+export function closedRequestsNote(count: number | undefined): string {
+    if (!count) return '';
+    return ` Closed ${count} open request${count === 1 ? '' : 's'}.`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Suggestion ranking (field report by robotshavehearts2: "some odd ones were way off, but if I
 // manually searched the keywords it found it at the top").

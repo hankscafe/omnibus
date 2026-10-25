@@ -8,6 +8,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { markRequestsCompleted } from '@/lib/request-fulfilment';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,6 +71,62 @@ export async function GET(request: Request) {
   } catch (error: unknown) {
     Logger.log(`[Requests API] Fetch Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: "Fetch Failed" }, { status: 500 }); 
+  }
+}
+
+// The search worker never checks a request's status, so a closed request's queued search would still
+// run - and download the issue. One already running can't be removed (it is locked).
+async function dropQueuedSearches(closed: { id: string; activeDownloadName: string | null }[]): Promise<void> {
+  try {
+    const { omnibusQueue } = await import('@/lib/queue');
+    await Promise.all(closed.map(r =>
+      omnibusQueue.getJob(`SEARCH_${r.id}`)
+        .then(job => job?.remove())
+        .catch(e => Logger.log(`[Requests API] Couldn't take the queued search of "${r.activeDownloadName || r.id}" off the queue: ${getErrorMessage(e)}`, 'warn'))
+    ));
+  } catch (e) {
+    Logger.log(`[Requests API] Couldn't reach the queue to drop completed requests' searches: ${getErrorMessage(e)}`, 'warn');
+  }
+}
+
+// Request Management's "Mark completed" (beta.010): an admin closes requests the Smart Matcher and the
+// Series Monitor can't tie to a series. Which ones close, and how, is request-fulfilment.ts.
+export async function PATCH(request: Request) {
+  try {
+    const session = await getServerSession(await getAuthOptions());
+    const admin = session?.user as { id?: string; name?: string | null; role?: string } | undefined;
+    if (admin?.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+
+    const body = await request.json().catch(() => ({}));
+    const ids: string[] = Array.isArray(body?.ids)
+      ? body.ids.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    if (body?.action !== 'complete' || ids.length === 0) {
+      return NextResponse.json({ error: 'Name the requests to mark completed.' }, { status: 400 });
+    }
+    const notify = body.notify !== false;
+
+    const { completed, skipped } = await markRequestsCompleted(ids, { notify, by: admin.name || 'an admin' });
+
+    if (completed.length > 0) {
+      try {
+        await AuditLogger.log('COMPLETE_REQUEST', {
+          requestIds: completed.map(r => r.id),
+          titles: completed.map(r => r.activeDownloadName || r.id),
+          notify,
+        }, admin.id || 'System');
+      } catch (e) {
+        Logger.log(`[Requests API] Couldn't write the audit entry for Mark completed: ${getErrorMessage(e)}`, 'warn');
+      }
+      // Not awaited: the requests are closed, and with Redis down BullMQ retries its commands for
+      // minutes - nothing after the write may hold up the answer (the #198 settings-save lesson).
+      void dropQueuedSearches(completed);
+    }
+
+    return NextResponse.json({ success: true, completed: completed.length, skipped });
+  } catch (error: unknown) {
+    Logger.log(`[Requests API] Mark completed failed: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: 'Mark completed failed' }, { status: 500 });
   }
 }
 

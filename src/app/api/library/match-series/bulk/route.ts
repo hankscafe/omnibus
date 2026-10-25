@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     }
 
     const cookie = request.headers.get('cookie') || '';
-    const results: Array<{ ok: boolean; conflicts?: number; error?: string }> = [];
+    const results: Array<{ ok: boolean; conflicts?: number; requestsClosed?: number; error?: string }> = [];
 
     // Sequential on purpose: each accept moves folders and writes the same tables; parallel accepts
     // would race folder relocation and library-level conflict checks for no real wall-clock win
@@ -52,7 +52,8 @@ export async function POST(request: NextRequest) {
             const res = await applySingleMatch(inner as any);
             const body = await res.json().catch(() => ({} as any));
             if (res.ok) {
-                results.push({ ok: true, conflicts: body.conflicts || 0 });
+                // beta.010: the requests each accept closed, for Accept All's summary.
+                results.push({ ok: true, conflicts: body.conflicts || 0, requestsClosed: body.requestsClosed || 0 });
             } else {
                 results.push({ ok: false, error: body.error || `HTTP ${res.status}` });
             }

@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { notifierSendAlert } from '../helpers/setup-global';
 import { prisma } from '@/lib/db';
-import { requestKind, closeRequestsFulfilledBySeries, closeFulfilledParkedRequests } from '@/lib/request-fulfilment';
+import { requestKind, closeRequestsFulfilledBySeries, closeFulfilledParkedRequests, markRequestsCompleted } from '@/lib/request-fulfilment';
 
 type Row = Record<string, unknown>;
 
@@ -398,5 +398,76 @@ describe('closeFulfilledParkedRequests (the Series Monitor)', () => {
             title: 'Batman #38',
             description: '#38 is in your library and ready to read.',
         }));
+    });
+});
+
+// beta.010: what the rule can't tie to a series (a MyAnimeList import, a request against the other
+// provider, a trade) an admin closes from Request Management - and the requester hears about it,
+// which deleting the request never told them.
+describe('markRequestsCompleted (Request Management)', () => {
+    const asked = (...statuses: string[]) => statuses.map(status => requestRow(`req_${status}`, { status }));
+
+    it('closes every open request it is given but a running download or an import, in the admin\'s name', async () => {
+        db.requests = asked('NOT_FOUND', 'AWAITING_RELEASE', 'STALLED', 'UNRELEASED', 'PENDING_APPROVAL', 'PENDING', 'MANUAL_DDL', 'NEEDS_REVIEW', 'FAILED', 'ERROR',
+            'DOWNLOADING', 'IMPORTING', 'COMPLETED', 'CANCELLED');
+        const ids = db.requests.map(r => r.id as string);
+
+        const result = await markRequestsCompleted([...ids, 'req_gone'], { notify: true, by: 'adam' });
+
+        const open = ['NOT_FOUND', 'AWAITING_RELEASE', 'STALLED', 'UNRELEASED', 'PENDING_APPROVAL', 'PENDING', 'MANUAL_DDL', 'NEEDS_REVIEW', 'FAILED', 'ERROR'];
+        expect(result.completed.map(r => r.id).sort()).toEqual(open.map(s => `req_${s}`).sort());
+        expect(result.skipped.sort()).toEqual(['req_CANCELLED', 'req_COMPLETED', 'req_DOWNLOADING', 'req_IMPORTING', 'req_gone']);
+        expect(prisma.request.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+            data: { status: 'COMPLETED', progress: 100, notified: false, statusNote: 'Marked completed by adam' },
+        }));
+        expect(db.requests.find(r => r.id === 'req_DOWNLOADING')?.status).toBe('DOWNLOADING');
+    });
+
+    it("tells each requester once, by the request's own name", async () => {
+        db.requests = [
+            requestRow('req_naruto', { volumeId: '0', issueNumber: null, activeDownloadName: 'Naruto' }),
+            requestRow('req_owls', { issueNumber: '1', activeDownloadName: 'Batman: The Court of Owls', ...adam }),
+            requestRow('req_saga', { volumeId: '0', issueNumber: null, activeDownloadName: 'Saga #61' }),
+        ];
+
+        await markRequestsCompleted(['req_naruto', 'req_owls', 'req_saga'], { notify: true, by: 'adam' });
+
+        expect(notifierSendAlert).toHaveBeenCalledTimes(2);
+        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+            user: 'adam',
+            title: 'Batman: The Court of Owls',
+            description: 'Batman: The Court of Owls is in your library and ready to read.',
+        }));
+        expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({
+            user: 'nicolas',
+            title: '2 Requested Issues Available!',
+            description: 'Naruto, Saga #61 are in your library and ready to read.',
+        }));
+    });
+
+    it('closes quietly when the admin says not to tell the requester', async () => {
+        db.requests = [requestRow('req_37')];
+
+        await markRequestsCompleted(['req_37'], { notify: false, by: 'adam' });
+
+        // Already told, as far as the bell is concerned.
+        expect(db.requests[0]).toMatchObject({ status: 'COMPLETED', notified: true });
+        expect(notifierSendAlert).not.toHaveBeenCalled();
+    });
+
+    it('leaves a request that moved on after it was read as it is', async () => {
+        db.requests = [requestRow('req_37', { status: 'DOWNLOADING' })];
+        vi.mocked(prisma.request.findMany).mockResolvedValueOnce([requestRow('req_37')] as never);
+
+        await markRequestsCompleted(['req_37'], { notify: true, by: 'adam' });
+
+        expect(db.requests[0].status).toBe('DOWNLOADING');
+    });
+
+    it('does nothing when none of them is open', async () => {
+        db.requests = asked('COMPLETED');
+
+        expect(await markRequestsCompleted(['req_COMPLETED'], { notify: true, by: 'adam' })).toEqual({ completed: [], skipped: ['req_COMPLETED'] });
+        expect(prisma.request.updateMany).not.toHaveBeenCalled();
     });
 });

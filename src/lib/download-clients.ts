@@ -13,6 +13,7 @@ import { decryptSecret } from './encryption';
 import { assertSafeFetchUrl, assertSafeRedirect, isTrustedConfiguredOrigin } from './utils/ssrf';
 import { looksLikeHtmlPage } from './utils/content-sniff';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
+import { writeUnlessClosed } from '@/lib/request-guard';
 
 async function getNetworkHeaders() {
     const customHeaders = await prisma.customHeader.findMany();
@@ -325,10 +326,9 @@ export const DownloadService = {
           // mirrors. `unknown` is a held/manual link. Legacy `getcomics` kept for un-migrated callers.
           const isGetComics = hoster === 'getcomics_direct' || hoster === 'getcomics_main' || hoster === 'getcomics';
           if (hoster && !isGetComics && hoster !== 'unknown') {
-              await prisma.request.update({
-                  where: { id: requestId },
-                  data: { status: 'DOWNLOADING', progress: 0 }
-              });
+              // beta.011: every status write here is skipped for a request closed meanwhile (cancelled,
+              // marked completed) - and a download whose request is closed doesn't start.
+              if (!(await writeUnlessClosed(requestId, { status: 'DOWNLOADING', progress: 0 }))) return false;
 
               // #209: a mirror button behind GetComics' own /dls/ redirect arrives as that redirect
               // link; follow it through the engine (Cloudflare-aware) before the hoster's resolver,
@@ -358,10 +358,7 @@ export const DownloadService = {
                   // pass. Hold the /md5/ link for manual pickup instead of throwing into a STALLED retry
                   // loop (parity with the Cloudflare-gated GetComics manual-hold below).
                   Logger.log(`[Internal DL] Anna's Archive link needs a premium API key; holding for manual download: ${url}`, 'warn');
-                  await prisma.request.update({
-                      where: { id: requestId },
-                      data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: finalFilename }
-                  }).catch(() => {});
+                  await writeUnlessClosed(requestId, { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: finalFilename }).catch(() => {});
                   return false;
               } else {
                   throw new Error(`Failed to resolve ${hoster} link: ${resolvedHoster.error}`);
@@ -377,10 +374,10 @@ export const DownloadService = {
               // not a URL fetch. The Rust engine re-validates internally, but block here too so a poisoned
               // scrape never even reaches the engine call.
               assertSafeFetchUrl(finalDownloadUrl);
-              await prisma.request.update({
-                  where: { id: requestId },
-                  data: { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }
-              });
+              if (!(await writeUnlessClosed(requestId, { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }))) {
+                  Logger.log(`[Internal DL] Not downloading ${finalFilename}: its request was closed.`, 'info');
+                  return false;
+              }
               Logger.log(`[Internal DL] Streaming via engine: ${finalFilename}`, 'info');
 
               const streamRes = await engineFetchLong(ENGINE_URL + '/api/download/stream', {
@@ -404,10 +401,7 @@ export const DownloadService = {
                   // the Cloudflare challenge can be solved interactively.
                   if (/manual download required/i.test(result.error || '')) {
                       Logger.log(`[Internal DL] GetComics link is Cloudflare-gated and couldn't be solved; holding for manual download: ${url}`, 'warn');
-                      await prisma.request.update({
-                          where: { id: requestId },
-                          data: { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: finalFilename }
-                      }).catch(() => {});
+                      await writeUnlessClosed(requestId, { status: 'MANUAL_DDL', downloadLink: url, activeDownloadName: finalFilename }).catch(() => {});
                       return false;
                   }
                   throw new Error(result.error || "Engine download failed");
@@ -421,10 +415,10 @@ export const DownloadService = {
               try { fs.unlinkSync(partFilePath); } catch (e) {}
           }
 
-          await prisma.request.update({
-            where: { id: requestId },
-            data: { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }
-          });
+          if (!(await writeUnlessClosed(requestId, { activeDownloadName: finalFilename, status: 'DOWNLOADING', progress: 0, downloadLink: url }))) {
+              Logger.log(`[Internal DL] Not downloading ${finalFilename}: its request was closed.`, 'info');
+              return false;
+          }
 
           Logger.log(`[Internal DL] Starting download: ${finalFilename}`, 'info');
 
@@ -462,7 +456,7 @@ export const DownloadService = {
                   const now = Date.now();
                   if (percent % 5 === 0 && now - lastUpdate > 2000) {
                       lastUpdate = now;
-                      prisma.request.update({ where: { id: requestId }, data: { progress: percent } }).catch(() => {});
+                      writeUnlessClosed(requestId, { progress: percent }).catch(() => {});
                   }
               }
           });
@@ -497,11 +491,10 @@ export const DownloadService = {
           if (fs.existsSync(partFilePath)) try { fs.unlinkSync(partFilePath); } catch (e) {}
           
           Logger.log(`[Internal DL] Download Failed: ${getErrorMessage(error)}`, 'error');
-          
-          await prisma.request.update({
-            where: { id: requestId },
-            data: { status: 'STALLED', progress: 0 }
-          }).catch(() => {});
+
+          // A request closed while it downloaded is neither stalled nor announced as a failure.
+          const stalled = await writeUnlessClosed(requestId, { status: 'STALLED', progress: 0 }).catch(() => false);
+          if (!stalled) throw error;
 
           const failedReq = await prisma.request.findUnique({ where: { id: requestId }, include: { user: true } });
           const failedSeries = failedReq?.volumeId && failedReq.volumeId !== "0" ? await prisma.series.findFirst({ where: { metadataId: failedReq.volumeId, metadataSource: 'COMICVINE' } }) : null;

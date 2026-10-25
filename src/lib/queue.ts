@@ -11,6 +11,7 @@ import { JOB_PRIORITY } from '@/lib/job-priority';
 import { WAITING_STATUSES } from '@/lib/request-status';
 import { NOT_FOUND_FALLBACK_NOTE, plainNote } from '@/lib/status-note';
 import { closeFulfilledParkedRequests } from '@/lib/request-fulfilment';
+import { writeUnlessClosed } from '@/lib/request-guard';
 import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
@@ -229,7 +230,6 @@ export function initWorker() {
             switch (type) {
                 case 'SEARCH_AND_DOWNLOAD': {
                     const { requestId, name, year, isManga, publisher, skipIndexers } = job.data;
-                    Logger.log(`[BullMQ] Forwarding automated search for ${name} (Year: ${year}, Manga: ${isManga}) to Rust Engine...`, 'info');
 
                     // Issue-year optimization + pack isolation + blocklist (parity with upstream
                     // automation.ts at beta.035): override the series year with the matched issue's
@@ -237,6 +237,14 @@ export function initWorker() {
                     // and forward the Request's failed-download blocklist so the engine skips
                     // known-bad releases.
                     const freshReq = await prisma.request.findUnique({ where: { id: requestId } });
+                    // beta.011: every search is queued for a PENDING request (the request route, an
+                    // approval, the Series Monitor, requeue.ts). One cancelled, marked completed or
+                    // deleted while its search waited in the queue is not searched for.
+                    if (freshReq?.status !== 'PENDING') {
+                        Logger.log(`[BullMQ] Skipping the search for ${name}: ${freshReq ? `the request is ${freshReq.status} now` : 'the request is gone'}.`, 'info');
+                        break;
+                    }
+                    Logger.log(`[BullMQ] Forwarding automated search for ${name} (Year: ${year}, Manga: ${isManga}) to Rust Engine...`, 'info');
                     let dynamicYear: string | null = year ? String(year) : null;
                     // #202: the engine anchors PACK candidates on series_year (beta.069) — that must
                     // be the Series row's START year, not the job's per-issue year, or a sibling pack
@@ -323,17 +331,24 @@ export function initWorker() {
                         }
 
                         const resultData = await rustResponse.json();
-                        
+
+                        // beta.011: the answer counts only while the request is still PENDING - a cancel or
+                        // a Mark completed can land during the search. Checked before anything acts on it
+                        // (the dedupe, the download client, the hoster loop); every write below is also
+                        // guarded (request-guard.ts) for the moments between this read and the write.
+                        const live = await prisma.request.findUnique({ where: { id: requestId }, select: { status: true } });
+                        if (live?.status !== 'PENDING') {
+                            Logger.log(`[BullMQ] The search for ${name} finished, but the request is ${live ? live.status : 'gone'} now. Its result is dropped.`, 'info');
+                            break;
+                        }
+
                         if (!resultData.success || !resultData.best_match) {
                             // MANUAL_DDL fallback: GetComics matched but only on a disabled/unsupported hoster
                             // and no indexer release was found either — hold the link for human pickup instead
                             // of stalling (parity with automation.ts MANUAL_DDL).
                             if (resultData.manual_ddl?.url) {
                                 Logger.log(`[BullMQ] No auto-download client for ${name}. Holding GetComics link for manual download.`, 'warn');
-                                await prisma.request.update({
-                                    where: { id: requestId },
-                                    data: { status: 'MANUAL_DDL', downloadLink: resultData.manual_ddl.url, activeDownloadName: resultData.manual_ddl.name || name }
-                                });
+                                await writeUnlessClosed(requestId, { status: 'MANUAL_DDL', downloadLink: resultData.manual_ddl.url, activeDownloadName: resultData.manual_ddl.name || name });
                                 break;
                             }
 
@@ -345,7 +360,7 @@ export function initWorker() {
                             // genuinely need admin disambiguation.
                             if (!resultData.stall_for_review && requestedIssueReleaseDate && !isReleasedYet(requestedIssueReleaseDate, null)) {
                                 Logger.log(`[BullMQ] No match for ${name} yet — issue not released until ${requestedIssueReleaseDate}. Parking as UNRELEASED for the monitor to retry.`, 'info');
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'UNRELEASED' } });
+                                await writeUnlessClosed(requestId, { status: 'UNRELEASED' });
                                 break;
                             }
 
@@ -353,12 +368,13 @@ export function initWorker() {
 
                             if (resultData.stall_for_review) {
                                 // Editions WERE found — this is a genuine failure needing admin disambiguation.
-                                // Keep it STALLED (counts against System Health) and notify.
-                                await prisma.request.update({
-                                    where: { id: requestId },
+                                // Keep it STALLED (counts against System Health) and notify - unless it was
+                                // closed in the meantime, when there is nothing to tell anyone.
+                                const stalled = await writeUnlessClosed(requestId, {
                                     // The reason rides along for Request Management (beta.008).
-                                    data: { status: 'STALLED', statusNote: plainNote(resultData.stall_reason) ?? 'Several different editions were found. Pick the right one with Interactive Search.' }
+                                    status: 'STALLED', statusNote: plainNote(resultData.stall_reason) ?? 'Several different editions were found. Pick the right one with Interactive Search.'
                                 });
+                                if (!stalled) break;
                                 Logger.log(`[BullMQ] Search for ${name} needs admin review (${resultData.stall_reason ? 'multi-pack ambiguity' : 'multiple distinct editions'}). Stalling.`, 'warn');
                                 await SystemNotifier.sendAlert('download_failed', {
                                     title: name, imageUrl: currentReq?.imageUrl, user: currentReq?.user?.username,
@@ -376,10 +392,7 @@ export function initWorker() {
                                 // this too; it is left for the monitor's dateless park — see request-status.ts.)
                                 // The engine's per-source summary ("GetComics: nothing found · Prowlarr: 12
                                 // results, none matched") is the request's note: WHY it wasn't found (beta.008).
-                                await prisma.request.update({
-                                    where: { id: requestId },
-                                    data: { status: 'NOT_FOUND', statusNote: resultData.search_note || NOT_FOUND_FALLBACK_NOTE }
-                                });
+                                await writeUnlessClosed(requestId, { status: 'NOT_FOUND', statusNote: resultData.search_note || NOT_FOUND_FALLBACK_NOTE });
                                 Logger.log(`[BullMQ] No source found for ${name} yet. Parking as NOT_FOUND for the monitor to retry.`, 'info');
                             }
                             break;
@@ -416,12 +429,12 @@ export function initWorker() {
                             const duplicateDownload = await settleDuplicateOnLink(candidates[0].url, requestId);
                             if (duplicateDownload.action === 'park') {
                                 Logger.log(`[BullMQ] Batch pack already downloading (${candidates[0].url}). Queuing ${name} for batch extraction.`, 'info');
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: candidates[0].url } });
+                                await writeUnlessClosed(requestId, { status: 'DOWNLOADING', activeDownloadName: safeTitle, downloadLink: candidates[0].url });
                                 break;
                             }
                             if (duplicateDownload.action === 'join') {
                                 Logger.log(`[BullMQ] Batch pack already handed to the watched folder (${candidates[0].url}). Joining its wait instead of downloading it again.`, 'info');
-                                await prisma.request.update({ where: { id: requestId }, data: { status: 'IMPORTING', progress: 100, activeDownloadName: safeTitle, downloadLink: candidates[0].url } });
+                                await writeUnlessClosed(requestId, { status: 'IMPORTING', progress: 100, activeDownloadName: safeTitle, downloadLink: candidates[0].url });
                                 break;
                             }
                             if (duplicateDownload.action === 'settle') break;
@@ -429,12 +442,14 @@ export function initWorker() {
                             // Detached download-time fallback: try each hoster in priority order until one
                             // streams. If they all fail but a Cloudflare-gated getcomics.org/dls/ link was
                             // among them, hold it as MANUAL_DDL so the user gets a one-click manual download.
+                            // beta.011: each hoster first claims the request; once it has been closed (a
+                            // cancel during a slow hoster, say) the loop stops and writes nothing more.
                             (async () => {
                                 for (const cand of candidates) {
-                                    await prisma.request.update({
-                                        where: { id: requestId },
-                                        data: { status: 'DOWNLOADING', progress: 0, activeDownloadName: safeTitle, downloadLink: cand.url }
-                                    });
+                                    if (!(await writeUnlessClosed(requestId, { status: 'DOWNLOADING', progress: 0, activeDownloadName: safeTitle, downloadLink: cand.url }))) {
+                                        Logger.log(`[BullMQ] ${name} was closed while its download was being tried. Stopping.`, 'info');
+                                        return;
+                                    }
                                     let ok = false;
                                     try {
                                         ok = await DownloadService.downloadDirectFile(cand.url, safeTitle, config.download_path, requestId, cand.hoster);
@@ -455,16 +470,18 @@ export function initWorker() {
                                 // holds the latter as MANUAL_DDL; this keeps the log accurate + is a backstop).
                                 const manualHold = candidates.find(c => /getcomics\.org\/dls\//i.test(c.url) || /\/md5\/[a-f0-9]{32}/i.test(c.url));
                                 if (manualHold) {
-                                    await prisma.request.update({ where: { id: requestId }, data: { status: 'MANUAL_DDL', downloadLink: manualHold.url, activeDownloadName: safeTitle } });
-                                    Logger.log(`[BullMQ] All hosters failed for ${name}; holding link for manual download.`, 'warn');
+                                    if (await writeUnlessClosed(requestId, { status: 'MANUAL_DDL', downloadLink: manualHold.url, activeDownloadName: safeTitle })) {
+                                        Logger.log(`[BullMQ] All hosters failed for ${name}; holding link for manual download.`, 'warn');
+                                    }
                                 } else {
                                     // Without this write the request stayed DOWNLOADING forever — invisible to
                                     // the stalled-retry cron (its reconciler only matches live client torrents)
                                     // and blocking the monitor's dedup from ever re-requesting the issue. Park
                                     // it STALLED: the cron retries the last link on its tight cadence, and the
                                     // monitor's dead-request sweep re-searches it once retries exhaust.
-                                    await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED', progress: 0 } });
-                                    Logger.log(`[BullMQ] All ${candidates.length} hoster candidate(s) failed for ${name}. Marking STALLED for retry.`, 'error');
+                                    if (await writeUnlessClosed(requestId, { status: 'STALLED', progress: 0 })) {
+                                        Logger.log(`[BullMQ] All ${candidates.length} hoster candidate(s) failed for ${name}. Marking STALLED for retry.`, 'error');
+                                    }
                                 }
                             })().catch((e: any) => Logger.log(`[BullMQ] Built-in DDL fallback crashed: ${e.message}`, 'error'));
 
@@ -492,18 +509,12 @@ export function initWorker() {
                             const duplicateExternal = await settleDuplicateOnLink(trackingHash, requestId);
                             if (duplicateExternal.action === 'park') {
                                 Logger.log(`[BullMQ] Release already sent to the download client by another request (${bestMatch.title}). Parking ${name} against it instead of re-downloading.`, 'info');
-                                await prisma.request.update({
-                                    where: { id: requestId },
-                                    data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
-                                });
+                                await writeUnlessClosed(requestId, { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer });
                                 break;
                             }
                             if (duplicateExternal.action === 'join') {
                                 Logger.log(`[BullMQ] Release already handed to the watched folder by another request (${bestMatch.title}). Joining its wait instead of re-downloading.`, 'info');
-                                await prisma.request.update({
-                                    where: { id: requestId },
-                                    data: { status: 'IMPORTING', progress: 100, activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
-                                });
+                                await writeUnlessClosed(requestId, { status: 'IMPORTING', progress: 100, activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer });
                                 break;
                             }
                             if (duplicateExternal.action === 'settle') break;
@@ -513,15 +524,17 @@ export function initWorker() {
                             // File manga under its own category/label in the client (manga → second configured category).
                             await DownloadService.addDownload(clientConfig, bestMatch.downloadUrl, bestMatch.title, 0, 0, isManga || false);
 
-                            await prisma.request.update({
-                                where: { id: requestId },
-                                data: { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }
-                            });
+                            if (!(await writeUnlessClosed(requestId, { status: 'DOWNLOADING', activeDownloadName: bestMatch.title, downloadLink: trackingHash, indexer: bestMatch.indexer }))) {
+                                // Closed in the second the client took to accept it: the client keeps the
+                                // download, and the importer refuses a closed request.
+                                Logger.log(`[BullMQ] ${name} was closed while ${bestMatch.title} was being sent to ${clientConfig.name}; the download stays in the client.`, 'warn');
+                            }
                         }
 
                     } catch (err: any) {
                         Logger.log(`[BullMQ] Failed to process Rust search response: ${err.message}`, 'error');
-                        await prisma.request.update({ where: { id: requestId }, data: { status: 'STALLED' } });
+                        // updateMany, guarded: a deleted request used to throw here too and fail the job.
+                        await writeUnlessClosed(requestId, { status: 'STALLED' });
                     }
                     break;
                 }

@@ -722,7 +722,8 @@ export async function DELETE(request: NextRequest) {
         const existingJobs = await omnibusQueue.getJobs(['waiting', 'delayed', 'active', 'paused', 'prioritized']);
         for (const job of existingJobs) {
             if (job.id === `SEARCH_${id}` || job.data?.requestId === id) {
-                // job.remove() works on waiting jobs. Active jobs will be caught by the status check in automation.ts
+                // job.remove() works on waiting jobs. An active search can't be removed (it is locked): it
+                // writes nothing over a cancelled request (request-guard.ts, beta.011).
                 await job.remove().catch(() => {});
                 Logger.log(`[Request API] Removed pending background job for cancelled "${reqRecord.activeDownloadName || id}"`, 'info');
             }

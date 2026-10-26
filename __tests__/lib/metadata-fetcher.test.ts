@@ -343,9 +343,12 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
         expect(result.success).toBe(true);
 
-        // The in-series snapshot the pairing runs against must exclude annual rows outright.
+        // The in-series snapshot the pairing runs against must exclude annual rows outright…
         const snapshot = mocks.issueFindMany.mock.calls.map(c => c[0]).find(a => a?.where?.seriesId === 'series_1');
         expect(snapshot.where.isAnnual).toBe(false);
+        // …and every attached lane's book (#257): a collected "Vol. 1" was re-linked to the run's #1,
+        // taking that issue's id, title, date and cover.
+        expect(snapshot.where.OR).toEqual([{ attachedVolumeId: null }, { attachedVolume: { seriesId: { not: 'series_1' } } }]);
         // The cross-series adoption probe carries the same exclusion…
         const adoption = mocks.issueFindFirst.mock.calls.map(c => c[0]).find(a => a?.where?.metadataId === '300001');
         expect(adoption?.where?.isAnnual).toBe(false);

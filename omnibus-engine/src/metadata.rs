@@ -180,6 +180,21 @@ pub(crate) async fn cross_series_candidates(db: &Db, series_id: &str, source: &s
     Ok(q.fetch_all(&db.pool).await?)
 }
 
+/// The rows a sync pairs the provider volume's issues with, number-anchored (issue #194): this
+/// series' own run. Never an annual (#203: a different numbering domain) and never a book on one of
+/// THIS series' attached volumes (#257): a COLLECTED book numbers its own lane — "Vol. 1" is not
+/// issue #1 — and the number-only heal re-linked it to the run's issue, stamping that issue's id,
+/// title, date and cover on the trade (and, through the next embed, into its ComicInfo.xml). A row
+/// still carrying ANOTHER series' attachment id (#239 strays) is not this series' lane book and
+/// pairs as before. Twin of the Node pairing reads in metadata-fetcher.ts.
+pub(crate) async fn run_pairing_rows(db: &Db, series_id: &str, columns: &str) -> anyhow::Result<Vec<sqlx::any::AnyRow>> {
+    let sql = format!(
+        r#"SELECT {columns} FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false
+           AND ("attachedVolumeId" IS NULL OR "attachedVolumeId" NOT IN (SELECT id FROM "AttachedVolume" WHERE "seriesId" = $1))"#
+    );
+    Ok(sqlx::query(&sql).bind(series_id).fetch_all(&db.pool).await?)
+}
+
 /// One ComicVine volume GET through the shared response cache — usage-logged, and 429-flagged,
 /// only on a real upstream call. `field_list` is part of the cache key, so asking for new fields
 /// is a fresh fetch rather than a stale hit.
@@ -511,6 +526,10 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
         let last_sync: Option<String> = series.try_get("lastMetadataSync").unwrap_or(None);
 
         log::info!("Syncing metadata for: {} ({} ID: {})", series_name, metadata_source, metadata_id);
+
+        // #257: local editions claim their books (by name, no provider call) BEFORE the pairing
+        // below, which only pairs the run's own rows — an unbound trade must not look like one.
+        crate::attached_volumes::claim_local_attachments(&db, &client, &series_id).await;
 
         let fetch_result: anyhow::Result<i32> = match metadata_source.as_str() {
             "COMICVINE" => match &cv_api_key {
@@ -891,12 +910,10 @@ async fn fetch_comicvine(
         // #203: annual rows are EXCLUDED outright — number is the pairing identity anchor, and an
         // annual's numbers belong to a DIFFERENT provider volume; without this, the parent volume's
         // "#1" data lands on "Annual #1" via the number-only heal.
-        let existing_issues = sqlx::query(
-            r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
-        )
-        .bind(series_id)
-        .fetch_all(&db.pool)
-        .await?;
+        let existing_issues = run_pairing_rows(
+            db, series_id,
+            r#"id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", genres, description, CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", writers, artists, "coverArtists", colorists, letterers, characters, teams, locations, "filePath""#,
+        ).await?;
 
         // Pairing snapshot for resolve_pair_target: (row id, number, stored metadataId).
         let pair_snapshot: Vec<(String, String, Option<String>)> = existing_issues.iter().map(|r| (
@@ -1381,12 +1398,10 @@ async fn fetch_metron(
     // along for the number-anchored pairing (issue #194 (c1)).
     // #203: annual rows are EXCLUDED outright — their numbers belong to a different provider
     // volume, and the number-only heal would otherwise stamp the parent volume's data onto them.
-    let existing_issues = sqlx::query(
-        r#"SELECT id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres, "filePath" FROM "Issue" WHERE "seriesId" = $1 AND "isAnnual" = false"#,
-    )
-    .bind(series_id)
-    .fetch_all(&db.pool)
-    .await?;
+    let existing_issues = run_pairing_rows(
+        db, series_id,
+        r#"id, number, "metadataId", CAST("hasCustomMetadata" AS INTEGER) AS "hasCustomMetadata", name, "releaseDate", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", "coverUrl", "matchState", genres, "filePath""#,
+    ).await?;
 
     // Pairing snapshot for resolve_pair_target: (row id, number, stored metadataId).
     let pair_snapshot: Vec<(String, String, Option<String>)> = existing_issues.iter().map(|r| (
@@ -3192,6 +3207,48 @@ mod tests {
             .iter().map(|r| r.get::<String, _>("id")).collect();
         assert_eq!(found, vec!["request_skel".to_string()]);
         assert!(cross_series_candidates(&db, "child", "COMICVINE", "id", &[]).await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #257: a sync pairs the provider's issues with the series' own run only. A COLLECTED book
+    // numbered "1" sat in the pairing snapshot beside issue #1, and the number-anchored heal
+    // re-linked the trade to the run's #1 — its id, title, date and cover, then its ComicInfo.xml.
+    #[tokio::test]
+    async fn run_pairing_never_includes_an_annual_or_an_attached_lanes_book() {
+        let base = std::env::temp_dir().join(format!("omnibus_md257_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("md.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE "Issue" ("id" TEXT NOT NULL PRIMARY KEY, "seriesId" TEXT NOT NULL, "metadataId" TEXT,
+                "number" TEXT NOT NULL, "isAnnual" BOOLEAN NOT NULL DEFAULT false, "attachedVolumeId" TEXT)"#,
+        )
+        .execute(&db.pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "AttachedVolume" ("id" TEXT NOT NULL PRIMARY KEY, "seriesId" TEXT NOT NULL)"#)
+            .execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId") VALUES ('att_local', 'prp'), ('att_parent', 'parent')"#)
+            .execute(&db.pool).await.unwrap();
+        for (id, series, number, annual, attached) in [
+            ("issue_1", "prp", "1", false, None),                // the run's #1 — paired
+            ("issue_2", "prp", "2", false, None),                // the run's #2 — paired
+            ("tpb_vol_1", "prp", "1", false, Some("att_local")),  // this series' trade "Vol. 1" — its own lane
+            ("stray_3", "prp", "3", false, Some("att_parent")),   // a #239 stray carrying ANOTHER series' lane id — pairs as before
+            ("annual_1", "prp", "1", true, None),                // Annual #1 — its own domain
+            ("other_1", "other", "1", false, None),              // another series
+        ] {
+            sqlx::query(&format!(
+                r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", number, "isAnnual", "attachedVolumeId") VALUES ($1, $2, NULL, $3, {}, $4)"#,
+                if annual { "true" } else { "false" }
+            ))
+            .bind(id).bind(series).bind(number).bind(attached)
+            .execute(&db.pool).await.unwrap();
+        }
+        let mut found: Vec<String> = run_pairing_rows(&db, "prp", "id").await.unwrap()
+            .iter().map(|r| r.get::<String, _>("id")).collect();
+        found.sort();
+        assert_eq!(found, vec!["issue_1".to_string(), "issue_2".to_string(), "stray_3".to_string()]);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

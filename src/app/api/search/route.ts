@@ -4,13 +4,46 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { prisma } from '@/lib/db';
-import { ComicVineVolume, FormattedSearchResult } from '@/types'; 
+import { ComicVineVolume } from '@/types';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
+
+// Since about 2026-10-23 ComicVine's /search/ answers with stub volumes: the right id, name and
+// start_year, but publisher null, count_of_issues 0 and CV's "Blank!" cover. /volumes/ still has all
+// three, so the stripped results of a page are filled with one /volumes/?filter=id: call. Returns
+// filled = false when that call failed, so the page isn't cached and the next look tries again.
+async function fillStrippedVolumes(volumes: ComicVineVolume[], apiKey: string): Promise<{ volumes: ComicVineVolume[]; filled: boolean }> {
+  const stripped = volumes.filter(v => v?.id && !v.publisher);
+  if (stripped.length === 0) return { volumes, filled: true };
+  try {
+    const res = await cachedCvGet(`${BASE_URL}/volumes/`, {
+      params: {
+        api_key: apiKey, format: 'json', filter: `id:${stripped.map(v => v.id).join('|')}`,
+        field_list: 'id,publisher,count_of_issues,image', limit: 100
+      },
+      headers: { 'User-Agent': 'Omnibus/1.0' },
+      timeout: 8000
+    });
+    // status_code 1 = OK; anything else (100 bad key, 104 filter error, 107 rate limited) is an error answer.
+    if (Number(res.data?.status_code) !== 1 || !Array.isArray(res.data.results)) return { volumes, filled: false };
+    const byId = new Map<number, Partial<ComicVineVolume>>(res.data.results.map((f: ComicVineVolume) => [f.id, f]));
+    return {
+      filled: true,
+      volumes: volumes.map(v => {
+        const f = byId.get(v.id);
+        if (!f) return v;
+        return { ...v, publisher: f.publisher ?? v.publisher, count_of_issues: f.count_of_issues ?? v.count_of_issues, image: f.image ?? v.image };
+      })
+    };
+  } catch (e) {
+    Logger.log(`[Search] Couldn't fill ComicVine's stripped search results from /volumes/: ${getErrorMessage(e)}`, 'warn');
+    return { volumes, filled: false };
+  }
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -45,7 +78,8 @@ export async function GET(request: Request) {
     }
 
     // --- NEW: Robust Database Caching ---
-    const cacheKey = `search_v3_${provider}_${rawQuery.toLowerCase().replace(/[^a-z0-9]/g, '_')}_p${page}${wantCovers ? '' : '_nocovers'}`;
+    // v4: v3 pages cached while ComicVine's search was stripped hold "Other" / 0 issues / no cover.
+    const cacheKey = `search_v4_${provider}_${rawQuery.toLowerCase().replace(/[^a-z0-9]/g, '_')}_p${page}${wantCovers ? '' : '_nocovers'}`;
     const cachedData = await prisma.systemSetting.findUnique({ where: { key: cacheKey } });
     
     if (cachedData?.value) {
@@ -117,7 +151,10 @@ export async function GET(request: Request) {
             return NextResponse.json({ results: [], hasMore: false });
         }
 
-        let results: FormattedSearchResult[] = response.data.results.map((vol: ComicVineVolume) => {
+        const fill = await fillStrippedVolumes(response.data.results, CV_API_KEY);
+        cacheable = fill.filled;
+
+        let results = fill.volumes.map((vol: ComicVineVolume) => {
           let desc = vol.deck;
           if (!desc && vol.description) {
              desc = vol.description.replace(/<[^>]*>?/gm, '').trim();
@@ -128,7 +165,8 @@ export async function GET(request: Request) {
 
           return {
             id: vol.id, name: vol.name, year: vol.start_year || null,
-            publisher: vol.publisher?.name || 'Other', count: vol.count_of_issues || 0,
+            // 'Unknown', not 'Other': the request route and the request dialog look up an Unknown publisher.
+            publisher: vol.publisher?.name || 'Unknown', count: vol.count_of_issues || 0,
             image: rawImage ? `/api/library/cover?path=${encodeURIComponent(rawImage)}` : null,
             description: desc || "No description available.",
             metadataSource: 'COMICVINE'
@@ -136,7 +174,7 @@ export async function GET(request: Request) {
         });
 
         if (blockedForeignPublishers.length > 0) {
-            results = results.filter((r: FormattedSearchResult) => {
+            results = results.filter(r => {
                 const pub = (r.publisher || "").toLowerCase();
                 return !blockedForeignPublishers.some((bp: string) => pub.includes(bp));
             });

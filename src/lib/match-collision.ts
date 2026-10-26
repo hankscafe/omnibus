@@ -15,9 +15,10 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { moveFileSafe, cleanupEmptyDirs, ensureLibraryDir } from '@/lib/utils/safe-fs';
 import { describeIssueFromFilename, normalizeFractionNumbers, isSameIssue } from '@/lib/utils/issue-parser';
-import { filePatternForIssue } from '@/lib/utils/file-pattern';
+import { COLLECTED_FILE_PATTERN, filePatternForIssue } from '@/lib/utils/file-pattern';
 import { carriedStamp } from '@/lib/file-added';
 import { issueFileName, issuePaddingFromSetting, issueTitleForName, type NamingInput } from '@/lib/utils/naming';
+import { bookNumberFromFile, nameClaimsBook, yearFromFileName } from '@/lib/utils/collected-edition';
 
 /** A folder as the disk sees it: one slash form, no trailing separator, no case. */
 export const normalizeFolder = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -76,10 +77,21 @@ export async function suggestFreeFolderName(folderPath: string, excludeIds: stri
     return `${base} (${Date.now()})`;
 }
 
+/** One loose book of a multi-file attach (#257): its number and coverage as the admin confirmed them. */
+export interface CollectedBookFile {
+    path: string;
+    /** Blank = parsed from the filename. */
+    number?: string | null;
+    /** Normalized coverage ("1-4"), or blank to leave it unset. */
+    coversIssues?: string | null;
+}
+
 export interface AttachAsCollectedInput {
     owner: FolderOwner;
-    /** The unmatched folder, or a single loose file. */
+    /** The unmatched folder, or a single loose file. Ignored when `files` is given. */
     source: string;
+    /** #257: several loose files at once, each with its confirmed number and coverage. */
+    files?: CollectedBookFile[];
     /** The unmatched folder's own series row, if it has one (a loose file has none). */
     sourceSeriesId: string | null;
     metadataSource: string;
@@ -97,6 +109,8 @@ export interface AttachAsCollectedResult {
     claimed: number;
     skeletonsReplaced: number;
     conflicts: number;
+    /** #257 picked files only: books that hit an error and were left where they were. */
+    failed?: number;
     error?: string;
 }
 
@@ -112,7 +126,8 @@ const COMIC_EXT = /\.(cbz|cbr|cb7|zip|rar|pdf|epub)$/i;
  * where it is, row and all, and counted. Nothing moves if the engine cannot import the volume.
  */
 export async function attachAsCollected(input: AttachAsCollectedInput): Promise<AttachAsCollectedResult> {
-    const { owner, source, sourceSeriesId, metadataSource, volumeId, volumeName, volumeYear, config, libraryRoots } = input;
+    const { owner, source, files, sourceSeriesId, metadataSource, volumeId, volumeName, volumeYear, config, libraryRoots } = input;
+    const fileList = files && files.length > 0 ? files : null;
     const result: AttachAsCollectedResult = { moved: 0, absorbed: 0, claimed: 0, skeletonsReplaced: 0, conflicts: 0 };
     // A LOCAL collected edition — one the provider has no volume for — has no lane to fetch, no
     // skeletons to replace, and keeps its files' own names: the name rule (beta.018) is the only
@@ -157,22 +172,24 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
 
     // 3. What moves: the folder's comic files as the DISK lists them — a folder just dropped into
     //    /unmatched may have no rows yet — each paired with its row where the scan made one; or
-    //    the one loose file.
-    const stat = await fs.promises.stat(source);
-    const isFile = stat.isFile();
-    const sourceRows = sourceSeriesId
+    //    the one loose file; or (#257) the loose files the admin picked, with their confirmed numbers.
+    const isFile = fileList ? true : (await fs.promises.stat(source)).isFile();
+    const sourceRows = sourceSeriesId && !fileList
         ? await prisma.issue.findMany({ where: { seriesId: sourceSeriesId }, select: { id: true, number: true, filePath: true, isAnnual: true } })
         : [];
     const rowFor = (filePath: string) => sourceRows.find(r => !!r.filePath && sameFolder(r.filePath, filePath)) ?? null;
-    const items: Array<{ filePath: string; row: { id: string; number: string } | null }> = isFile
-        ? [{ filePath: source, row: null }]
-        : (await fs.promises.readdir(source))
-            .filter(f => COMIC_EXT.test(f))
-            .map(f => {
-                const filePath = `${source.replace(/\\/g, '/').replace(/\/+$/, '')}/${f}`;
-                const row = rowFor(filePath);
-                return { filePath: row?.filePath || filePath, row: row ? { id: row.id, number: row.number } : null };
-            });
+    type Item = { filePath: string; row: { id: string; number: string } | null; number?: string | null; coversIssues?: string | null };
+    const items: Item[] = fileList
+        ? fileList.map(f => ({ filePath: f.path, row: null, number: f.number, coversIssues: f.coversIssues }))
+        : isFile
+            ? [{ filePath: source, row: null }]
+            : (await fs.promises.readdir(source))
+                .filter(f => COMIC_EXT.test(f))
+                .map(f => {
+                    const filePath = `${source.replace(/\\/g, '/').replace(/\/+$/, '')}/${f}`;
+                    const row = rowFor(filePath);
+                    return { filePath: row?.filePath || filePath, row: row ? { id: row.id, number: row.number } : null };
+                });
 
     const pattern = filePatternForIssue({
         isCollected: true,
@@ -190,7 +207,12 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
     for (const item of items) {
         const base = path.basename(item.filePath);
         const ext = path.extname(base).toLowerCase();
-        let number = item.row?.number || describeIssueFromFilename(base, volumeName).number || '1';
+        let number = item.number?.trim()
+            || item.row?.number
+            // A picked book's own title is the hint (#257): the edition's name may have been changed
+            // to tell it from the series ("… TPB"), and the filename doesn't carry that one.
+            || (fileList ? bookNumberFromFile(base) : describeIssueFromFilename(base, volumeName).number)
+            || '1';
         number = normalizeFractionNumbers(number);
         const twin = twinFor(number);
         let newName = base;
@@ -204,10 +226,28 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
                 issueTitle: issueTitleForName(twin?.name, owner.name, number),
             }, issuePadding);
             if (stem) newName = stem + ext;
+        } else if (fileList && !nameClaimsBook(base, owner.name, volumeName, number)) {
+            // A local book keeps its own name only while that name still claims it back after a wipe
+            // (attachment-name.ts). "Power Rangers Prime v01" carries the SERIES' name, so it would
+            // return as the run's #1: it takes the edition's name instead, the way Standardize names
+            // a local book (seriesTokenForIssue). Picked files only; the extension never changes.
+            // The admin's collected pattern is used when its result still claims the book back
+            // ("{Publisher} - {Series} Vol. {Issue}" would not); else the default edition pattern.
+            const named = (p: string) => {
+                const stem = issueFileName(p, { ...ownerValues, series: volumeName, issueNumber: number, comicInfoYear: yearFromFileName(base) }, issuePadding);
+                return stem ? stem + ext : null;
+            };
+            const configured = named(pattern);
+            newName = configured && nameClaimsBook(configured, owner.name, volumeName, number)
+                ? configured
+                : (named(COLLECTED_FILE_PATTERN) ?? base);
         }
         const target = `${ownerFolder}/${newName}`;
         // A local book's identity is its lane and number — stable across a wipe, unlike a row id.
-        const localIdentity = { metadataId: `local_${attachment.id}_${number}`, metadataSource: 'LOCAL', matchState: 'MATCHED', name: `Vol. ${number}` };
+        const localIdentity = {
+            metadataId: `local_${attachment.id}_${number}`, metadataSource: 'LOCAL', matchState: 'MATCHED', name: `Vol. ${number}`,
+            ...(item.coversIssues ? { coversIssues: item.coversIssues } : {}),
+        };
 
         // A different file already at the destination is never overwritten — this one stays put,
         // row, folder and all, and is counted so the caller can say so.
@@ -217,50 +257,63 @@ export async function attachAsCollected(input: AttachAsCollectedInput): Promise<
             continue;
         }
 
-        if (!ensured) { await ensureLibraryDir(ownerFolder); ensured = true; }
-        await moveFileSafe(item.filePath, target);
-        result.moved++;
+        // #257: with picked files one book's failure (a move, a write) never strands the rest — it
+        // goes back where it was and is counted. Other callers keep failing as a whole.
+        let movedThis = false;
+        try {
+            if (!ensured) { await ensureLibraryDir(ownerFolder); ensured = true; }
+            await moveFileSafe(item.filePath, target);
+            movedThis = true;
+            result.moved++;
 
-        if (item.row) {
-            if (twin) {
-                await prisma.issue.delete({ where: { id: twin.id } });
+            if (item.row) {
+                if (twin) {
+                    await prisma.issue.delete({ where: { id: twin.id } });
+                    usedTwins.add(twin.id);
+                    result.skeletonsReplaced++;
+                }
+                await prisma.issue.update({
+                    where: { id: item.row.id },
+                    data: {
+                        seriesId: owner.id, attachedVolumeId: attachment.id, filePath: target, status: 'DOWNLOADED', isAnnual: false,
+                        ...(isLocal ? localIdentity : {}),
+                        ...(twin ? {
+                            metadataId: twin.metadataId, metadataSource: twin.metadataSource, matchState: 'MATCHED',
+                            ...(twin.name ? { name: twin.name } : {}),
+                            ...(twin.coverUrl ? { coverUrl: twin.coverUrl } : {}),
+                            ...(twin.releaseDate ? { releaseDate: twin.releaseDate } : {}),
+                            ...(twin.description ? { description: twin.description } : {}),
+                            // The sync prefilled the skeleton's coverage from the provider — it travels with the identity.
+                            ...(twin.coversIssues ? { coversIssues: twin.coversIssues } : {}),
+                        } : {}),
+                    },
+                });
+                result.absorbed++;
+            } else if (twin) {
+                // #206 follow-up: a file with no row of its own has never been in the library — an
+                // arrival. (A file that brings its row, above, keeps that row's time.)
+                await prisma.issue.update({ where: { id: twin.id }, data: { filePath: target, status: 'DOWNLOADED', fileAddedAt: carriedStamp(null) } });
                 usedTwins.add(twin.id);
-                result.skeletonsReplaced++;
+                result.claimed++;
+            } else {
+                await prisma.issue.create({
+                    data: {
+                        seriesId: owner.id, attachedVolumeId: attachment.id, number, isAnnual: false, filePath: target, status: 'DOWNLOADED',
+                        fileAddedAt: carriedStamp(null),
+                        ...(isLocal
+                            ? localIdentity
+                            : { metadataId: `unmatched_${Math.random()}`, metadataSource: 'LOCAL', matchState: 'UNMATCHED', name: `Vol. ${number}` }),
+                    },
+                });
+                result.claimed++;
             }
-            await prisma.issue.update({
-                where: { id: item.row.id },
-                data: {
-                    seriesId: owner.id, attachedVolumeId: attachment.id, filePath: target, status: 'DOWNLOADED', isAnnual: false,
-                    ...(isLocal ? localIdentity : {}),
-                    ...(twin ? {
-                        metadataId: twin.metadataId, metadataSource: twin.metadataSource, matchState: 'MATCHED',
-                        ...(twin.name ? { name: twin.name } : {}),
-                        ...(twin.coverUrl ? { coverUrl: twin.coverUrl } : {}),
-                        ...(twin.releaseDate ? { releaseDate: twin.releaseDate } : {}),
-                        ...(twin.description ? { description: twin.description } : {}),
-                        // The sync prefilled the skeleton's coverage from the provider — it travels with the identity.
-                        ...(twin.coversIssues ? { coversIssues: twin.coversIssues } : {}),
-                    } : {}),
-                },
-            });
-            result.absorbed++;
-        } else if (twin) {
-            // #206 follow-up: a file with no row of its own has never been in the library — an
-            // arrival. (A file that brings its row, above, keeps that row's time.)
-            await prisma.issue.update({ where: { id: twin.id }, data: { filePath: target, status: 'DOWNLOADED', fileAddedAt: carriedStamp(null) } });
-            usedTwins.add(twin.id);
-            result.claimed++;
-        } else {
-            await prisma.issue.create({
-                data: {
-                    seriesId: owner.id, attachedVolumeId: attachment.id, number, isAnnual: false, filePath: target, status: 'DOWNLOADED',
-                    fileAddedAt: carriedStamp(null),
-                    ...(isLocal
-                        ? localIdentity
-                        : { metadataId: `unmatched_${Math.random()}`, metadataSource: 'LOCAL', matchState: 'UNMATCHED', name: `Vol. ${number}` }),
-                },
-            });
-            result.claimed++;
+        } catch (e) {
+            if (!fileList) throw e;
+            Logger.log(`[Match Collision] Couldn't attach ${item.filePath}: ${getErrorMessage(e)}`, 'error');
+            if (movedThis) {
+                try { await moveFileSafe(target, item.filePath); result.moved--; } catch { /* left in the series folder; the next scan files it by name */ }
+            }
+            result.failed = (result.failed ?? 0) + 1;
         }
     }
 

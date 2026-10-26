@@ -11,14 +11,12 @@
 // falls back to an upload or the provider's cover.
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
-import path from 'path';
-import sharp from 'sharp';
 import { getToken } from 'next-auth/jwt';
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { isPathWithinRoots, UNMATCHED_DIR } from '@/lib/utils/paths';
-import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import { archiveCoverJpeg } from '@/lib/series-cover';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -38,39 +36,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized path access' }, { status: 403 });
     }
 
-    // The engine runs as a separate process (its own cwd/container), so it can't resolve a relative
-    // path the way this route can. Send an absolute path — the file exists (checked above) and lives on
-    // the same filesystem the engine sees (shared /data mount in prod; same disk in dev).
-    const absolutePath = path.resolve(filePath);
-
-    // Ask the engine for the raw first page (handles every comic format the scanner does).
-    const engineRes = await fetch(`${ENGINE_URL}/api/converter/extract-cover`, {
-      method: 'POST',
-      headers: engineHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ path: absolutePath }),
-    });
-
-    if (!engineRes.ok) {
+    // Ask the engine for the raw first page (every comic format the scanner reads) — see series-cover.ts.
+    const cover = await archiveCoverJpeg(filePath);
+    if (!cover.ok) {
       // 404 = archive has no readable page; anything else = engine error/unreachable. Either way the
       // dialog treats a non-OK response as "no archive cover" and falls back to upload/provider.
-      Logger.log(`[Archive Cover] Engine returned ${engineRes.status} for ${filePath}`, 'debug');
-      return new NextResponse('No archive cover', { status: engineRes.status === 404 ? 404 : 502 });
+      Logger.log(`[Archive Cover] No cover from the engine (${cover.status}) for ${filePath}`, 'debug');
+      return new NextResponse('No archive cover', { status: cover.status });
     }
-
-    const raw = Buffer.from(await engineRes.arrayBuffer());
-    if (raw.length === 0) return new NextResponse('No archive cover', { status: 404 });
-
-    // Downscale to a cover thumbnail and re-encode to JPEG — it's both the preview and the bytes that
-    // get saved to <issueId>.jpg if the admin keeps it, so JPEG matches the stored extension.
-    let body: Buffer = raw;
-    let contentType = 'image/jpeg';
-    try {
-      body = await sharp(raw).resize({ width: 500, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
-    } catch {
-      // sharp couldn't decode it — serve the engine's raw page so the admin at least sees something.
-      contentType = engineRes.headers.get('content-type') || 'image/jpeg';
-    }
-
+    const { body, contentType } = cover;
     return new NextResponse(body as unknown as BodyInit, {
       headers: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=300' },
     });

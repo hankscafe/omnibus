@@ -18,15 +18,74 @@ import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { omnibusQueue } from '@/lib/queue';
 import { comicInfoWritesEnabled } from '@/lib/comicinfo-writes';
 import fs from 'fs';
+import path from 'path';
 import { randomUUID } from 'crypto';
 import { UNMATCHED_DIR, isPathWithinRoots } from '@/lib/utils/paths';
-import { attachAsCollected } from '@/lib/match-collision';
+import { attachAsCollected, type CollectedBookFile } from '@/lib/match-collision';
 import { retainedChildren } from '@/lib/retained-attachments';
+import { findOrCreateProviderSeries } from '@/lib/provider-series';
+import { normalizeCoverage } from '@/lib/utils/coverage';
+import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
+import { isSameIssue, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
+import { bookNumberFromFile, distinctEditionName, editionNameClashesWithSeries } from '@/lib/utils/collected-edition';
+import { archiveCoverJpeg, saveCustomSeriesCover } from '@/lib/series-cover';
 
 // LOCAL: a collected edition (or annual run) the provider has no volume for — attached by name,
 // no sync lane; its books are the files whose names carry it (field report by robotshavehearts2).
 const VALID_SOURCES = ['COMICVINE', 'METRON', 'LOCAL'];
 const VALID_KINDS = ['ANNUAL', 'COLLECTED'];
+/** #257: how many loose books one attach may pick — a drop folder, not a whole library. */
+const MAX_PICKED_FILES = 200;
+// A book's volume number: positive ("1", "2.5", "3a"). A negative one names back as a different
+// number after a wipe ("Vol. -001" parses as 1).
+const BOOK_NUMBER = /^\d+(?:\.\d+)?[a-zA-Z]?$/;
+
+/**
+ * #257: the loose books an admin picked in the Attach dialog — each a plain comic FILE directly in
+ * the drop folder (never a library file, never one inside a dropped folder — both already belong to
+ * a series row — and never a symlink, which could reach outside the drop folder), with the number
+ * and coverage the admin confirmed; a blank number is read from the filename, so duplicates are
+ * caught either way. Refused whole on the first bad entry: a half-applied pick would leave the
+ * admin guessing which books moved.
+ */
+function parsePickedFiles(raw: unknown): { files: CollectedBookFile[] } | { error: string; status: number } {
+    if (!Array.isArray(raw) || raw.length === 0) return { error: 'Pick at least one file.', status: 400 };
+    if (raw.length > MAX_PICKED_FILES) return { error: `Pick at most ${MAX_PICKED_FILES} files at once.`, status: 400 };
+    const files: CollectedBookFile[] = [];
+    const seen = new Set<string>();
+    for (const entry of raw) {
+        const p = typeof entry?.path === 'string' ? entry.path.trim() : '';
+        if (!p) return { error: 'A picked file has no path.', status: 400 };
+        if (!isPathWithinRoots(p, [UNMATCHED_DIR]) || path.dirname(path.resolve(p)) !== path.resolve(UNMATCHED_DIR)) {
+            return { error: 'Unauthorized path access', status: 403 };
+        }
+        if (!COMIC_EXT_REGEX.test(p)) return { error: `"${path.basename(p)}" is not a comic file.`, status: 400 };
+        let isFile = false;
+        try { isFile = fs.lstatSync(p).isFile(); } catch { isFile = false; }
+        if (!isFile) return { error: `"${path.basename(p)}" is no longer a file in the drop folder.`, status: 404 };
+        const key = p.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        // Stored the way the filename parser stores it: "02" is Vol. 2. Blank = the filename's.
+        const given = entry?.number == null ? '' : String(entry.number).trim();
+        const number = normalizeFractionNumbers(given || bookNumberFromFile(path.basename(p))).replace(/^0+(?=\d)/, '');
+        if (!BOOK_NUMBER.test(number)) return { error: `"${number}" is not a volume number.`, status: 400 };
+        const rawCovers = entry?.coversIssues == null ? '' : String(entry.coversIssues).trim();
+        const coversIssues = rawCovers ? normalizeCoverage(rawCovers) : null;
+        if (rawCovers && !coversIssues) return { error: `"${rawCovers}" is not a list of issues (e.g. "1-4, 6").`, status: 400 };
+        files.push({ path: p, number, coversIssues });
+    }
+    // Two books can't share a number in one edition — the second would shadow the first's row.
+    for (let i = 0; i < files.length; i++) {
+        for (let j = i + 1; j < files.length; j++) {
+            if (isSameIssue(files[i].number as string, files[j].number as string)) {
+                return { error: `Two picked files are both Vol. ${files[i].number}.`, status: 400 };
+            }
+        }
+    }
+    return { files };
+}
 
 /**
  * Queue the series.json regeneration WITHOUT awaiting it. A `await queue.add(...)` never settles
@@ -74,18 +133,107 @@ async function requireAdmin() {
 }
 
 /**
+ * #257: several loose books picked at once go under the series as ONE local collected edition —
+ * each with the number and coverage the admin confirmed, moved by the collision helper (never
+ * overwriting; a book that fails is put back and counted), and named so the name rule can claim
+ * them back after a wipe. The edition must not be named like its series, or that rule could never
+ * tell its books from the run's issues; a book the edition's shelf already has is refused.
+ * `coverFromBook`: the first book's own first page becomes the series' locked cover — here, before
+ * the caller queues a new series' provider sync, so that sync never replaces it.
+ */
+async function attachLocalFiles(
+    session: any, series: any, kind: string, name: string, volumeId: string, startYear: number | null,
+    rawFiles: unknown, seriesCreated: boolean, existingAttachmentId: string | null, coverFromBook: boolean,
+) {
+    if (kind !== 'COLLECTED') return NextResponse.json({ error: 'Only a collected edition takes picked files.' }, { status: 400 });
+    const picked = parsePickedFiles(rawFiles);
+    if ('error' in picked) return NextResponse.json({ error: picked.error }, { status: picked.status });
+    if (editionNameClashesWithSeries(name, series.name)) {
+        const suggestedName = distinctEditionName(name, series.name);
+        return NextResponse.json({
+            error: `"${name}" is the series' own name — give the edition a name of its own, e.g. "${suggestedName}".`,
+            suggestedName,
+        }, { status: 400 });
+    }
+    if (existingAttachmentId) {
+        const onShelf = await prisma.issue.findMany({ where: { attachedVolumeId: existingAttachmentId }, select: { number: true } });
+        const taken = picked.files.find(f => onShelf.some(b => isSameIssue(b.number, f.number as string)));
+        if (taken) return NextResponse.json({ error: `Vol. ${taken.number} is already on the "${name}" shelf.` }, { status: 400 });
+    }
+
+    const libraries = await prisma.library.findMany();
+    const roots = [...libraries.map((l: any) => l.path), UNMATCHED_DIR];
+    // The books are named here, so the naming settings apply (collected pattern, issue padding).
+    const settings = await prisma.systemSetting.findMany();
+    const config: Record<string, string> = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
+
+    const result = await attachAsCollected({
+        owner: {
+            id: series.id, name: series.name, year: series.year ?? null, publisher: series.publisher ?? null,
+            metadataSource: series.metadataSource || 'COMICVINE', metadataId: series.metadataId ?? null,
+            folderPath: series.folderPath, isManga: !!series.isManga, imprint: series.imprint ?? null,
+            universe: series.universe ?? null, seriesGroup: series.seriesGroup ?? null,
+        },
+        source: picked.files[0].path, files: picked.files, sourceSeriesId: null,
+        metadataSource: 'LOCAL', volumeId, volumeName: name, volumeYear: startYear || 0,
+        config, libraryRoots: roots,
+    });
+    if (result.error) return NextResponse.json({ success: false, attachmentId: result.attachmentId, error: result.error }, { status: 502 });
+    // Where each book landed (the lowest-numbered one can give the series its cover).
+    const books = await prisma.issue.findMany({
+        where: { attachedVolumeId: result.attachmentId, filePath: { not: null } },
+        select: { number: true, filePath: true },
+    });
+
+    let seriesCover: 'book' | 'failed' | null = null;
+    const firstBook = [...books].sort((a, b) => (parseFloat(a.number) || 0) - (parseFloat(b.number) || 0))[0];
+    if (coverFromBook && firstBook?.filePath) {
+        try {
+            const cover = await archiveCoverJpeg(firstBook.filePath);
+            if (!cover.ok) throw new Error(`no readable first page (${cover.status})`);
+            await saveCustomSeriesCover(series.id, series.folderPath, cover.body);
+            seriesCover = 'book';
+        } catch (e) {
+            Logger.log(`[Attachments API] Couldn't use ${firstBook.filePath} as the cover of ${series.name}: ${getErrorMessage(e)}`, 'warn');
+            seriesCover = 'failed';
+        }
+    }
+
+    queueSeriesJsonExport(series.id, `ATTACH_LOCAL_${result.attachmentId}`);
+    // A library series gets the books' ComicInfo now ("Write metadata to ComicInfo.xml" decides);
+    // a new one gets it with the provider sync its caller queues.
+    if (!seriesCreated && result.attachmentId) await queueLaneEmbed(result.attachmentId);
+    await AuditLogger.log('ATTACH_VOLUME', {
+        seriesId: series.id, seriesName: series.name, seriesCreated, metadataSource: 'LOCAL', volumeId, kind, name, local: true,
+        files: picked.files.map(f => f.path), moved: result.moved, claimed: result.claimed, conflicts: result.conflicts, failed: result.failed ?? 0, seriesCover,
+    }, session.user.id);
+    return NextResponse.json({
+        success: true, local: true, attachmentId: result.attachmentId, name, summary: null,
+        series: { id: series.id, name: series.name, folderPath: series.folderPath, created: seriesCreated },
+        books: books.map(b => ({ number: b.number, filePath: b.filePath })),
+        moved: result.moved, absorbed: result.absorbed, claimed: result.claimed, skeletonsReplaced: result.skeletonsReplaced,
+        conflicts: result.conflicts, failed: result.failed ?? 0, seriesCover,
+    });
+}
+
+/**
  * A LOCAL attachment: named by the admin, keyed by a generated local id, reused by name on the same
  * series. Without a sourcePath the engine claims the folder's files whose names carry it (the same
  * pass a provider lane runs, minus the fetch). With one — a folder or file dropped into /unmatched
  * — the collision helper moves it under the series and makes its rows the lane's books outright.
+ * With `files` (#257), several picked loose books go under it at once (attachLocalFiles).
  */
-async function attachLocal(session: any, series: any, kind: string, body: any) {
+async function attachLocal(session: any, series: any, kind: string, body: any, seriesCreated = false) {
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     if (!name) return NextResponse.json({ error: 'A local collected edition needs a name.' }, { status: 400 });
     const startYear = body?.startYear ? parseInt(body.startYear) || null : null;
 
     const existing = await prisma.attachedVolume.findFirst({ where: { seriesId: series.id, metadataSource: 'LOCAL', name } });
     const volumeId = existing?.volumeId || `local_${randomUUID()}`;
+
+    if (body?.files !== undefined) {
+        return await attachLocalFiles(session, series, kind, name, volumeId, startYear, body.files, seriesCreated, existing?.id ?? null, body?.coverFromBook === true);
+    }
 
     const sourcePath = typeof body?.sourcePath === 'string' && body.sourcePath.trim() ? body.sourcePath.trim() : null;
     if (sourcePath) {
@@ -213,6 +361,43 @@ export async function POST(request: Request) {
         const kind: string = (body?.kind || 'ANNUAL').toUpperCase();
         const isLocal = metadataSource === 'LOCAL';
         const volumeId: string = isLocal ? '' : (body?.volumeId != null ? String(body.volumeId).trim() : '');
+        // #257: picked loose books may name their series by its provider key instead of a library id.
+        const parent = !seriesId && body?.parent && typeof body.parent === 'object' ? body.parent : null;
+
+        if (parent) {
+            if (!isLocal || kind !== 'COLLECTED' || body?.files === undefined) {
+                return NextResponse.json({ error: 'A series picked from the provider takes picked files as a local collected edition.' }, { status: 400 });
+            }
+            // Everything that can be refused is refused BEFORE the series is created, so a bad pick
+            // never leaves an empty series behind.
+            const name = typeof body?.name === 'string' ? body.name.trim() : '';
+            if (!name) return NextResponse.json({ error: 'A local collected edition needs a name.' }, { status: 400 });
+            const picked = parsePickedFiles(body.files);
+            if ('error' in picked) return NextResponse.json({ error: picked.error }, { status: picked.status });
+            const parentName = typeof parent.name === 'string' ? parent.name.trim() : '';
+            if (parentName && editionNameClashesWithSeries(name, parentName)) {
+                const suggestedName = distinctEditionName(name, parentName);
+                return NextResponse.json({
+                    error: `"${name}" is the series' own name — give the edition a name of its own, e.g. "${suggestedName}".`,
+                    suggestedName,
+                }, { status: 400 });
+            }
+            const resolved = await findOrCreateProviderSeries(parent);
+            if (resolved.error !== undefined) return NextResponse.json({ error: resolved.error }, { status: resolved.status });
+            try {
+                return await attachLocal(session, resolved.series, kind, body, resolved.created);
+            } finally {
+                // A series created just now has only its key: the sync brings its description,
+                // credits, cover and issue list — queued however the attach went, so a failed one
+                // never leaves a bare series behind. After the attach, so it sees a book-cover lock.
+                if (resolved.created) {
+                    void omnibusQueue.add('METADATA_SYNC',
+                        { type: 'METADATA_SYNC', seriesIds: [resolved.series.id] },
+                        { jobId: `METADATA_SYNC_ATTACH_${resolved.series.id}_${Date.now()}` }
+                    ).catch(e => Logger.log(`[Attachments API] Couldn't queue the metadata sync: ${getErrorMessage(e)}`, 'warn'));
+                }
+            }
+        }
 
         if (!seriesId || (!isLocal && !volumeId)) {
             return NextResponse.json({ error: 'Missing seriesId or volumeId' }, { status: 400 });

@@ -14,13 +14,13 @@ vi.mock('@/app/api/auth/[...nextauth]/options', () => ({ getAuthOptions: vi.fn(a
 
 vi.mock('@/lib/db', () => {
     const prisma: any = {
-        series: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(async () => []), delete: vi.fn() },
+        series: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(async () => []), delete: vi.fn(), create: vi.fn() },
         attachedVolume: { findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), upsert: vi.fn(), update: vi.fn(), delete: vi.fn() },
         issue: { groupBy: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
         readingListItem: { updateMany: vi.fn() },
         library: { findMany: vi.fn(async () => [{ id: 'lib1', path: '/comics' }]) },
         // No row = "Write metadata to ComicInfo.xml" at its default, on (#251).
-        systemSetting: { findUnique: vi.fn(async () => null) },
+        systemSetting: { findUnique: vi.fn(async () => null), findMany: vi.fn(async () => []) },
     };
     // Interactive transactions run against the same mocks (the route only uses the tx client inside).
     prisma.$transaction = vi.fn(async (fn: any) => fn(prisma));
@@ -29,7 +29,11 @@ vi.mock('@/lib/db', () => {
 // LOCAL attachments with a sourcePath hand the move to the collision helper; the route is tested
 // for what it asks of it, the helper for what it does.
 vi.mock('@/lib/match-collision', () => ({ attachAsCollected: vi.fn() }));
-vi.mock('fs', () => ({ default: { existsSync: vi.fn(() => true) } }));
+// #257: a series picked from the provider is found or created by its own helper (tested there).
+vi.mock('@/lib/provider-series', () => ({ findOrCreateProviderSeries: vi.fn() }));
+vi.mock('fs', () => ({ default: { existsSync: vi.fn(() => true), lstatSync: vi.fn(() => ({ isFile: () => true })) } }));
+// #257: the book-cover option (extraction + locked save) is tested in series-cover.test.ts.
+vi.mock('@/lib/series-cover', () => ({ archiveCoverJpeg: vi.fn(), saveCustomSeriesCover: vi.fn() }));
 
 vi.mock('@/lib/engine', () => ({
     ENGINE_URL: 'http://engine',
@@ -529,5 +533,217 @@ describe('API: attachments — LOCAL (no provider volume)', () => {
     it('refuses a sourcePath outside the library roots and the drop folder', async () => {
         const res = await POST(createReq({ seriesId: 's1', metadataSource: 'LOCAL', kind: 'COLLECTED', name: 'Saga Compendium', sourcePath: '/etc/passwd' }));
         expect(res.status).toBe(403);
+    });
+});
+
+// #257: several loose books picked in the Attach dialog, under a series from the library or one
+// picked from the provider (found by its key, or created without a file of its own).
+describe('API: attachments — picked loose books (#257)', () => {
+    const PRP = {
+        id: 'prp', name: 'Power Rangers Prime', year: 2024, publisher: 'Boom! Studios', metadataSource: 'COMICVINE', metadataId: '161049',
+        folderPath: '/comics/Boom! Studios/Power Rangers Prime (2024)', isManga: false,
+    };
+    const v = (n: number, ext = 'cbz') => `/unmatched/Power Rangers Prime v0${n} (2025) (Digital) (dekabro-Empire).${ext}`;
+    const body = (extra: any = {}) => ({
+        seriesId: 'prp', metadataSource: 'LOCAL', kind: 'COLLECTED', name: 'Power Rangers Prime TPB',
+        files: [{ path: v(1), number: '1', coversIssues: '1 - 4' }, { path: v(2, 'cbr'), number: '02', coversIssues: '' }],
+        ...extra,
+    });
+    let attachAsCollected: any;
+    let findOrCreateProviderSeries: any;
+    const fsMock = async () => (await import('fs')).default as any;
+
+    beforeEach(async () => {
+        vi.clearAllMocks();
+        ({ attachAsCollected } = await import('@/lib/match-collision') as any);
+        ({ findOrCreateProviderSeries } = await import('@/lib/provider-series') as any);
+        (await fsMock()).lstatSync.mockImplementation(() => ({ isFile: () => true }));
+        (getServerSession as any).mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
+        (prisma.series.findUnique as any).mockResolvedValue(PRP);
+        (prisma.attachedVolume.findFirst as any).mockResolvedValue(null);
+        (prisma.systemSetting.findMany as any).mockResolvedValue([{ key: 'collected_file_naming_pattern', value: '{Series} Vol. {Issue}' }]);
+        (omnibusQueue.add as any).mockResolvedValue({});
+        attachAsCollected.mockResolvedValue({ attachmentId: 'attL', moved: 2, absorbed: 0, claimed: 2, skeletonsReplaced: 0, conflicts: 0 });
+        (prisma.issue.findMany as any).mockResolvedValue([{ number: '1', filePath: `${PRP.folderPath}/Power Rangers Prime TPB Vol. 001 (2025).cbz` }]);
+    });
+
+    it('hands every picked book to the collision helper with its confirmed number, normalized coverage and the naming settings', async () => {
+        const res = await POST(createReq(body()));
+        const data = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(attachAsCollected).toHaveBeenCalledWith(expect.objectContaining({
+            owner: expect.objectContaining({ id: 'prp', name: 'Power Rangers Prime', folderPath: PRP.folderPath }),
+            metadataSource: 'LOCAL', volumeId: expect.stringMatching(/^local_/), volumeName: 'Power Rangers Prime TPB', sourceSeriesId: null,
+            files: [
+                { path: v(1), number: '1', coversIssues: '1-4' },
+                { path: v(2, 'cbr'), number: '2', coversIssues: null },
+            ],
+            config: { collected_file_naming_pattern: '{Series} Vol. {Issue}' },
+        }));
+        expect(engineFetchLong).not.toHaveBeenCalled();
+        expect(data).toEqual(expect.objectContaining({
+            success: true, local: true, attachmentId: 'attL', moved: 2, conflicts: 0,
+            series: { id: 'prp', name: 'Power Rangers Prime', folderPath: PRP.folderPath, created: false },
+            // Where the books landed, read back from the lane.
+            books: [{ number: '1', filePath: `${PRP.folderPath}/Power Rangers Prime TPB Vol. 001 (2025).cbz` }],
+        }));
+        expect(prisma.issue.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { attachedVolumeId: 'attL', filePath: { not: null } } }));
+        // A library series already has its metadata: no sync is queued for it.
+        expect((omnibusQueue.add as any).mock.calls.filter((c: any[]) => c[0] === 'METADATA_SYNC')).toEqual([]);
+    });
+
+    it("refuses an edition named like its series, and says what to call it instead", async () => {
+        const res = await POST(createReq(body({ name: 'Power Rangers Prime' })));
+        expect(res.status).toBe(400);
+        expect((await res.json()).suggestedName).toBe('Power Rangers Prime TPB');
+        expect(attachAsCollected).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['a file outside the drop folder', { files: [{ path: '/comics/Boom! Studios/Power Rangers Prime (2024)/Power Rangers Prime #001.cbz' }] }, 403],
+        ['a path escaping the drop folder', { files: [{ path: '/unmatched/../etc/passwd.cbz' }] }, 403],
+        ['a file that is not a comic', { files: [{ path: '/unmatched/notes.txt' }] }, 400],
+        ['no files at all', { files: [] }, 400],
+        ['a number that is not one', { files: [{ path: v(1), number: 'one' }] }, 400],
+        ['coverage that names no issue', { files: [{ path: v(1), coversIssues: 'all of them' }] }, 400],
+        ['two books with one number', { files: [{ path: v(1), number: '1' }, { path: v(2), number: '001' }] }, 400],
+        ['an annual instead of a collected edition', { kind: 'ANNUAL' }, 400],
+        // A file inside a dropped folder already belongs to that folder's series row.
+        ['a file inside a dropped folder', { files: [{ path: '/unmatched/Power Rangers Prime TPB/Power Rangers Prime v01.cbz' }] }, 403],
+        ['a negative volume number', { files: [{ path: v(1), number: '-1' }] }, 400],
+        ['two books whose filenames give one number', { files: [{ path: v(1) }, { path: '/unmatched/Power Rangers Prime v01 (2026) (Digital) (other).cbz' }] }, 400],
+    ])('refuses %s', async (_label, extra, status) => {
+        const res = await POST(createReq(body(extra)));
+        expect(res.status).toBe(status);
+        expect(attachAsCollected).not.toHaveBeenCalled();
+    });
+
+    it('refuses a picked file that is gone from the drop folder', async () => {
+        (await fsMock()).lstatSync.mockImplementation(() => { throw new Error('ENOENT'); });
+        const res = await POST(createReq(body()));
+        expect(res.status).toBe(404);
+        expect(attachAsCollected).not.toHaveBeenCalled();
+    });
+
+    describe('a series picked from the provider', () => {
+        const parent = { metadataSource: 'COMICVINE', metadataId: '161049', name: 'Power Rangers Prime', year: 2024, publisher: 'Boom! Studios' };
+        const fromProvider = (extra: any = {}) => ({ ...body(), seriesId: undefined, parent, ...extra });
+
+        it('creates it, attaches the books, and queues the sync that brings its metadata', async () => {
+            findOrCreateProviderSeries.mockResolvedValue({ series: PRP, created: true });
+
+            const res = await POST(createReq(fromProvider()));
+            const data = await res.json();
+
+            expect(res.status).toBe(200);
+            expect(findOrCreateProviderSeries).toHaveBeenCalledWith(parent);
+            expect(attachAsCollected).toHaveBeenCalledWith(expect.objectContaining({ owner: expect.objectContaining({ id: 'prp' }) }));
+            expect(data.series).toEqual(expect.objectContaining({ id: 'prp', created: true }));
+            expect(omnibusQueue.add).toHaveBeenCalledWith('METADATA_SYNC', { type: 'METADATA_SYNC', seriesIds: ['prp'] }, expect.anything());
+        });
+
+        it('refuses a bad pick BEFORE creating anything', async () => {
+            expect((await POST(createReq(fromProvider({ name: 'Power Rangers Prime' })))).status).toBe(400);
+            expect((await POST(createReq(fromProvider({ files: [{ path: '/etc/passwd' }] })))).status).toBe(403);
+            expect((await POST(createReq(fromProvider({ name: '  ' })))).status).toBe(400);
+            expect((await POST(createReq(fromProvider({ files: undefined })))).status).toBe(400);
+            expect((await POST(createReq(fromProvider({ metadataSource: 'COMICVINE', volumeId: '1' })))).status).toBe(400);
+            expect(findOrCreateProviderSeries).not.toHaveBeenCalled();
+        });
+
+        it("passes on the helper's refusal, e.g. a folder another series owns", async () => {
+            findOrCreateProviderSeries.mockResolvedValue({ error: 'already belongs to Power Rangers Prime (2024)', status: 409 });
+            const res = await POST(createReq(fromProvider()));
+            expect(res.status).toBe(409);
+            expect(attachAsCollected).not.toHaveBeenCalled();
+        });
+    });
+});
+
+describe('API: attachments — picked books, the rest of the contract (#257)', () => {
+    const PRP = { id: 'prp', name: 'Power Rangers Prime', year: 2024, publisher: 'Boom! Studios', metadataSource: 'COMICVINE', metadataId: '161049', folderPath: '/comics/Boom! Studios/Power Rangers Prime (2024)', isManga: false };
+    const v = (n: number) => `/unmatched/Power Rangers Prime v0${n} (2025) (Digital).cbz`;
+    const body = (extra: any = {}) => ({ seriesId: 'prp', metadataSource: 'LOCAL', kind: 'COLLECTED', name: 'Power Rangers Prime TPB', files: [{ path: v(1) }, { path: v(2) }], ...extra });
+    let attachAsCollected: any; let findOrCreateProviderSeries: any; let cover: any;
+    const syncJobs = () => (omnibusQueue.add as any).mock.calls.filter((c: any[]) => c[0] === 'METADATA_SYNC');
+
+    beforeEach(async () => {
+        vi.clearAllMocks();
+        ({ attachAsCollected } = await import('@/lib/match-collision') as any);
+        ({ findOrCreateProviderSeries } = await import('@/lib/provider-series') as any);
+        cover = await import('@/lib/series-cover');
+        ((await import('fs')).default as any).lstatSync.mockImplementation(() => ({ isFile: () => true }));
+        (getServerSession as any).mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
+        (prisma.series.findUnique as any).mockResolvedValue(PRP);
+        (prisma.attachedVolume.findFirst as any).mockResolvedValue(null);
+        (prisma.systemSetting.findMany as any).mockResolvedValue([]);
+        (omnibusQueue.add as any).mockResolvedValue({});
+        attachAsCollected.mockResolvedValue({ attachmentId: 'attL', moved: 2, absorbed: 0, claimed: 2, skeletonsReplaced: 0, conflicts: 0 });
+        (prisma.issue.findMany as any).mockResolvedValue([
+            { id: 'b2', number: '2', filePath: `${PRP.folderPath}/Power Rangers Prime TPB Vol. 002 (2025).cbz` },
+            { id: 'b1', number: '1', filePath: `${PRP.folderPath}/Power Rangers Prime TPB Vol. 001 (2025).cbz` },
+        ]);
+    });
+
+    it('reads a blank number from the filename', async () => {
+        await POST(createReq(body()));
+        expect(attachAsCollected.mock.calls[0][0].files.map((f: any) => f.number)).toEqual(['1', '2']);
+    });
+
+    it("refuses a book the edition's shelf already has", async () => {
+        (prisma.attachedVolume.findFirst as any).mockResolvedValue({ id: 'attExisting', volumeId: 'local_old', name: 'Power Rangers Prime TPB' });
+        (prisma.issue.findMany as any).mockResolvedValue([{ number: '1' }]);
+        const res = await POST(createReq(body({ files: [{ path: v(1), number: '01' }] })));
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toContain('Vol. 1 is already');
+        expect(attachAsCollected).not.toHaveBeenCalled();
+    });
+
+    it("gives the series the lowest-numbered book's own cover, and reports it", async () => {
+        cover.archiveCoverJpeg.mockResolvedValue({ ok: true, body: Buffer.from('jpg'), contentType: 'image/jpeg' });
+        const data = await (await POST(createReq(body({ coverFromBook: true })))).json();
+        expect(cover.archiveCoverJpeg).toHaveBeenCalledWith(`${PRP.folderPath}/Power Rangers Prime TPB Vol. 001 (2025).cbz`);
+        expect(cover.saveCustomSeriesCover).toHaveBeenCalledWith('prp', PRP.folderPath, Buffer.from('jpg'));
+        expect(data.seriesCover).toBe('book');
+    });
+
+    it('keeps the attach when the book has no readable first page', async () => {
+        cover.archiveCoverJpeg.mockResolvedValue({ ok: false, status: 404 });
+        const res = await POST(createReq(body({ coverFromBook: true })));
+        const data = await res.json();
+        expect(res.status).toBe(200);
+        expect(data.seriesCover).toBe('failed');
+        expect(cover.saveCustomSeriesCover).not.toHaveBeenCalled();
+    });
+
+    it("rewrites a library series' books' ComicInfo now (the setting decides), and reports failed books", async () => {
+        attachAsCollected.mockResolvedValue({ attachmentId: 'attL', moved: 1, absorbed: 0, claimed: 1, skeletonsReplaced: 0, conflicts: 0, failed: 1 });
+        const data = await (await POST(createReq(body()))).json();
+        expect(data.failed).toBe(1);
+        expect(embedJobs()).toHaveLength(1);
+        expect(syncJobs()).toHaveLength(0);
+    });
+
+    it('queues the sync of a series created just now even when the attach fails — after the cover, never before', async () => {
+        const parent = { metadataSource: 'COMICVINE', metadataId: '161049', name: 'Power Rangers Prime', year: 2024, publisher: 'Boom! Studios' };
+        findOrCreateProviderSeries.mockResolvedValue({ series: PRP, created: true });
+        attachAsCollected.mockResolvedValue({ attachmentId: 'attL', moved: 0, absorbed: 0, claimed: 0, skeletonsReplaced: 0, conflicts: 0, error: 'boom' });
+        const res = await POST(createReq({ ...body(), seriesId: undefined, parent }));
+        expect(res.status).toBe(502);
+        expect(syncJobs()).toEqual([['METADATA_SYNC', { type: 'METADATA_SYNC', seriesIds: ['prp'] }, expect.anything()]]);
+
+        vi.clearAllMocks();
+        (omnibusQueue.add as any).mockResolvedValue({});
+        findOrCreateProviderSeries.mockResolvedValue({ series: PRP, created: true });
+        attachAsCollected.mockResolvedValue({ attachmentId: 'attL', moved: 2, absorbed: 0, claimed: 2, skeletonsReplaced: 0, conflicts: 0 });
+        (prisma.issue.findMany as any).mockResolvedValue([{ number: '1', filePath: `${PRP.folderPath}/Power Rangers Prime TPB Vol. 001 (2025).cbz` }]);
+        cover.archiveCoverJpeg.mockResolvedValue({ ok: true, body: Buffer.from('jpg'), contentType: 'image/jpeg' });
+        await POST(createReq({ ...body(), seriesId: undefined, parent, coverFromBook: true }));
+        const coverAt = cover.saveCustomSeriesCover.mock.invocationCallOrder[0];
+        const syncAt = (omnibusQueue.add as any).mock.invocationCallOrder[(omnibusQueue.add as any).mock.calls.findIndex((c: any[]) => c[0] === 'METADATA_SYNC')];
+        expect(coverAt).toBeLessThan(syncAt);
+        // A new series gets its ComicInfo with that sync, not a second embed racing it.
+        expect(embedJobs()).toHaveLength(0);
     });
 });

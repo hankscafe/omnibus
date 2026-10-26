@@ -20,6 +20,7 @@ import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { copyText } from "@/lib/utils/clipboard"
+import { groupCollectedShelves } from "@/lib/utils/collected-edition"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -1753,17 +1754,23 @@ function SeriesContent() {
                   </>
               )}
 
-              {/* Collected editions read as their own shelf — never mixed into the run, and never
-                  counted among it (a trade reprints issues you may already own). */}
-              {(collectedEditions.length > 0 || missingCollectedEditions.length > 0) && (
-                  <div className="space-y-4 mb-8">
+              {/* Collected editions read as their own shelves — never mixed into the run, and never
+                  counted among it (a trade reprints issues you may already own). #257: one shelf per
+                  edition (TPB, HC, Omnibus, GN), so two editions' "Vol. 1" never look alike. */}
+              {groupCollectedShelves([...collectedEditions, ...missingCollectedEditions], seriesInfo.name || '').map(shelf => {
+                  const ownedCount = shelf.books.filter((b: any) => !!b.fullPath).length;
+                  return (
+                  <div key={shelf.key} className="space-y-4 mb-8" data-testid="collected-shelf">
                       <div className="flex items-center justify-between border-b-2 border-border pb-4">
                           <h4 className="font-black flex items-center gap-2 text-xl text-foreground tracking-tight">
-                              <BookMarked className="w-6 h-6 text-primary" /> Collected Editions ({collectedEditions.length}{missingCollectedEditions.length > 0 ? ` of ${collectedEditions.length + missingCollectedEditions.length}` : ''})
+                              <BookMarked className="w-6 h-6 text-primary" /> {shelf.title} ({ownedCount}{ownedCount < shelf.books.length ? ` of ${shelf.books.length}` : ''})
+                              {shelf.name && shelf.title.toLowerCase() !== shelf.format.toLowerCase() && (
+                                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border border-primary/30 text-primary">{shelf.format}</span>
+                              )}
                           </h4>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
-                          {[...collectedEditions, ...missingCollectedEditions].map(book => {
+                          {shelf.books.map((book: any) => {
                               const owned = !!book.fullPath;
                               const isRequesting = requestingIds.has(book.id);
                               const isRequested = requestedIds.has(book.id);
@@ -1827,7 +1834,8 @@ function SeriesContent() {
                           })}
                       </div>
                   </div>
-              )}
+                  );
+              })}
 
               {/* --- DOWNLOADED ISSUES SECTION --- */}
               <div className="space-y-6">

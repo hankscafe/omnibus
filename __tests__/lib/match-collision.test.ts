@@ -263,5 +263,87 @@ describe('attachAsCollected', () => {
             // A loose file with no row of its own is new to the library.
             expect(mocks.issueCreate.mock.calls[0][0].data.fileAddedAt).toBeInstanceOf(Date);
         });
+
+        // #257: several loose books picked at once, each with the number and coverage the admin confirmed.
+        describe('picked files', () => {
+            const PRP = { ...OWNER, id: 'prp', name: 'Power Rangers Prime', year: 2024, publisher: 'Boom! Studios', folderPath: '/comics/Boom! Studios/Power Rangers Prime (2024)' };
+            const picked = {
+                ...local, owner: PRP, source: '', sourceSeriesId: null, volumeName: 'Power Rangers Prime TPB',
+                files: [
+                    { path: '/unmatched/Power Rangers Prime v01 (2025) (Digital) (dekabro-Empire).cbz', number: '1', coversIssues: '1-4' },
+                    { path: '/unmatched/Power Rangers Prime v02 (2025) (Digital) (dekabro-Empire).cbr', number: null, coversIssues: null },
+                ],
+            };
+
+            it('names each book after the edition, keeps its format, and stores its number and coverage', async () => {
+                const result = await attachAsCollected(picked);
+
+                expect(fs.promises.stat).not.toHaveBeenCalled();
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(
+                    '/unmatched/Power Rangers Prime v01 (2025) (Digital) (dekabro-Empire).cbz',
+                    '/comics/Boom! Studios/Power Rangers Prime (2024)/Power Rangers Prime TPB Vol. 001 (2025).cbz',
+                );
+                // The second number comes from its own filename, and a .cbr stays a .cbr.
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(
+                    '/unmatched/Power Rangers Prime v02 (2025) (Digital) (dekabro-Empire).cbr',
+                    '/comics/Boom! Studios/Power Rangers Prime (2024)/Power Rangers Prime TPB Vol. 002 (2025).cbr',
+                );
+                expect(mocks.issueCreate).toHaveBeenCalledWith(expect.objectContaining({
+                    data: expect.objectContaining({ seriesId: 'prp', attachedVolumeId: 'attX', number: '1', metadataId: 'local_attX_1', coversIssues: '1-4' }),
+                }));
+                const second = mocks.issueCreate.mock.calls[1][0].data;
+                expect(second).toEqual(expect.objectContaining({ number: '2', metadataId: 'local_attX_2' }));
+                expect(second.coversIssues).toBeUndefined();
+                expect(mocks.cleanupEmptyDirs).not.toHaveBeenCalled();
+                expect(result).toEqual(expect.objectContaining({ moved: 2, claimed: 2, conflicts: 0 }));
+            });
+
+            it('keeps a name that already claims the book back, and renames one whose number the admin corrected', async () => {
+                const CAP = { ...OWNER, id: 'cap', name: 'Captain America', year: 1968, publisher: 'Marvel', folderPath: '/comics/Marvel/Captain America (1968)' };
+                const file = '/unmatched/Captain America Omnibus v01 (2024, 3rd edition) (digital) (TONER).cbz';
+                await attachAsCollected({ ...picked, owner: CAP, volumeName: 'Captain America Omnibus', files: [{ path: file, number: '1' }] });
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(file, '/comics/Marvel/Captain America (1968)/Captain America Omnibus v01 (2024, 3rd edition) (digital) (TONER).cbz');
+
+                mocks.moveFileSafe.mockClear();
+                await attachAsCollected({ ...picked, owner: CAP, volumeName: 'Captain America Omnibus', files: [{ path: file, number: '2' }] });
+                // Its name would claim it back as #1, not the #2 the admin set: it takes the edition's name.
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(file, '/comics/Marvel/Captain America (1968)/Captain America Omnibus Vol. 002 (2024).cbz');
+            });
+
+            it("falls back to the default edition pattern when the admin's pattern would not claim the book back", async () => {
+                await attachAsCollected({ ...picked, config: { collected_file_naming_pattern: '{Publisher} - {Series} Vol. {Issue}' } });
+                // "Boom! Studios - Power Rangers Prime TPB Vol. 001" no longer STARTS with the edition's name.
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(expect.stringContaining('v01'), '/comics/Boom! Studios/Power Rangers Prime (2024)/Power Rangers Prime TPB Vol. 001 (2025).cbz');
+                mocks.moveFileSafe.mockClear();
+                await attachAsCollected({ ...picked, config: { collected_file_naming_pattern: '{Series} Book {Issue}' } });
+                // A pattern that still claims the book back is used as configured.
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(expect.stringContaining('v01'), '/comics/Boom! Studios/Power Rangers Prime (2024)/Power Rangers Prime TPB Book 001.cbz');
+            });
+
+            it('puts back and counts a book that fails, and attaches the rest', async () => {
+                mocks.issueCreate.mockRejectedValueOnce(new Error('database is locked'));
+                const result = await attachAsCollected(picked);
+                // The first book was moved, its row failed: moved back to where it came from.
+                expect(mocks.moveFileSafe).toHaveBeenCalledWith(
+                    '/comics/Boom! Studios/Power Rangers Prime (2024)/Power Rangers Prime TPB Vol. 001 (2025).cbz',
+                    '/unmatched/Power Rangers Prime v01 (2025) (Digital) (dekabro-Empire).cbz',
+                );
+                expect(result).toEqual(expect.objectContaining({ moved: 1, claimed: 1, failed: 1 }));
+            });
+
+            it('still fails as a whole for the callers without picked files', async () => {
+                vi.mocked(fs.promises.stat as any).mockResolvedValue({ isFile: () => true });
+                mocks.issueCreate.mockRejectedValueOnce(new Error('database is locked'));
+                await expect(attachAsCollected({ ...local, source: '/unmatched/Saga Compendium 01.cbz', sourceSeriesId: null })).rejects.toThrow('database is locked');
+            });
+
+            it('never overwrites: a taken name leaves that one file in /unmatched and moves the rest', async () => {
+                vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p).endsWith('Power Rangers Prime TPB Vol. 001 (2025).cbz'));
+                const result = await attachAsCollected(picked);
+                expect(mocks.moveFileSafe).toHaveBeenCalledTimes(1);
+                expect(mocks.moveFileSafe.mock.calls[0][0]).toContain('v02');
+                expect(result).toEqual(expect.objectContaining({ moved: 1, conflicts: 1 }));
+            });
+        });
     });
 });

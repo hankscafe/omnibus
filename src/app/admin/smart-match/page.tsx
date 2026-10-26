@@ -1915,11 +1915,17 @@ export default function SmartMatchPage() {
             <AttachLocalCollectedDialog
                 open={!!localAttachItem}
                 item={localAttachItem}
+                candidates={unmatched.filter(s => s.isRawFile && !s.isIgnored)}
+                provider={searchProvider}
                 onClose={() => setLocalAttachItem(null)}
                 onDone={() => {
                     const doneId = localAttachItem?.id;
+                    const pickedFiles = !!localAttachItem?.isRawFile;
                     setUnmatched(prev => prev.filter(s => s.id !== doneId));
                     setLocalAttachItem(null);
+                    // #257: a loose file may have taken other books of its edition along (and a taken
+                    // name leaves one behind) — the drop folder itself says which are still waiting.
+                    if (pickedFiles) reloadUnmatched();
                 }}
             />
 

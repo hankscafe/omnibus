@@ -98,7 +98,7 @@ pub async fn process_embed_job(db: Db, payload: EmbedRequest) -> anyhow::Result<
                s.gtin, s.notes, s."scanInformation", s.review,
                s."mainCharacterOrTeam", s."alternateSeries", s."alternateNumber",
                CAST(s."alternateCount" AS TEXT) AS "alternateCountText", s."storyArcNumber",
-               av."volumeId" as attached_volume_id, av."metadataSource" as attached_source
+               av."volumeId" as attached_volume_id, av."metadataSource" as attached_source, av.kind as attached_kind, av.name as attached_name
         FROM "Issue" i
         JOIN "Series" s ON i."seriesId" = s.id
         LEFT JOIN "AttachedVolume" av ON i."attachedVolumeId" = av.id
@@ -283,9 +283,11 @@ fn build_comic_info_xml(row: &sqlx::any::AnyRow, omit_issue_id: bool) -> String 
     let imprint = g("imprint").unwrap_or_default();
     // #203: an annual row's <Format> is its domain — "Annual" wins over the series default so the
     // flag survives the ComicInfo round-trip (scan reads Format back) even for files whose NAME
-    // lacks the token. Non-annual rows keep the series value exactly as before.
+    // lacks the token. #257: a book on a COLLECTED shelf is a collected edition, not one of the
+    // run's issues — its edition's kind (TPB / HC / Omnibus / GN, read from the edition's name) wins
+    // the same way. Other rows keep the series value exactly as before.
     let issue_is_annual = row.try_get::<i64, _>("issue_is_annual").map(|v| v != 0).unwrap_or(false);
-    let format = if issue_is_annual { "Annual".to_string() } else { g("format").unwrap_or_default() };
+    let format = collected_or_series_format(issue_is_annual, g("attached_kind").as_deref(), g("attached_name").as_deref(), &series_name, g("format"));
     let language_iso = g("languageISO").unwrap_or_default();
     let age_rating = g("ageRating").unwrap_or_default();
     // #199 Call-3 Beta B: the genuinely-per-issue fields flip to the same issue-wins pairing as
@@ -498,6 +500,43 @@ fn format_month_year(date_str: &str) -> String {
     match parts.next().and_then(|m| m.parse::<usize>().ok()) {
         Some(m) if (1..=12).contains(&m) => format!("{} {}", MONTH_NAMES[m - 1], year),
         _ => year,
+    }
+}
+
+/// A collected edition's kind as its name says it (#257): "Omnibus", "HC" (hardcover, deluxe,
+/// absolute), "GN" (graphic novel), else "TPB". Read from the NAME — the one thing about a local
+/// edition that series.json restores — so a rebuilt library writes the same Format. Only the part
+/// the edition adds to its series' name counts ("Absolute Batman TPB" is a TPB, not an Absolute
+/// HC). Whole words, case-insensitive. EXACT twin of collectedFormatFromName (collected-edition.ts).
+pub(crate) fn collected_format_from_name(name: &str, series: &str) -> &'static str {
+    let own = crate::scanner::strip_series_prefix(name, series).unwrap_or_else(|| name.to_string());
+    let name = own.as_str();
+    static OMNIBUS: OnceLock<Regex> = OnceLock::new();
+    static HC: OnceLock<Regex> = OnceLock::new();
+    static GN: OnceLock<Regex> = OnceLock::new();
+    let omnibus = OMNIBUS.get_or_init(|| Regex::new(r"(?i)\bomnibus\b").unwrap());
+    let hc = HC.get_or_init(|| Regex::new(r"(?i)\b(?:hc|hard\s?cover|deluxe|absolute)\b").unwrap());
+    let gn = GN.get_or_init(|| Regex::new(r"(?i)\b(?:graphic novel|ogn|gn)\b").unwrap());
+    if omnibus.is_match(name) {
+        "Omnibus"
+    } else if hc.is_match(name) {
+        "HC"
+    } else if gn.is_match(name) {
+        "GN"
+    } else {
+        "TPB"
+    }
+}
+
+/// A file's ComicInfo <Format>: "Annual" for an annual (#203), the edition's kind for a book on a
+/// COLLECTED shelf (#257), else the series' own value (blank when it has none).
+fn collected_or_series_format(is_annual: bool, attached_kind: Option<&str>, attached_name: Option<&str>, series_name: &str, series_format: Option<String>) -> String {
+    if is_annual {
+        "Annual".to_string()
+    } else if attached_kind == Some("COLLECTED") {
+        collected_format_from_name(attached_name.unwrap_or(""), series_name).to_string()
+    } else {
+        series_format.unwrap_or_default()
     }
 }
 
@@ -1030,6 +1069,41 @@ fn inject_xml_into_zip(file_path: &str, generated_xml: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comicinfo_format_marks_annuals_and_collected_books() {
+        assert_eq!(collected_or_series_format(true, Some("COLLECTED"), Some("Saga Omnibus"), "Saga", Some("Digital".into())), "Annual");
+        assert_eq!(collected_or_series_format(true, None, None, "Saga", None), "Annual");
+        assert_eq!(collected_or_series_format(false, Some("COLLECTED"), Some("Power Rangers Prime TPB"), "Power Rangers Prime", Some("Digital".into())), "TPB");
+        assert_eq!(collected_or_series_format(false, Some("COLLECTED"), Some("Captain America Omnibus"), "Captain America", None), "Omnibus");
+        assert_eq!(collected_or_series_format(false, Some("COLLECTED"), Some("Absolute Batman TPB"), "Absolute Batman", None), "TPB");
+        assert_eq!(collected_or_series_format(false, Some("COLLECTED"), None, "Saga", None), "TPB");
+        assert_eq!(collected_or_series_format(false, Some("ANNUAL"), Some("Batman Annual"), "Batman", Some("Digital".into())), "Digital");
+        assert_eq!(collected_or_series_format(false, None, None, "Saga", Some("Digital".into())), "Digital");
+        assert_eq!(collected_or_series_format(false, None, None, "Saga", None), "");
+    }
+
+    // Twin of the collectedFormatFromName cases in __tests__/lib/utils/collected-edition.test.ts.
+    #[test]
+    fn collected_format_reads_the_editions_kind_from_its_name() {
+        for (name, series, kind) in [
+            ("Captain America Omnibus", "Captain America", "Omnibus"),
+            ("Absolute Batman Omnibus", "Absolute Batman", "Omnibus"),
+            ("Absolute Batman TPB", "Absolute Batman", "TPB"),
+            ("Batman - The Dark Knight Returns - Deluxe Edition", "Batman", "HC"),
+            ("Saga HC", "Saga", "HC"),
+            ("Saga Hardcover", "Saga", "HC"),
+            ("Absolute Sandman", "The Sandman", "HC"),
+            ("Maus Graphic Novel", "Maus", "GN"),
+            ("Power Rangers Prime TPB", "Power Rangers Prime", "TPB"),
+            ("Ghost Rider Epic Collection", "Ghost Rider", "TPB"),
+            ("Omnibusman", "Batman", "TPB"),
+            ("Saga", "Saga", "TPB"),
+            ("", "Saga", "TPB"),
+        ] {
+            assert_eq!(collected_format_from_name(name, series), kind, "{name} / {series}");
+        }
+    }
 
     #[test]
     fn inject_xml_skips_repack_when_unchanged() {

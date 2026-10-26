@@ -2163,14 +2163,38 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             .iter()
             .map(|(id, seed)| ((seed.source.clone(), seed.volume_id.clone()), id.clone()))
             .collect();
+        // #257: a restored COLLECTED edition claims its books by NAME — a LOCAL edition's files carry
+        // no provider id, only the edition's name (attached_volumes::attachment_for_filename). Each
+        // is restored onto its lane, numbered under that name, never as a run issue of the same
+        // number: the first provider sync would pair "Vol. 1" with the run's #1 before the lane sync
+        // could re-bind it, and the books would feed the series' Format/bookType fill below.
+        let collected_refs: Vec<crate::attached_volumes::AttachmentNameRef> = attachment_seeds
+            .iter()
+            .filter(|(_, seed)| seed.kind == "COLLECTED")
+            .filter_map(|(id, seed)| seed.name.as_ref().filter(|n| !n.trim().is_empty())
+                .map(|n| crate::attached_volumes::AttachmentNameRef { id: id.clone(), name: n.clone(), kind: "COLLECTED".to_string() }))
+            .collect();
+        let local_collected: std::collections::HashSet<&String> = attachment_seeds
+            .iter()
+            .filter(|(_, seed)| seed.kind == "COLLECTED" && seed.source == "LOCAL")
+            .map(|(id, _)| id)
+            .collect();
 
         let mut issue_rows: Vec<NewIssueRow> = Vec::with_capacity(files.len());
         for (idx, file) in files.iter().enumerate() {
             let file_name = Path::new(file).file_name().unwrap_or_default().to_string_lossy().to_string();
             let file_info = infos.get(idx).and_then(|o| o.as_ref());
-            let (issue_num, is_annual) = issue_descriptor_for_file(file_info, &file_name, Some(&clean_name));
+            let lane = if collected_refs.is_empty() {
+                None
+            } else {
+                crate::attached_volumes::attachment_for_filename(&file_name, &clean_name, &collected_refs)
+            };
+            let (issue_num, is_annual) = match &lane {
+                Some(m) => (m.number.clone(), false),
+                None => issue_descriptor_for_file(file_info, &file_name, Some(&clean_name)),
+            };
             let file_derived = file_info.map(derive_meta);
-            let fm = issue_file_meta(file_info);
+            let mut fm = issue_file_meta(file_info);
             let (issue_meta_id, issue_source, issue_match_state) = match &file_derived {
                 Some(d) if d.metadata_issue_id.as_deref().is_some_and(|id| conflicted_ids.contains(id)) => {
                     log::warn!("[Scanner] Embedded issue id {} appears under multiple issue numbers in this folder — ignoring it for \"{}\" (issue #194 guard); the next sync links by number.", d.metadata_issue_id.as_deref().unwrap_or(""), file_name);
@@ -2187,9 +2211,23 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
             let page_count = count_pages_blocking(file).await;
 
-            // Only an ANNUAL file can restore an attachment link, and only to a volume series.json
-            // actually lists — a stale embedded id from a detached volume simply finds no match.
-            let attached_volume_id = if is_annual && !attachment_by_volume.is_empty() {
+            // #257: a LOCAL edition's book gets the identity its lane gives every book (lane and
+            // number) and a "Vol. N" title unless its ComicInfo has one — what the lane sync sets.
+            let local_lane = lane.as_ref().map(|m| &m.id).filter(|id| local_collected.contains(id));
+            let (issue_meta_id, issue_source, issue_match_state) = match local_lane {
+                Some(l) => (format!("local_{}_{}", l, issue_num), "LOCAL".to_string(), "MATCHED"),
+                None => (issue_meta_id, issue_source, issue_match_state),
+            };
+            if local_lane.is_some() && fm.name.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                fm.name = Some(format!("Vol. {}", issue_num));
+            }
+
+            // Only an ANNUAL file can restore an attachment link by its embedded volume id, and only
+            // to a volume series.json actually lists — a stale embedded id from a detached volume
+            // simply finds no match. #257: a collected edition's book restores onto its lane by name.
+            let attached_volume_id = if let Some(m) = &lane {
+                Some(m.id.clone())
+            } else if is_annual && !attachment_by_volume.is_empty() {
                 file_derived.as_ref().and_then(|d| {
                     let key = if let Some(m) = d.metron_id {
                         ("METRON".to_string(), m.to_string())
@@ -2348,13 +2386,16 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         .collect::<std::collections::HashSet<_>>().into_iter().collect();
     // #203: tuples carry isAnnual — the annual domain is part of numbering identity, so "Annual #1"
     // neither repoints onto nor conflicts with plain "#1". Read via CAST(... AS INTEGER) per the
-    // Any-driver bool rule.
-    let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
+    // Any-driver bool rule. #257: and the row's attachment, so a collected edition's "Vol. 1" and the
+    // run's "#1" are different slots too (see collected_lanes below).
+    // (row id, number, isAnnual, attachedVolumeId) per series.
+    type IssueSlots = std::collections::HashMap<String, Vec<(String, String, bool, Option<String>)>>;
+    let mut series_issue_nums: IssueSlots = std::collections::HashMap::new();
     let mut series_meta_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
     if !involved_series.is_empty() {
         // Portable IN (...) list — see the ghost-purge note above on `= ANY($1)`.
         let ph = Db::in_placeholders(1, involved_series.len());
-        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId", "attachedVolumeId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
         let mut q = sqlx::query(&sql);
         for sid in &involved_series {
             q = q.bind(sid);
@@ -2364,7 +2405,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             let sid = r.get::<String, _>("seriesId");
             let row_annual = r.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
             series_issue_nums.entry(sid.clone()).or_default()
-                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual));
+                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual, r.try_get::<Option<String>, _>("attachedVolumeId").unwrap_or(None)));
             // (metadataId, number, isAnnual) per series for the embedded-id conflict check below (#194 (c2)).
             if let Ok(Some(mid)) = r.try_get::<Option<String>, _>("metadataId") {
                 if !mid.is_empty() && !mid.starts_with("unmatched") {
@@ -2406,19 +2447,67 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         map
     };
 
+    // #257: the series' COLLECTED editions by NAME. A new file named for one of them (the
+    // name-anchored rule, attached_volumes::attachment_for_filename) is that edition's book: it
+    // dedupes only against the edition's own books and joins the lane at once — a LOCAL edition's
+    // book with its lane-and-number identity, like the Node series page binds it. And a file that
+    // names no edition never repoints a collected book: "Power Rangers Prime #001" dropped beside
+    // "Power Rangers Prime TPB Vol. 001" used to take over the trade's row by number alone. Annual
+    // lanes keep their own rules (the annual domain and the embedded volume id above).
+    let mut collected_lanes: std::collections::HashMap<String, (String, Vec<crate::attached_volumes::AttachmentNameRef>)> = std::collections::HashMap::new();
+    let mut collected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut local_collected_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if !involved_series.is_empty() {
+        let sql = format!(
+            r#"SELECT av.id, av."seriesId", av.name, av."metadataSource", s.name AS series_name
+               FROM "AttachedVolume" av JOIN "Series" s ON s.id = av."seriesId"
+               WHERE av.kind = 'COLLECTED' AND av."seriesId" IN ({})"#,
+            Db::in_placeholders(1, involved_series.len())
+        );
+        let mut q = sqlx::query(&sql);
+        for sid in &involved_series { q = q.bind(sid); }
+        for r in q.fetch_all(&db.pool).await.unwrap_or_default() {
+            let id: String = r.get("id");
+            collected_ids.insert(id.clone());
+            if r.try_get::<String, _>("metadataSource").unwrap_or_default() == "LOCAL" {
+                local_collected_ids.insert(id.clone());
+            }
+            let name = r.try_get::<Option<String>, _>("name").unwrap_or(None).unwrap_or_default();
+            if name.trim().is_empty() { continue; }
+            let entry = collected_lanes.entry(r.get::<String, _>("seriesId"))
+                .or_insert_with(|| (r.try_get::<String, _>("series_name").unwrap_or_default(), Vec::new()));
+            entry.1.push(crate::attached_volumes::AttachmentNameRef { id, name, kind: "COLLECTED".to_string() });
+        }
+    }
+
     let mut pending_writes: Vec<PendingIssueWrite> = Vec::new();
     for (series_id, file, info) in parsed_files {
         let file_name = Path::new(&file).file_name().unwrap_or_default().to_string_lossy().to_string();
         // The folder-derived series name isn't in scope on this path (files landing in EXISTING
         // series); the file's own embedded ComicInfo series tag is the next-best title hint.
         let series_hint = info.as_ref().and_then(|i| i.series.as_deref().map(|s| s.to_string()));
-        let (issue_num, is_annual) = issue_descriptor_for_file(info.as_ref(), &file_name, series_hint.as_deref());
+        // #257: a file named for one of the series' collected editions is numbered under that name.
+        let lane = collected_lanes.get(&series_id)
+            .and_then(|(series_name, refs)| crate::attached_volumes::attachment_for_filename(&file_name, series_name, refs));
+        let lane_id = lane.as_ref().map(|m| m.id.clone());
+        let (issue_num, is_annual) = match &lane {
+            Some(m) => (m.number.clone(), false),
+            None => issue_descriptor_for_file(info.as_ref(), &file_name, series_hint.as_deref()),
+        };
 
         // Dedupe against the series' existing issues by number AND annual domain (#203) — a renamed
-        // "Batman Annual 001" repoints its annual row, never the plain #1. On a match the file was
-        // renamed/moved — repoint the existing row's filePath rather than inserting a second row.
+        // "Batman Annual 001" repoints its annual row, never the plain #1 — AND collected edition
+        // (#257): an edition's book against its own books only, any other file never against a
+        // collected book. On a match the file was renamed/moved — repoint the existing row's
+        // filePath rather than inserting a second row.
         let dup_id: Option<String> = series_issue_nums.get(&series_id)
-            .and_then(|v| v.iter().find(|(_, n, ann)| *ann == is_annual && crate::metadata::is_same_issue(n, &issue_num)).map(|(id, _, _)| id.clone()));
+            .and_then(|v| v.iter().find(|(_, n, ann, row_lane)| {
+                let same_slot = match &lane_id {
+                    Some(l) => row_lane.as_deref() == Some(l.as_str()),
+                    None => !row_lane.as_ref().is_some_and(|l| collected_ids.contains(l)),
+                };
+                same_slot && *ann == is_annual && crate::metadata::is_same_issue(n, &issue_num)
+            }).map(|(id, ..)| id.clone()));
         if let Some(eid) = dup_id {
             // Repointed file: refresh the page count too (a 0-count row may finally have a readable zip).
             let page_count = count_pages_blocking(&file).await;
@@ -2427,7 +2516,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }
 
         // Narrative metadata from the file's own ComicInfo (discussion #177) — same as 5A.
-        let fm = issue_file_meta(info.as_ref());
+        let mut fm = issue_file_meta(info.as_ref());
         let derived = info.as_ref().map(derive_meta);
         let (issue_meta_id, issue_source, issue_match_state) = match &derived {
             Some(d) => match &d.metadata_issue_id {
@@ -2447,11 +2536,25 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             None => (format!("unmatched_{}", Uuid::new_v4()), "LOCAL".to_string(), "UNMATCHED"),
         };
 
+        // #257: a LOCAL edition's book takes the identity its lane gives every book — lane and
+        // number, stable across a wipe — and a "Vol. N" title unless its ComicInfo has one.
+        let local_lane = lane_id.as_ref().filter(|l| local_collected_ids.contains(*l));
+        let (issue_meta_id, issue_source, issue_match_state) = match local_lane {
+            Some(l) => (format!("local_{}_{}", l, issue_num), "LOCAL".to_string(), "MATCHED"),
+            None => (issue_meta_id, issue_source, issue_match_state),
+        };
+        if local_lane.is_some() && fm.name.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            fm.name = Some(format!("Vol. {}", issue_num));
+        }
+
         let issue_id = Uuid::new_v4().to_string();
         let page_count = count_pages_blocking(&file).await;
         // An annual file whose embedded volume id names one of this series' attachments joins that
         // lane immediately (see the map above); everything else stays an unattached annual row.
-        let attached_volume_id = if is_annual {
+        // #257: a collected edition's book joins its edition's lane.
+        let attached_volume_id = if lane_id.is_some() {
+            lane_id.clone()
+        } else if is_annual {
             derived.as_ref().and_then(|d| {
                 let (source, vol) = if let Some(m) = d.metron_id {
                     ("METRON".to_string(), m.to_string())
@@ -2465,7 +2568,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         };
         // Track the number so another file with the same number later in this batch dedupes
         // against it instead of inserting a second row.
-        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone(), is_annual));
+        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone(), is_annual, attached_volume_id.clone()));
         pending_writes.push(PendingIssueWrite::Insert(Box::new(NewIssueRow {
             issue_id,
             series_id,
@@ -4286,33 +4389,8 @@ mod tests {
     // so the scanner never even attempts dynamic resolution. Self-contained — a real file-backed
     // SQLite DB (a :memory: pool would give every connection its own database) and a real cbz.
     // ------------------------------------------------------------------
-    #[tokio::test]
-    async fn round_trip_embed_export_wipe_rescan_rebuilds_identically_with_zero_api() {
-        let base = std::env::temp_dir().join(format!("omnibus_rt_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let series_dir = base.join("Batman (2011)");
-        std::fs::create_dir_all(&series_dir).expect("create fixture series dir");
-
-        // The filename deliberately says "001" while the DB (and therefore the embedded
-        // ComicInfo <Number>) says "5" — the rescan must trust the tag, not the filename.
-        let cbz = series_dir.join("Batman 001 (2011).cbz");
-        {
-            use std::io::Write as _;
-            let f = File::create(&cbz).expect("create fixture cbz");
-            let mut zw = zip::ZipWriter::new(f);
-            for name in ["01.jpg", "02.jpg", "03.jpg"] {
-                zw.start_file(name, zip::write::FileOptions::default()).unwrap();
-                zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
-            }
-            zw.finish().unwrap();
-        }
-
-        let db_file = base.join("rt.db");
-        File::create(&db_file).expect("pre-create sqlite file");
-        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
-        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
-
-        // Minimal Prisma-shaped schema — just the columns the scan/embed/export paths touch.
+    /// The Prisma-shaped tables the scan, embed and export paths touch — shared by the scan fixtures.
+    async fn scan_fixture_schema(db: &crate::db::Db) {
         for ddl in [
             r#"CREATE TABLE "Library" (id TEXT PRIMARY KEY, name TEXT, path TEXT, "isManga" INTEGER DEFAULT 0)"#,
             r#"CREATE TABLE "Request" ("volumeId" TEXT, status TEXT)"#,
@@ -4347,6 +4425,132 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
         }
+    }
+
+    // #257: a series folder holding the run's issues AND a local collected edition's books. New
+    // files land in it: the run's "#001" and the edition's "Vol. 002". Each must take its OWN slot —
+    // the single never repoints the trade's "Vol. 1" row (it used to: same number, same series), and
+    // the trade's book never repoints the run's "#2"; the edition's new book joins its lane at once.
+    #[tokio::test]
+    async fn new_files_beside_a_collected_edition_never_repoint_each_others_rows() {
+        let base = std::env::temp_dir().join(format!("omnibus_lane257_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let series_dir = base.join("BOOM! Studios").join("Power Rangers Prime (2024)");
+        std::fs::create_dir_all(&series_dir).unwrap();
+        let cbz = |name: &str| -> String {
+            use std::io::Write as _;
+            let p = series_dir.join(name);
+            let mut zw = zip::ZipWriter::new(File::create(&p).unwrap());
+            zw.start_file("01.jpg", zip::write::FileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+            p.to_string_lossy().replace('\\', "/")
+        };
+        let tpb1 = cbz("Power Rangers Prime TPB Vol. 001 (2025).cbz");
+        let run2 = cbz("Power Rangers Prime #002.cbz");
+        let run1_new = cbz("Power Rangers Prime #001.cbz");
+        let tpb2_new = cbz("Power Rangers Prime TPB Vol. 002 (2025).cbz");
+
+        let db_file = base.join("lane.db");
+        File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        scan_fixture_schema(&db).await;
+        let folder = series_dir.to_string_lossy().replace('\\', "/");
+        sqlx::query(r#"INSERT INTO "Library" (id, name, path) VALUES ('lib', 'Comics', $1)"#)
+            .bind(base.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "libraryId")
+                       VALUES ('prp', $1, 'Power Rangers Prime', 2024, 'BOOM! Studios', '161049', 'COMICVINE', 'MATCHED', 'lib')"#)
+            .bind(&folder).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name)
+                       VALUES ('att_tpb', 'prp', 'LOCAL', 'local_x', 'COLLECTED', 'Power Rangers Prime TPB')"#)
+            .execute(&db.pool).await.unwrap();
+        for (id, number, file, lane, meta) in [
+            ("book_1", "1", &tpb1, Some("att_tpb"), "local_att_tpb_1"),
+            ("issue_2", "2", &run2, None, "1083786"),
+        ] {
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", "attachedVolumeId", "metadataId", "metadataSource", "matchState")
+                           VALUES ($1, 'prp', $2, 'DOWNLOADED', $3, $4, $5, 'COMICVINE', 'MATCHED')"#)
+                .bind(id).bind(number).bind(file).bind(lane).bind(meta).execute(&db.pool).await.unwrap();
+        }
+
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("scan");
+
+        let rows = sqlx::query(r#"SELECT id, number, "filePath", "attachedVolumeId", "metadataId", "metadataSource", name FROM "Issue" ORDER BY "filePath""#)
+            .fetch_all(&db.pool).await.unwrap();
+        let by_file = |f: &str| rows.iter().find(|r| r.get::<Option<String>, _>("filePath").as_deref() == Some(f))
+            .unwrap_or_else(|| panic!("no row for {f}"));
+        assert_eq!(rows.len(), 4, "every file has its own row");
+        // The trade's book keeps its row; the new single gets a row of its own on the run.
+        assert_eq!(by_file(&tpb1).get::<String, _>("id"), "book_1");
+        let single = by_file(&run1_new);
+        assert_ne!(single.get::<String, _>("id"), "book_1");
+        assert_eq!(single.get::<String, _>("number"), "1");
+        assert!(single.get::<Option<String>, _>("attachedVolumeId").is_none(), "the single is the run's #1");
+        // The run's #2 keeps its file; the edition's new book is bound to its lane as Vol. 2.
+        assert_eq!(by_file(&run2).get::<String, _>("id"), "issue_2");
+        let book2 = by_file(&tpb2_new);
+        assert_eq!(book2.get::<String, _>("number"), "2");
+        assert_eq!(book2.get::<Option<String>, _>("attachedVolumeId").as_deref(), Some("att_tpb"));
+        assert_eq!(book2.get::<String, _>("metadataId"), "local_att_tpb_2");
+        assert_eq!(book2.get::<String, _>("metadataSource"), "LOCAL");
+        assert_eq!(book2.get::<Option<String>, _>("name").as_deref(), Some("Vol. 2"));
+
+        // Wipe and rebuild from the files alone: series.json lists the edition, the books restore
+        // onto it by NAME (5A) — none comes back as the run's #1 or #2.
+        assert!(crate::metadata_writer::write_series_json(&db, "prp").await, "series.json written");
+        for t in ["Issue", "Series", "AttachedVolume"] {
+            sqlx::query(&format!(r#"DELETE FROM "{t}""#)).execute(&db.pool).await.unwrap();
+        }
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("rescan");
+        let lane_id: String = sqlx::query_scalar(r#"SELECT id FROM "AttachedVolume" WHERE name = 'Power Rangers Prime TPB' AND "metadataSource" = 'LOCAL'"#)
+            .fetch_one(&db.pool).await.expect("the edition is restored from series.json");
+        let rows = sqlx::query(r#"SELECT number, "filePath", "attachedVolumeId", "metadataId", "metadataSource" FROM "Issue""#)
+            .fetch_all(&db.pool).await.unwrap();
+        assert_eq!(rows.len(), 4, "every file has its own row after the rebuild");
+        for (file, number, on_lane) in [(&tpb1, "1", true), (&tpb2_new, "2", true), (&run1_new, "1", false), (&run2, "2", false)] {
+            let r = rows.iter().find(|r| r.get::<Option<String>, _>("filePath").as_deref() == Some(file.as_str()))
+                .unwrap_or_else(|| panic!("no row for {file}"));
+            assert_eq!(r.get::<String, _>("number"), number, "{file}");
+            let lane = r.get::<Option<String>, _>("attachedVolumeId");
+            if on_lane {
+                assert_eq!(lane.as_deref(), Some(lane_id.as_str()), "{file} is back on its edition");
+                assert_eq!(r.get::<String, _>("metadataId"), format!("local_{}_{}", lane_id, number));
+                assert_eq!(r.get::<String, _>("metadataSource"), "LOCAL");
+            } else {
+                assert!(lane.is_none(), "{file} is back on the run");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn round_trip_embed_export_wipe_rescan_rebuilds_identically_with_zero_api() {
+        let base = std::env::temp_dir().join(format!("omnibus_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let series_dir = base.join("Batman (2011)");
+        std::fs::create_dir_all(&series_dir).expect("create fixture series dir");
+
+        // The filename deliberately says "001" while the DB (and therefore the embedded
+        // ComicInfo <Number>) says "5" — the rescan must trust the tag, not the filename.
+        let cbz = series_dir.join("Batman 001 (2011).cbz");
+        {
+            use std::io::Write as _;
+            let f = File::create(&cbz).expect("create fixture cbz");
+            let mut zw = zip::ZipWriter::new(f);
+            for name in ["01.jpg", "02.jpg", "03.jpg"] {
+                zw.start_file(name, zip::write::FileOptions::default()).unwrap();
+                zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+
+        let db_file = base.join("rt.db");
+        File::create(&db_file).expect("pre-create sqlite file");
+        let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
+        let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
+
+        // Minimal Prisma-shaped schema — just the columns the scan/embed/export paths touch.
+        scan_fixture_schema(&db).await;
 
         // Seed the state a provider sync would have left behind. Publisher "DC Comics" is in the
         // default western list, so manga detection short-circuits before its AniList network tier.

@@ -527,6 +527,10 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
 
         log::info!("Syncing metadata for: {} ({} ID: {})", series_name, metadata_source, metadata_id);
 
+        // #257: local editions claim their books (by name, no provider call) BEFORE the pairing
+        // below, which only pairs the run's own rows — an unbound trade must not look like one.
+        crate::attached_volumes::claim_local_attachments(&db, &client, &series_id).await;
+
         let fetch_result: anyhow::Result<i32> = match metadata_source.as_str() {
             "COMICVINE" => match &cv_api_key {
                 Some(key) if !key.is_empty() => {

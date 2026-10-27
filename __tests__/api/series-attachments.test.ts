@@ -177,7 +177,22 @@ describe('API: /api/library/series/attachments', () => {
         (getServerSession as any).mockResolvedValue({ user: { id: 'admin1', role: 'ADMIN' } });
         expect((await POST(createReq({ seriesId: 's1', volumeId: '49197', metadataSource: 'ANILIST' }))).status).toBe(400);
         expect((await POST(createReq({ seriesId: 's1', volumeId: '49197', kind: 'OMNIBUS' }))).status).toBe(400);
+        // #255: a Special is a provider volume — there is no attaching one by name.
+        expect((await POST(createReq({ seriesId: 's1', metadataSource: 'LOCAL', kind: 'SPECIAL', name: 'Ark-M' }))).status).toBe(400);
         expect(prisma.attachedVolume.upsert).not.toHaveBeenCalled();
+    });
+
+    it('attaches a Special (#255) through the same lane, with its kind', async () => {
+        const res = await POST(createReq({ seriesId: 's1', volumeId: '169970', metadataSource: 'COMICVINE', kind: 'special' }));
+
+        expect(res.status).toBe(200);
+        expect(prisma.attachedVolume.upsert).toHaveBeenCalledWith(expect.objectContaining({
+            create: expect.objectContaining({ kind: 'SPECIAL', volumeId: '169970' }),
+            update: expect.objectContaining({ kind: 'SPECIAL' }),
+        }));
+        const [url, init] = (engineFetchLong as any).mock.calls[0];
+        expect(url).toBe('http://engine/api/metadata/attach-sync');
+        expect(JSON.parse(init.body)).toEqual({ attachment_id: 'att1', claim: true });
     });
 
     it('detaches without touching owned files, and only removes skeletons when asked', async () => {

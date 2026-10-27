@@ -19,6 +19,21 @@ describe('requestNameFor', () => {
             .toBe('Batman Annual #1');
     });
 
+    // #255: a Special is searched for by its OWN volume's name — "Absolute Batman #1" would hunt for
+    // the run's #1, which the parent may already own.
+    it("files a Special under its own volume's name, with its story title", () => {
+        expect(requestNameFor({ seriesName: 'Absolute Batman', number: '1', parsedNum: 1, isSpecial: true, specialName: 'Absolute Batman: Ark-M' }))
+            .toEqual({ composite: 'Absolute Batman: Ark-M #1', reqNum: '1' });
+        expect(requestNameFor({ seriesName: 'Absolute Batman', number: '1', parsedNum: 1, isSpecial: true, specialName: 'Absolute Batman: Ark-M', name: 'A History of Arkham' }).composite)
+            .toBe('Absolute Batman: Ark-M #1: A History of Arkham');
+        // A provider list composite that already carries the number is the composite.
+        expect(requestNameFor({ seriesName: 'Absolute Batman', number: '1', parsedNum: 1, isSpecial: true, specialName: 'Absolute Batman: Ark-M', name: 'Absolute Batman: Ark-M #1' }).composite)
+            .toBe('Absolute Batman: Ark-M #1');
+        // No cached name yet: never the run's composite.
+        expect(requestNameFor({ seriesName: 'Absolute Batman', number: '1', parsedNum: 1, isSpecial: true, specialName: null }).composite)
+            .toBe('Absolute Batman Special #1');
+    });
+
     it('appends a real story title, adopts a title that already carries the number, drops a title equal to the series', () => {
         expect(requestNameFor({ seriesName: 'Batman', number: '1', parsedNum: 1, name: 'The Court of Owls' }).composite)
             .toBe('Batman #1: The Court of Owls');

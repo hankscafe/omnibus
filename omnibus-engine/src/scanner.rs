@@ -2159,9 +2159,9 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             .into_iter()
             .map(|seed| (Uuid::new_v4().to_string(), seed))
             .collect();
-        let attachment_by_volume: std::collections::HashMap<(String, String), String> = attachment_seeds
+        let attachment_by_volume: std::collections::HashMap<(String, String), (String, String)> = attachment_seeds
             .iter()
-            .map(|(id, seed)| ((seed.source.clone(), seed.volume_id.clone()), id.clone()))
+            .map(|(id, seed)| ((seed.source.clone(), seed.volume_id.clone()), (id.clone(), seed.kind.clone())))
             .collect();
 
         let mut issue_rows: Vec<NewIssueRow> = Vec::with_capacity(files.len());
@@ -2187,19 +2187,23 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             // pageCount feeds OPDS-PSE (pse:count) — without it every scanned issue reads "0 pages".
             let page_count = count_pages_blocking(file).await;
 
-            // Only an ANNUAL file can restore an attachment link, and only to a volume series.json
-            // actually lists — a stale embedded id from a detached volume simply finds no match.
-            let attached_volume_id = if is_annual && !attachment_by_volume.is_empty() {
+            // Only an ANNUAL file can restore an attachment link — or a SPECIAL's (#255), whose file
+            // carries the Special's own volume id (metadata_writer embeds the attached volume's) —
+            // and only to a volume series.json actually lists: a stale embedded id from a detached
+            // volume simply finds no match. A trade's file is still bound by the lane's own sync.
+            let attached_volume_id = if attachment_by_volume.is_empty() {
+                None
+            } else {
                 file_derived.as_ref().and_then(|d| {
                     let key = if let Some(m) = d.metron_id {
                         ("METRON".to_string(), m.to_string())
                     } else {
                         ("COMICVINE".to_string(), d.cv_id?.to_string())
                     };
-                    attachment_by_volume.get(&key).cloned()
+                    attachment_by_volume.get(&key)
                 })
-            } else {
-                None
+                .filter(|(_, kind)| is_annual || kind == "SPECIAL")
+                .map(|(id, _)| id.clone())
             };
 
             issue_rows.push(NewIssueRow {
@@ -2349,12 +2353,16 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     // #203: tuples carry isAnnual — the annual domain is part of numbering identity, so "Annual #1"
     // neither repoints onto nor conflicts with plain "#1". Read via CAST(... AS INTEGER) per the
     // Any-driver bool rule.
-    let mut series_issue_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
+    // #255: and the row's attachment, so a Special's file dedupes within its lane and a run file never
+    // repoints a Special's row.
+    // (row id, number, isAnnual, attachedVolumeId)
+    type KnownIssue = (String, String, bool, Option<String>);
+    let mut series_issue_nums: std::collections::HashMap<String, Vec<KnownIssue>> = std::collections::HashMap::new();
     let mut series_meta_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
     if !involved_series.is_empty() {
         // Portable IN (...) list — see the ghost-purge note above on `= ANY($1)`.
         let ph = Db::in_placeholders(1, involved_series.len());
-        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId", "attachedVolumeId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
         let mut q = sqlx::query(&sql);
         for sid in &involved_series {
             q = q.bind(sid);
@@ -2364,7 +2372,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
             let sid = r.get::<String, _>("seriesId");
             let row_annual = r.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
             series_issue_nums.entry(sid.clone()).or_default()
-                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual));
+                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual, r.try_get::<Option<String>, _>("attachedVolumeId").unwrap_or(None)));
             // (metadataId, number, isAnnual) per series for the embedded-id conflict check below (#194 (c2)).
             if let Ok(Some(mid)) = r.try_get::<Option<String>, _>("metadataId") {
                 if !mid.is_empty() && !mid.starts_with("unmatched") {
@@ -2381,26 +2389,45 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     // #203 Phase 1: attachments already on these series, keyed by (series, source, provider volume
     // id). A new annual FILE landing in an attached series binds itself here — same zero-API rule as
     // the fresh-folder restore: the file's own ComicInfo names its volume.
-    let attachments_by_series: std::collections::HashMap<(String, String, String), String> = {
+    // #255: each attachment's kind rides along, and each series' SPECIAL lanes are kept by name too
+    // (with the series name) for the lane name rule — a Special's file carries no Annual token, so
+    // its name, or its embedded volume id, is what tells it apart from the run's same number.
+    let mut special_refs: std::collections::HashMap<String, Vec<crate::attached_volumes::AttachmentNameRef>> = std::collections::HashMap::new();
+    let mut series_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let attachments_by_series: std::collections::HashMap<(String, String, String), (String, String)> = {
         let series_ids: Vec<String> = parsed_files.iter().map(|(sid, _, _)| sid.clone())
             .collect::<std::collections::HashSet<_>>().into_iter().collect();
         let mut map = std::collections::HashMap::new();
         if !series_ids.is_empty() {
             let sql = format!(
-                r#"SELECT id, "seriesId", "metadataSource", "volumeId" FROM "AttachedVolume" WHERE "seriesId" IN ({})"#,
+                r#"SELECT id, "seriesId", "metadataSource", "volumeId", kind, name FROM "AttachedVolume" WHERE "seriesId" IN ({})"#,
                 Db::in_placeholders(1, series_ids.len())
             );
             let mut q = sqlx::query(&sql);
             for sid in &series_ids { q = q.bind(sid); }
             for r in q.fetch_all(&db.pool).await.unwrap_or_default() {
+                let (id, sid, kind) = (r.get::<String, _>("id"), r.get::<String, _>("seriesId"), r.try_get::<String, _>("kind").unwrap_or_else(|_| "ANNUAL".to_string()));
+                if kind == "SPECIAL" {
+                    let name = r.try_get::<Option<String>, _>("name").unwrap_or(None).unwrap_or_default();
+                    special_refs.entry(sid.clone()).or_default().push(crate::attached_volumes::AttachmentNameRef { id: id.clone(), name, kind: kind.clone() });
+                }
                 map.insert(
                     (
-                        r.get::<String, _>("seriesId"),
+                        sid,
                         r.try_get::<String, _>("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string()),
                         r.get::<String, _>("volumeId"),
                     ),
-                    r.get::<String, _>("id"),
+                    (id, kind),
                 );
+            }
+            if !special_refs.is_empty() {
+                let names: Vec<&String> = special_refs.keys().collect();
+                let sql = format!(r#"SELECT id, name FROM "Series" WHERE id IN ({})"#, Db::in_placeholders(1, names.len()));
+                let mut q = sqlx::query(&sql);
+                for sid in names { q = q.bind(sid); }
+                for r in q.fetch_all(&db.pool).await.unwrap_or_default() {
+                    series_names.insert(r.get::<String, _>("id"), r.get::<String, _>("name"));
+                }
             }
         }
         map
@@ -2413,12 +2440,47 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         // series); the file's own embedded ComicInfo series tag is the next-best title hint.
         let series_hint = info.as_ref().and_then(|i| i.series.as_deref().map(|s| s.to_string()));
         let (issue_num, is_annual) = issue_descriptor_for_file(info.as_ref(), &file_name, series_hint.as_deref());
+        let embedded_volume = info.as_ref().map(derive_meta).and_then(|d| match (d.metron_id, d.cv_id) {
+            (Some(m), _) => Some(("METRON".to_string(), m.to_string())),
+            (None, Some(c)) => Some(("COMICVINE".to_string(), c.to_string())),
+            _ => None,
+        });
+
+        // #255: a Special's file — by the volume id its ComicInfo carries, else by its NAME (the lane
+        // name rule): "Absolute Batman Ark-M #001 (2026)" is that Special's #1, never the run's #1.
+        // Its number is the file's own when the ComicInfo gives one, else the name rule's. Only the
+        // embedded id BINDS a new row (as for annuals: the file's own ids come with it); a file known
+        // by its name alone fills the lane's own row for its number, else lands unbound for the
+        // lane's name claim — a bound row with no provider id would sit beside the skeleton the
+        // lane's sync then creates for it.
+        let special_lane: Option<(String, String, bool)> = if is_annual {
+            None
+        } else {
+            embedded_volume.as_ref()
+                .and_then(|(source, vol)| attachments_by_series.get(&(series_id.clone(), source.clone(), vol.clone())))
+                .filter(|(_, kind)| kind == "SPECIAL")
+                .map(|(id, _)| (id.clone(), issue_num.clone(), true))
+                .or_else(|| {
+                    let refs = special_refs.get(&series_id)?;
+                    let m = crate::attached_volumes::attachment_for_filename(&file_name, series_names.get(&series_id)?, refs)?;
+                    let has_number = info.as_ref().and_then(|i| i.number.as_deref()).is_some_and(|n| !n.trim().is_empty());
+                    Some((m.id, if has_number { issue_num.clone() } else { m.number }, false))
+                })
+        };
+        let is_special_row = |att: &Option<String>| att.as_ref().is_some_and(|a| special_refs.get(&series_id).is_some_and(|refs| refs.iter().any(|r| &r.id == a)));
 
         // Dedupe against the series' existing issues by number AND annual domain (#203) — a renamed
         // "Batman Annual 001" repoints its annual row, never the plain #1. On a match the file was
         // renamed/moved — repoint the existing row's filePath rather than inserting a second row.
-        let dup_id: Option<String> = series_issue_nums.get(&series_id)
-            .and_then(|v| v.iter().find(|(_, n, ann)| *ann == is_annual && crate::metadata::is_same_issue(n, &issue_num)).map(|(id, _, _)| id.clone()));
+        // A Special's file dedupes within its own lane; any other file never repoints a Special's row.
+        let dup_id: Option<String> = series_issue_nums.get(&series_id).and_then(|v| match &special_lane {
+            Some((lane, lane_num, _)) => v.iter()
+                .find(|(_, n, _, att)| att.as_deref() == Some(lane.as_str()) && crate::metadata::is_same_issue(n, lane_num))
+                .map(|(id, _, _, _)| id.clone()),
+            None => v.iter()
+                .find(|(_, n, ann, att)| *ann == is_annual && crate::metadata::is_same_issue(n, &issue_num) && !is_special_row(att))
+                .map(|(id, _, _, _)| id.clone()),
+        });
         if let Some(eid) = dup_id {
             // Repointed file: refresh the page count too (a 0-count row may finally have a readable zip).
             let page_count = count_pages_blocking(&file).await;
@@ -2458,14 +2520,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 } else {
                     ("COMICVINE".to_string(), d.cv_id?.to_string())
                 };
-                attachments_by_series.get(&(series_id.clone(), source, vol)).cloned()
+                attachments_by_series.get(&(series_id.clone(), source, vol)).map(|(id, _)| id.clone())
             })
         } else {
-            None
+            special_lane.as_ref().filter(|(_, _, by_id)| *by_id).map(|(lane, _, _)| lane.clone())
         };
+        let issue_num = special_lane.as_ref().map(|(_, n, _)| n.clone()).unwrap_or(issue_num);
         // Track the number so another file with the same number later in this batch dedupes
         // against it instead of inserting a second row.
-        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone(), is_annual));
+        series_issue_nums.entry(series_id.clone()).or_default().push((issue_id.clone(), issue_num.clone(), is_annual, attached_volume_id.clone()));
         pending_writes.push(PendingIssueWrite::Insert(Box::new(NewIssueRow {
             issue_id,
             series_id,
@@ -4275,6 +4338,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Minimal Prisma-shaped schema — just the columns the scan/embed/export paths touch. Shared by
+    /// the round trip and the #255 scan tests.
+    async fn scan_schema(db: &crate::db::Db) {
+    for ddl in [
+        r#"CREATE TABLE "Library" (id TEXT PRIMARY KEY, name TEXT, path TEXT, "isManga" INTEGER DEFAULT 0)"#,
+        r#"CREATE TABLE "Request" ("volumeId" TEXT, status TEXT)"#,
+        r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
+        r#"CREATE TABLE "ReadProgress" ("issueId" TEXT)"#,
+        r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "folderPath" TEXT, name TEXT, year INTEGER, publisher TEXT,
+            "metadataId" TEXT, "metadataSource" TEXT, "matchState" TEXT, "cvId" INTEGER, "metronId" INTEGER,
+            "isManga" INTEGER DEFAULT 0, "seriesGroup" TEXT, "libraryId" TEXT, description TEXT, status TEXT,
+            "bookType" TEXT, genres TEXT, universe TEXT, monitored INTEGER DEFAULT 0, "coverUrl" TEXT,
+            "remoteCoverUrl" TEXT, "hasCustomCover" INTEGER DEFAULT 0, "seriesJsonWritten" INTEGER DEFAULT 0,
+            writers TEXT, artists TEXT, "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT,
+            teams TEXT, locations TEXT, "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,
+            imprint TEXT, tags TEXT, format TEXT, "languageISO" TEXT, "ageRating" TEXT,
+            "communityRating" REAL, "blackAndWhite" INTEGER, gtin TEXT, notes TEXT, "scanInformation" TEXT,
+            review TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+            "alternateCount" INTEGER, "storyArcNumber" TEXT,
+            "createdAt" TEXT, "updatedAt" TEXT, UNIQUE("metadataSource", "metadataId"))"#,
+        r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
+            "matchState" TEXT, number TEXT, "isAnnual" INTEGER DEFAULT 0, status TEXT, "filePath" TEXT, "pageCount" INTEGER DEFAULT 0,
+            name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
+            "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
+            "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,
+            tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+            "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
+            "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
+            universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
+            "coverUrl" TEXT, "attachedVolumeId" TEXT, "fileAddedAt" INTEGER, "createdAt" TEXT, "updatedAt" TEXT)"#,
+        // #203 Phase 1: the round-trip's embed + series.json legs both reach for it.
+        r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
+            "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
+            "retained" BOOLEAN NOT NULL DEFAULT false, "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+    ] {
+        sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
+    }
+    }
+
     // ------------------------------------------------------------------
     // Discussion #182 Phase 3 acceptance: the full local-first round trip.
     //
@@ -4312,41 +4414,7 @@ mod tests {
         let db_url = format!("file:{}", db_file.to_string_lossy().replace('\\', "/"));
         let db = crate::db::Db::connect(&db_url, 2).await.expect("connect file-backed sqlite");
 
-        // Minimal Prisma-shaped schema — just the columns the scan/embed/export paths touch.
-        for ddl in [
-            r#"CREATE TABLE "Library" (id TEXT PRIMARY KEY, name TEXT, path TEXT, "isManga" INTEGER DEFAULT 0)"#,
-            r#"CREATE TABLE "Request" ("volumeId" TEXT, status TEXT)"#,
-            r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
-            r#"CREATE TABLE "ReadProgress" ("issueId" TEXT)"#,
-            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "folderPath" TEXT, name TEXT, year INTEGER, publisher TEXT,
-                "metadataId" TEXT, "metadataSource" TEXT, "matchState" TEXT, "cvId" INTEGER, "metronId" INTEGER,
-                "isManga" INTEGER DEFAULT 0, "seriesGroup" TEXT, "libraryId" TEXT, description TEXT, status TEXT,
-                "bookType" TEXT, genres TEXT, universe TEXT, monitored INTEGER DEFAULT 0, "coverUrl" TEXT,
-                "remoteCoverUrl" TEXT, "hasCustomCover" INTEGER DEFAULT 0, "seriesJsonWritten" INTEGER DEFAULT 0,
-                writers TEXT, artists TEXT, "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT,
-                teams TEXT, locations TEXT, "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,
-                imprint TEXT, tags TEXT, format TEXT, "languageISO" TEXT, "ageRating" TEXT,
-                "communityRating" REAL, "blackAndWhite" INTEGER, gtin TEXT, notes TEXT, "scanInformation" TEXT,
-                review TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
-                "alternateCount" INTEGER, "storyArcNumber" TEXT,
-                "createdAt" TEXT, "updatedAt" TEXT, UNIQUE("metadataSource", "metadataId"))"#,
-            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
-                "matchState" TEXT, number TEXT, "isAnnual" INTEGER DEFAULT 0, status TEXT, "filePath" TEXT, "pageCount" INTEGER DEFAULT 0,
-                name TEXT, description TEXT, "releaseDate" TEXT, genres TEXT, writers TEXT, artists TEXT,
-                "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT, teams TEXT, locations TEXT,
-                "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,
-                tags TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
-                "alternateCount" INTEGER, "storyArcNumber" TEXT, gtin TEXT, notes TEXT,
-                "scanInformation" TEXT, review TEXT, "communityRating" REAL, "blackAndWhite" INTEGER,
-                universe TEXT, "hasCustomMetadata" INTEGER DEFAULT 0, "hasCustomCover" INTEGER DEFAULT 0,
-                "coverUrl" TEXT, "attachedVolumeId" TEXT, "fileAddedAt" INTEGER, "createdAt" TEXT, "updatedAt" TEXT)"#,
-            // #203 Phase 1: the round-trip's embed + series.json legs both reach for it.
-            r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT,
-                "volumeId" TEXT, kind TEXT, name TEXT, "startYear" INTEGER, "issueCount" INTEGER DEFAULT 0,
-                "retained" BOOLEAN NOT NULL DEFAULT false, "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
-        ] {
-            sqlx::query(ddl).execute(&db.pool).await.expect("create schema");
-        }
+        scan_schema(&db).await;
 
         // Seed the state a provider sync would have left behind. Publisher "DC Comics" is in the
         // default western list, so manga detection short-circuits before its AniList network tier.
@@ -4562,6 +4630,127 @@ mod tests {
         assert_eq!(restored, vec![("7001".to_string(), 1), ("7002".to_string(), 0)]);
 
         drop(db);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+    // ==== #255: a Special's file in its parent's folder ====
+
+    /// Absolute Batman (2024) with Absolute Batman: Ark-M attached as a SPECIAL, the run's #1 on disk
+    /// and indexed. Returns the db, the library root and the series folder.
+    async fn special_fixture(tag: &str) -> (crate::db::Db, std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("omnibus_sp255_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("Absolute Batman (2024)");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_file = base.join("sp.db");
+        File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        scan_schema(&db).await;
+        sqlx::query(r#"INSERT INTO "Library" (id, name, path) VALUES ('lib', 'Comics', $1)"#)
+            .bind(base.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        (db, base, dir)
+    }
+
+    #[tokio::test]
+    async fn a_specials_file_landing_in_its_parent_joins_its_lane_and_never_takes_the_runs_number() {
+        let (db, base, dir) = special_fixture("existing").await;
+        let d = dir.to_string_lossy().replace('\\', "/");
+        let run = dir.join("Absolute Batman #001 (2024).cbz");
+        write_test_cbz(&run, b"RUN", Some("<ComicInfo><Series>Absolute Batman</Series><Number>1</Number><Publisher>DC Comics</Publisher><ComicVineVolumeId>160294</ComicVineVolumeId></ComicInfo>"));
+        sqlx::query(r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "libraryId") VALUES ('parent', $1, 'Absolute Batman', 2024, 'DC Comics', '160294', 'COMICVINE', 'MATCHED', 'lib')"#)
+            .bind(&d).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name) VALUES ('att_sp', 'parent', 'COMICVINE', '169970', 'SPECIAL', 'Absolute Batman: Ark-M')"#)
+            .execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", number, status, "filePath") VALUES ('p1', 'parent', '9100001', 'COMICVINE', '1', 'DOWNLOADED', $1)"#)
+            .bind(run.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        // The lane's skeleton for its #1, and two of the Special's files: one known by its name alone,
+        // one by the volume id its ComicInfo carries.
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", number, status, "attachedVolumeId") VALUES ('sp1', 'parent', '1151955', 'COMICVINE', '1', 'WANTED', 'att_sp')"#)
+            .execute(&db.pool).await.unwrap();
+        write_test_cbz(&dir.join("Absolute Batman Ark-M #001 (2026).cbz"), b"SPECIAL", None);
+        write_test_cbz(&dir.join("Ark-M Variant 002.cbz"), b"SPECIAL2", Some("<ComicInfo><Series>Absolute Batman: Ark-M</Series><Number>2</Number><ComicVineVolumeId>169970</ComicVineVolumeId></ComicInfo>"));
+        // Known by its name alone, with no lane row for its number yet: unbound, for the lane's name claim.
+        write_test_cbz(&dir.join("Absolute Batman Ark-M #003 (2026).cbz"), b"SPECIAL3", None);
+
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("scan");
+
+        type Row = (String, String, Option<String>, Option<String>, i64); // id, number, lane, file, isAnnual
+        let rows: Vec<Row> = sqlx::query(
+            r#"SELECT id, number, "attachedVolumeId", "filePath", CAST("isAnnual" AS INTEGER) AS annual FROM "Issue" ORDER BY "attachedVolumeId", number"#,
+        )
+        .fetch_all(&db.pool).await.unwrap().iter()
+        .map(|r| (r.get("id"), r.get("number"), r.get("attachedVolumeId"), r.get("filePath"), r.get("annual")))
+        .collect();
+        let path_of = |id: &str| rows.iter().find(|r| r.0 == id).and_then(|r| r.3.clone()).unwrap_or_default();
+        // The run's #1 keeps its own file.
+        assert!(path_of("p1").ends_with("Absolute Batman #001 (2024).cbz"), "{rows:?}");
+        // The Special's #1 file fills the lane's own row; its #2 joins the lane as a new row.
+        assert!(path_of("sp1").ends_with("Absolute Batman Ark-M #001 (2026).cbz"), "{rows:?}");
+        let lane: Vec<_> = rows.iter().filter(|r| r.2.as_deref() == Some("att_sp")).map(|r| (r.1.as_str(), r.4)).collect();
+        assert_eq!(lane, vec![("1", 0), ("2", 0)], "{rows:?}");
+        let unbound: Vec<_> = rows.iter().filter(|r| r.2.is_none() && r.0 != "p1").map(|r| (r.1.as_str(), r.3.clone().unwrap_or_default())).collect();
+        assert_eq!(unbound.len(), 1, "{rows:?}");
+        assert_eq!(unbound[0].0, "3", "parsed under the Special's own name: {rows:?}");
+        assert!(unbound[0].1.ends_with("Absolute Batman Ark-M #003 (2026).cbz"));
+        assert_eq!(rows.len(), 4, "no twin rows: {rows:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_restores_a_specials_file_onto_its_lane_by_its_embedded_volume() {
+        let (db, base, dir) = special_fixture("rebuild").await;
+        std::fs::write(dir.join("series.json"), r#"{
+            "version": "1.0.2",
+            "metadata": { "name": "Absolute Batman", "comicid": 160294, "year": 2024, "publisher": "DC Comics" },
+            "omnibus": { "attached_volumes": [
+                { "source": "COMICVINE", "volume_id": "169970", "kind": "SPECIAL", "name": "Absolute Batman: Ark-M", "start_year": 2026 }
+            ] }
+        }"#).unwrap();
+        write_test_cbz(&dir.join("Absolute Batman #001 (2024).cbz"), b"RUN", Some("<ComicInfo><Series>Absolute Batman</Series><Number>1</Number><Publisher>DC Comics</Publisher><ComicVineVolumeId>160294</ComicVineVolumeId></ComicInfo>"));
+        write_test_cbz(&dir.join("Absolute Batman Ark-M #001 (2026).cbz"), b"SPECIAL", Some("<ComicInfo><Series>Absolute Batman</Series><Number>1</Number><Publisher>DC Comics</Publisher><ComicVineVolumeId>169970</ComicVineVolumeId></ComicInfo>"));
+
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("scan");
+
+        let rows: Vec<(String, Option<String>, i64)> = sqlx::query(
+            r#"SELECT i."filePath", av.kind, CAST(i."isAnnual" AS INTEGER) AS annual FROM "Issue" i LEFT JOIN "AttachedVolume" av ON av.id = i."attachedVolumeId" ORDER BY i."filePath""#,
+        )
+        .fetch_all(&db.pool).await.unwrap().iter()
+        .map(|r| (r.get::<Option<String>, _>("filePath").unwrap_or_default(), r.get("kind"), r.get("annual")))
+        .collect();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].0.ends_with("Absolute Batman #001 (2024).cbz") && rows[0].1.is_none(), "the run's #1 stays the run's: {rows:?}");
+        assert!(rows[1].0.ends_with("Absolute Batman Ark-M #001 (2026).cbz"), "{rows:?}");
+        assert_eq!((rows[1].1.as_deref(), rows[1].2), (Some("SPECIAL"), 0), "the Special's file is back on its lane, not an annual: {rows:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+    #[tokio::test]
+    async fn a_run_file_never_fills_a_specials_row_and_a_bare_one_shot_is_its_own_number() {
+        let (db, base, dir) = special_fixture("guards").await;
+        let d = dir.to_string_lossy().replace('\\', "/");
+        sqlx::query(r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "libraryId") VALUES ('parent', $1, 'Batman', 2016, 'DC Comics', '91273', 'COMICVINE', 'MATCHED', 'lib')"#)
+            .bind(&d).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name) VALUES ('att_arkm', 'parent', 'COMICVINE', '169970', 'SPECIAL', 'Batman: Ark-M'), ('att_y100', 'parent', 'COMICVINE', '18166', 'SPECIAL', 'Batman: Year 100')"#)
+            .execute(&db.pool).await.unwrap();
+        // The Special's skeleton for its #1 comes FIRST, then the run's own #1 skeleton.
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", number, status, "attachedVolumeId") VALUES ('sp1', 'parent', '1151955', 'COMICVINE', '1', 'WANTED', 'att_arkm')"#)
+            .execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", number, status) VALUES ('p1', 'parent', '9100001', 'COMICVINE', '1', 'WANTED')"#)
+            .execute(&db.pool).await.unwrap();
+        write_test_cbz(&dir.join("Batman #001 (2016).cbz"), b"RUN", None);
+        // A one-shot named only after its volume: the name rule's #1, though "100" is the only number in it.
+        write_test_cbz(&dir.join("Batman Year 100 (2006).cbz"), b"Y100", None);
+
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("scan");
+
+        type Row = (String, String, Option<String>, Option<String>); // id, number, lane, file
+        let rows: Vec<Row> = sqlx::query(r#"SELECT id, number, "attachedVolumeId", "filePath" FROM "Issue" ORDER BY id"#)
+            .fetch_all(&db.pool).await.unwrap().iter()
+            .map(|r| (r.get("id"), r.get("number"), r.get("attachedVolumeId"), r.get("filePath")))
+            .collect();
+        let file_of = |id: &str| rows.iter().find(|r| r.0 == id).and_then(|r| r.3.clone()).unwrap_or_default();
+        assert!(file_of("p1").ends_with("Batman #001 (2016).cbz"), "the run's #1 fills the run's row: {rows:?}");
+        assert_eq!(file_of("sp1"), "", "never the Special's row: {rows:?}");
+        let one_shot = rows.iter().find(|r| r.3.as_deref().is_some_and(|f| f.ends_with("Batman Year 100 (2006).cbz"))).expect("indexed");
+        assert_eq!((one_shot.1.as_str(), one_shot.2.as_deref()), ("1", None), "its own #1, unbound for the lane's claim: {rows:?}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

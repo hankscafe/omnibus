@@ -29,7 +29,7 @@ describe('naming parity with the engine', () => {
     // Which template one issue gets — the engine's renamer.rs file_pattern_for_issue reads the same rows.
     it.each(parity.patternChoice as any[])('pattern: $label', (c) => {
         expect(filePatternForIssue({
-            isAnnual: c.annual, isCollected: c.collected, isRetainedCollected: c.retainedCollected, isManga: c.manga,
+            isAnnual: c.annual, isCollected: c.collected, isSpecial: !!c.special, isRetainedCollected: c.retainedCollected, isManga: c.manga,
             filePattern: c.filePattern, mangaFilePattern: c.mangaFilePattern, collectedFilePattern: c.collectedFilePattern,
         })).toBe(c.expected);
     });

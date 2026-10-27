@@ -52,3 +52,24 @@ describe('GET /api/library/issues — covered issues', () => {
         expect(mocks.issueFindMany).toHaveBeenCalledTimes(1);
     });
 });
+
+// #255: a missing Special is listed with its domain, so a request from this view files it under the
+// Special's own name (request-name.ts), as the series page does — never as the run's "#1".
+describe('GET /api/library/issues — a Special', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.seriesFindMany.mockResolvedValue([]);
+    });
+
+    it("marks a Special's row with its own volume's name", async () => {
+        mocks.issueFindMany.mockResolvedValueOnce([
+            wanted('sp1', '1', { attachedVolumeId: 'av_sp', attachedVolume: { kind: 'SPECIAL', name: 'Batman: Ark-M' } }),
+            wanted('i1', '1'),
+        ]).mockResolvedValueOnce([]); // no owned covering books
+        const body = await (await GET(new Request('http://localhost/api/library/issues?status=WANTED&limit=10'))).json();
+        expect(body.issues.map((i: any) => [i.id, i.isSpecial, i.specialName, i.isCollected])).toEqual([
+            ['sp1', true, 'Batman: Ark-M', false],
+            ['i1', false, null, false],
+        ]);
+    });
+});

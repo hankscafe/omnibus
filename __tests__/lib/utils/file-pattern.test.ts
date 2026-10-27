@@ -3,7 +3,7 @@
 // with both: a preview that promises a name the renamer doesn't produce is a bug that already
 // shipped once (annuals, caught in the beta.007 walk).
 import { describe, it, expect } from 'vitest';
-import { filePatternForIssue, namingAttachment, seriesTokenForIssue, ANNUAL_FILE_PATTERN, COLLECTED_FILE_PATTERN } from '@/lib/utils/file-pattern';
+import { filePatternForIssue, namingAttachment, seriesTokenForIssue, ANNUAL_FILE_PATTERN, COLLECTED_FILE_PATTERN, SPECIAL_FILE_PATTERN } from '@/lib/utils/file-pattern';
 
 const comic = '{Series} #{Issue}';
 const manga = '{Series} Vol. {Issue}';
@@ -90,5 +90,31 @@ describe('a kept-as-its-own collection', () => {
         // A row that strayed into the child still carrying the parent's attachment id.
         expect(namingAttachment({ seriesId: 'child', attachedVolume: own })).toBeNull();
         expect(namingAttachment({ seriesId: 'parent', attachedVolume: null })).toBeNull();
+    });
+});
+
+// #255: a Special — a one-shot attached to a series, neither annual nor trade. Fixed pattern, named
+// after the Special's OWN volume ("Absolute Batman Ark-M #001 (2026)"), which is also the name the
+// lane's name rule reads back after a rescan. Twins: renamer.rs file_pattern_for_issue /
+// series_token_for_issue.
+describe('a Special', () => {
+    it('takes the fixed Special pattern over the comic, manga and collected templates', () => {
+        expect(SPECIAL_FILE_PATTERN).toBe('{Series} #{Issue} ({IssueYear})');
+        expect(filePatternForIssue({ isSpecial: true, filePattern: '{Series} - {Issue}' })).toBe(SPECIAL_FILE_PATTERN);
+        expect(filePatternForIssue({ isSpecial: true, isManga: true, filePattern: comic, mangaFilePattern: manga })).toBe(SPECIAL_FILE_PATTERN);
+        expect(filePatternForIssue({ isSpecial: true, filePattern: comic, collectedFilePattern: '{Series} v{Issue}' })).toBe(SPECIAL_FILE_PATTERN);
+        // A Special in a series that a collection keeps as its own is still a Special.
+        expect(filePatternForIssue({ isSpecial: true, isRetainedCollected: true, filePattern: comic })).toBe(SPECIAL_FILE_PATTERN);
+    });
+
+    it("names its file after the Special's own volume, whatever its source", () => {
+        expect(seriesTokenForIssue({
+            isSpecial: true, attachmentSource: 'COMICVINE', attachmentName: 'Absolute Batman: Ark-M', seriesName: 'Absolute Batman',
+        })).toBe('Absolute Batman: Ark-M');
+        expect(seriesTokenForIssue({
+            isSpecial: true, attachmentSource: 'METRON', attachmentName: ' Absolute Batman: Ark-M ', seriesName: 'Absolute Batman',
+        })).toBe('Absolute Batman: Ark-M');
+        // No name cached yet: the series name, never an empty {Series}.
+        expect(seriesTokenForIssue({ isSpecial: true, attachmentSource: 'COMICVINE', attachmentName: null, seriesName: 'Absolute Batman' })).toBe('Absolute Batman');
     });
 });

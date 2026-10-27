@@ -181,3 +181,29 @@ describe('Duplicate Resolver attached lanes (#203)', () => {
         expect(within(card97).getByRole('button', { name: /Delete 1 in this group/i })).toBeEnabled();
     });
 });
+
+// #255: a Special's duplicate files are named as the Special's, never as the run's "Issue #1".
+describe('Duplicate Resolver: a Special', () => {
+    beforeEach(() => {
+        fetchMock.mockImplementation(async (url: string, init?: any) => {
+            if (url === '/api/admin/diagnostics' && JSON.parse(init?.body || '{}').action === 'scan-duplicates') {
+                const group = (n: string) => ({
+                    seriesId: 's-ab', seriesName: 'Absolute Batman', seriesMetadataId: '160294', seriesMetadataSource: 'COMICVINE',
+                    issueNumber: n, isAnnual: false, attachedVolumeId: 'av_sp', laneName: 'Absolute Batman: Ark-M', laneKind: 'SPECIAL',
+                    suspectedMispair: false,
+                    files: [
+                        { id: `sp${n}-a`, path: `/comics/DC/AB/Absolute Batman Ark-M #00${n} (2026).cbz`, name: `Absolute Batman Ark-M #00${n} (2026).cbz`, size: 10, parsedNumber: n },
+                        { id: `sp${n}-b`, path: `/comics/DC/AB/Absolute Batman Ark-M 0${n}.cbz`, name: `Absolute Batman Ark-M 0${n}.cbz`, size: 20, parsedNumber: n },
+                    ],
+                });
+                return { ok: true, json: async () => ({ duplicates: [group('1'), group('2')] }) };
+            }
+            return { ok: true, json: async () => ({}) };
+        });
+    });
+
+    it('labels the group as the Special', async () => {
+        await openDuplicatesTab();
+        expect(screen.getByText('Absolute Batman: Ark-M · Special #1')).toBeInTheDocument();
+    });
+});

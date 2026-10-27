@@ -148,6 +148,9 @@ export async function GET(request: Request) {
                 isAnnual: !!i.isAnnual,
                 isCollected: i.attachedVolume?.kind === 'COLLECTED',
                 collectionName: i.attachedVolume?.kind === 'COLLECTED' ? (i.attachedVolume?.name ?? null) : null,
+                // #255: a Special is requested under its own volume's name, never as the run's "#N".
+                isSpecial: i.attachedVolume?.kind === 'SPECIAL',
+                specialName: i.attachedVolume?.kind === 'SPECIAL' ? (i.attachedVolume?.name ?? null) : null,
                 seriesMetadataId,
                 metadataSource: i.series?.metadataSource || 'COMICVINE',
                 requestable,

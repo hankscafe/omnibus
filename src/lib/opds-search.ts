@@ -8,7 +8,7 @@
 import { prisma } from '@/lib/db';
 import type { Prisma } from '@prisma/client';
 import { ciContains } from '@/lib/utils/db-search';
-import { orderBooks, type KomgaIssueRow } from '@/lib/komga/dto';
+import { orderBooks, type KomgaIssueRow, type LaneKindSource } from '@/lib/komga/dto';
 import { nestedSeriesAccessWhere, seriesAccessWhere, type AccessibleLibraries } from '@/lib/library-access';
 
 /** Series are listed first, then issues; each is capped at the feeds' page size. */
@@ -36,7 +36,8 @@ export async function searchIssueRows(libs: AccessibleLibraries, terms: string) 
                 { name: ciContains(terms) },
             ],
         },
-        include: { series: { select: { id: true, name: true, publisher: true, writers: true, artists: true } } },
+        // #255: the lane kind and name, for a Special's title and its place in the reading order.
+        include: { series: { select: { id: true, name: true, publisher: true, writers: true, artists: true } }, attachedVolume: { select: { kind: true, name: true } } },
         // Series first, then this query's own `number` (a string column: it decides which rows come
         // back, and `issuesInReadingOrder` puts them in reading order once they are here).
         orderBy: [{ seriesId: 'asc' }, { number: 'asc' }, { id: 'asc' }],
@@ -50,7 +51,7 @@ export async function searchIssueRows(libs: AccessibleLibraries, terms: string) 
  * sorts. Groups keep the query's series order, and the query's `id` tiebreak survives because
  * `Array.prototype.sort` is stable.
  */
-export function issuesInReadingOrder<T extends Pick<KomgaIssueRow, 'number' | 'isAnnual' | 'releaseDate'> & { seriesId: string }>(
+export function issuesInReadingOrder<T extends Pick<KomgaIssueRow, 'number' | 'isAnnual' | 'releaseDate'> & LaneKindSource & { seriesId: string }>(
     rows: readonly T[],
 ): T[] {
     const bySeries = new Map<string, T[]>();

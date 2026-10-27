@@ -13,6 +13,8 @@
 //     what flips the downloader's annual-aware guards for that request.
 //   - #203 COLLECTED: a trade is searched for by its OWN title ("X-Men: From the Ashes Vol. 1"),
 //     never as "{Series} #1" — that would hunt for a single issue that isn't the book.
+//   - #255: a Special is searched for under its OWN volume's name ("Absolute Batman: Ark-M #1"),
+//     never as the run's "{Series} #1"; its story title rides along like an issue's.
 
 export interface RequestNameInput {
     seriesName: string;
@@ -24,6 +26,9 @@ export interface RequestNameInput {
     isCollected?: boolean;
     /** For a collected edition: the attached volume's name, the fallback when the row has no title. */
     collectionName?: string | null;
+    isSpecial?: boolean;
+    /** For a Special: its attached volume's name, which stands in for the series name. */
+    specialName?: string | null;
 }
 
 export function requestNameFor(i: RequestNameInput): { composite: string; reqNum: string } {
@@ -34,10 +39,12 @@ export function requestNameFor(i: RequestNameInput): { composite: string; reqNum
         return { composite: own || i.collectionName || `${i.seriesName} Vol. ${reqNum}`, reqNum };
     }
 
-    let composite = `${i.seriesName}${i.isAnnual ? ' Annual' : ''} #${reqNum}`;
+    const special = i.isSpecial ? ((i.specialName || '').trim() || `${i.seriesName} Special`) : null;
+    const base = special ?? i.seriesName;
+    let composite = special ? `${special} #${reqNum}` : `${i.seriesName}${i.isAnnual ? ' Annual' : ''} #${reqNum}`;
     // A real story title rides along after the number; a title that already carries the number
     // IS the composite. A title equal to the series name adds nothing and is dropped.
-    if (i.name && i.name !== i.seriesName && !i.name.includes(`#${reqNum}`)) {
+    if (i.name && i.name !== i.seriesName && i.name !== base && !i.name.includes(`#${reqNum}`)) {
         composite += `: ${i.name}`;
     } else if (i.name && i.name.includes(`#${reqNum}`)) {
         composite = i.name;

@@ -15,9 +15,16 @@ export const ANNUAL_FILE_PATTERN = "{Series} Annual #{Issue} ({IssueYear})";
  *  grain of half the libraries using it. */
 export const COLLECTED_FILE_PATTERN = "{Series} Vol. {Issue} ({IssueYear})";
 
+/** #255: a Special — a one-shot attached to a series, neither an annual nor a trade. Fixed, like the
+ *  annual pattern, and named after the Special's OWN volume (seriesTokenForIssue): "Absolute Batman
+ *  Ark-M #001 (2026)" is the provider's title, and the name the lane's name rule reads back. */
+export const SPECIAL_FILE_PATTERN = "{Series} #{Issue} ({IssueYear})";
+
 export function filePatternForIssue(opts: {
     isAnnual?: boolean;
     isCollected?: boolean;
+    /** #255: the row belongs to a SPECIAL attachment of its own series. */
+    isSpecial?: boolean;
     /** #239: the row belongs to a series a COLLECTED attachment keeps as its own ("Leave it as its
      *  own series") and has no attachment of its own — its books are that collection's volumes. */
     isRetainedCollected?: boolean;
@@ -26,12 +33,13 @@ export function filePatternForIssue(opts: {
     mangaFilePattern?: string | null;
     collectedFilePattern?: string | null;
 }): string {
-    const { isAnnual, isCollected, isRetainedCollected, isManga, filePattern, mangaFilePattern, collectedFilePattern } = opts;
+    const { isAnnual, isCollected, isSpecial, isRetainedCollected, isManga, filePattern, mangaFilePattern, collectedFilePattern } = opts;
     const collected = () => (collectedFilePattern && collectedFilePattern.trim() ? collectedFilePattern : COLLECTED_FILE_PATTERN);
 
     // Collected first: a collected edition of a manga series is still a collected edition, and an
     // attachment's kind is an explicit human decision that outranks the series-level template.
     if (isCollected) return collected();
+    if (isSpecial) return SPECIAL_FILE_PATTERN;
     if (isAnnual) return ANNUAL_FILE_PATTERN;
     // After the annual check, so an annual inside a kept-as-its-own collection keeps its Mylar name.
     if (isRetainedCollected) return collected();
@@ -54,16 +62,19 @@ export function namingAttachment<A extends { seriesId: string }>(issue: { series
  *  NAMES alone (the name-anchored rule, attachment-name.ts): there is no issue id in a ComicInfo
  *  to fall back on. So its books are named after the EDITION ("Batman Compendium Vol. 001"), which
  *  the name rule still finds as the filename's prefix; naming them after the series ("Batman Vol.
- *  001") would orphan them at the next wipe, where they would parse as the run's #1. Every other
- *  row — a plain issue, an annual, a provider-backed trade — names after the series as before. */
+ *  001") would orphan them at the next wipe, where they would parse as the run's #1. A Special
+ *  (#255) is named after its own volume for the same reason, whatever its source. Every other row —
+ *  a plain issue, an annual, a provider-backed trade — names after the series as before. */
 export function seriesTokenForIssue(opts: {
     isCollected?: boolean;
+    isSpecial?: boolean;
     attachmentSource?: string | null;
     attachmentName?: string | null;
     seriesName: string;
 }): string {
-    const { isCollected, attachmentSource, attachmentName, seriesName } = opts;
+    const { isCollected, isSpecial, attachmentSource, attachmentName, seriesName } = opts;
     const edition = (attachmentName || '').trim();
     if (isCollected && attachmentSource === 'LOCAL' && edition) return edition;
+    if (isSpecial && edition) return edition;
     return seriesName;
 }

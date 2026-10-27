@@ -171,10 +171,11 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             
             // #203: annual rows are NEVER pairing candidates for the parent volume — their issues
             // belong to a different provider volume (linked through AttachedVolume in Phase 1), so a
-            // number match here would steal an annual's identity. Engine parity: the pair snapshots
-            // in metadata.rs carry the same WHERE "isAnnual" = false.
+            // number match here would steal an annual's identity. #255: nor is any attached lane's
+            // row — a Special's "#1" or a trade's "Vol. 1" is the lane's. Engine parity: metadata.rs
+            // run_rows.
             const allSeriesIssues = await prisma.issue.findMany({
-                where: { seriesId: series.id, isAnnual: false }
+                where: { seriesId: series.id, isAnnual: false, attachedVolumeId: null }
             });
 
             let latestDateMs = 0;
@@ -494,10 +495,10 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         
         const cvIssues = data.results || [];
 
-        // #203 safety rule (see the Metron branch above): annual rows are excluded from the parent
-        // volume's pairing snapshot outright.
+        // #203 safety rule (see the Metron branch above): annual rows — and (#255) every attached
+        // lane's row — are excluded from the parent volume's pairing snapshot outright.
         const allSeriesIssuesForCv = await prisma.issue.findMany({
-            where: { seriesId: series.id, isAnnual: false }
+            where: { seriesId: series.id, isAnnual: false, attachedVolumeId: null }
         });
 
         for (const cvIssue of cvIssues) {

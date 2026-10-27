@@ -50,7 +50,8 @@ vi.mock('@/lib/db', () => ({
         library: { findMany: mocks.findManyLibraries },
         series: { findFirst: mocks.findFirstSeries, upsert: mocks.upsertSeries, update: mocks.updateSeries },
         issue: { create: mocks.createIssue, findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
-        downloadClient: { findFirst: mocks.findFirstClient }
+        downloadClient: { findFirst: mocks.findFirstClient },
+        attachedVolume: { findMany: vi.fn().mockResolvedValue([]) },
     }
 }));
 
@@ -317,6 +318,63 @@ describe('File System: Importer Engine', () => {
             const data = (prisma.issue.update as any).mock.calls.at(-1)[0].data;
             expect(data.filePath).toContain('Batman #001.cbz');
             expect('fileAddedAt' in data).toBe(false);
+        });
+    });
+
+    // #255: a Special is requested against its parent's volume under its own name, so its download
+    // lands in the parent - where its "#1" must fill the Special's own row, never the run's #1.
+    describe('a Special', () => {
+        const parent = () => mocks.findFirstSeries.mockResolvedValueOnce({
+            id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false,
+        });
+        const issueRow = (over: Record<string, unknown>) => ({
+            id: 'iss_1', seriesId: 'series_1', number: '1', isAnnual: false, name: null, description: null, releaseDate: null,
+            writers: null, artists: null, characters: null, metadataId: '900001', metadataSource: 'COMICVINE', matchState: 'MATCHED',
+            attachedVolumeId: null, ...over,
+        });
+        const lanes = async (rows: unknown[]) => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.attachedVolume.findMany as any).mockResolvedValueOnce([{ id: 'av_sp', name: 'Batman: Ark-M', kind: 'SPECIAL' }]);
+            (prisma.issue.findMany as any).mockResolvedValue(rows);
+            return prisma;
+        };
+        afterEach(async () => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([]);
+        });
+
+        it("names the download after the Special and fills the Special's own row", async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_sp', status: 'DOWNLOADING', activeDownloadName: 'Batman Ark-M Special 01 (2026).cbz', volumeId: 'cv_123', createdAt: new Date(),
+            });
+            parent();
+            const prisma = await lanes([
+                issueRow({ filePath: '/library/comics/DC Comics/Batman (2016)/Batman #001.cbz', status: 'DOWNLOADED' }),
+                issueRow({ id: 'sp_1', metadataId: '1151955', attachedVolumeId: 'av_sp', filePath: null, status: 'WANTED', releaseDate: '2026-01-14' }),
+            ]);
+
+            await Importer.importRequest('req_sp');
+
+            const updates = (prisma.issue.update as any).mock.calls.map((c: any[]) => c[0]);
+            const filled = updates.find((u: any) => u.data?.filePath);
+            expect(filled.where).toEqual({ id: 'sp_1' });
+            expect(filled.data.filePath).toContain('Batman Ark-M #001 (2026).cbz');
+            expect(updates.some((u: any) => u.where?.id === 'iss_1' && u.data?.filePath)).toBe(false);
+        });
+
+        it("never fills a Special's row with the run's issue of the same number", async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_run', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date(),
+            });
+            parent();
+            const prisma = await lanes([
+                issueRow({ id: 'sp_1', metadataId: '1151955', attachedVolumeId: 'av_sp', filePath: null, status: 'WANTED' }),
+            ]);
+
+            await Importer.importRequest('req_run');
+
+            expect((prisma.issue.update as any).mock.calls.some((c: any[]) => c[0].where?.id === 'sp_1' && c[0].data?.filePath)).toBe(false);
+            expect(mocks.createIssue.mock.calls.at(-1)![0].data.filePath).toContain('Batman #001.cbz');
         });
     });
 

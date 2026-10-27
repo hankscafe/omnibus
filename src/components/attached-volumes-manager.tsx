@@ -72,7 +72,7 @@ export function summaryLine(s: AttachSummary, noun = "annual file"): string {
 
 const PROVIDERS = ["COMICVINE", "METRON"] as const
 
-type AttachKind = "ANNUAL" | "COLLECTED"
+type AttachKind = "ANNUAL" | "COLLECTED" | "SPECIAL"
 
 const KIND_COPY: Record<AttachKind, {
     title: string
@@ -112,6 +112,19 @@ const KIND_COPY: Record<AttachKind, {
         numberingNote: "Number them in the order you want to read them — that number is yours to set, it becomes the volume number in the filename, and the provider link holds regardless.",
         emptyWithFiles: () => "",
     },
+    // #255: a one-shot that belongs with the series but is neither an annual nor a trade.
+    SPECIAL: {
+        title: "Specials",
+        blurb: "One-shots and specials live in their own provider volume. Attach one and it's listed here, apart from the run.",
+        attachCta: "Attach special",
+        dialogTitle: "Attach a special",
+        dialogBlurb: series => `Find the special's own volume on the provider. It joins ${series} as a Special — listed on its own, and never counted as one of the run's issues.`,
+        searchPlaceholder: "Search the provider for the special",
+        seedQuery: series => series,
+        unclaimedNoun: "file",
+        numberingNote: "A Special keeps its own name: its files are named after its own volume (\"Name #001 (Year)\"), beside the run, and the provider link holds regardless of the number.",
+        emptyWithFiles: () => "",
+    },
 }
 
 export function AttachedVolumesManager({
@@ -124,7 +137,7 @@ export function AttachedVolumesManager({
 }: {
     seriesId: string
     seriesName: string
-    /** ANNUAL or COLLECTED — decides the copy, the search seed, and the absorb prompt. */
+    /** ANNUAL, COLLECTED or SPECIAL — decides the copy, the search seed, and the absorb prompt. */
     kind?: AttachKind
     defaultProvider?: string | null
     /** Annual files on this series that belong to no volume — the reason to act, when there is one. */

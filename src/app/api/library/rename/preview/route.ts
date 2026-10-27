@@ -81,9 +81,11 @@ export async function POST(request: NextRequest) {
                 const ext = path.extname(issue.filePath as string);
                 const attachment = namingAttachment(issue);
                 const isCollected = attachment?.kind === 'COLLECTED';
+                const isSpecial = attachment?.kind === 'SPECIAL';
                 const patternForIssue = filePatternForIssue({
                     isAnnual: (issue as any).isAnnual,
                     isCollected,
+                    isSpecial,
                     isRetainedCollected: retainedCollected && !attachment,
                     isManga: series.isManga,
                     filePattern,
@@ -94,6 +96,7 @@ export async function POST(request: NextRequest) {
                 // as both renamers will produce it.
                 const seriesToken = seriesTokenForIssue({
                     isCollected,
+                    isSpecial,
                     attachmentSource: attachment?.metadataSource,
                     attachmentName: attachment?.name,
                     seriesName: series.name || 'Unknown',

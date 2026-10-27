@@ -258,6 +258,44 @@ describe('closeRequestsFulfilledBySeries (the Smart Matcher)', () => {
         expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({ title: 'Batman Annual #1' }));
     });
 
+    // #255: a Special is requested against the parent's volume, under its own name (request-name.ts).
+    describe('a Special', () => {
+        const arkM = { id: 'av_sp', seriesId: 's_batman', metadataSource: 'COMICVINE', volumeId: '169970', kind: 'SPECIAL', name: 'Batman: Ark-M' };
+        const lane = { kind: 'SPECIAL', name: 'Batman: Ark-M' };
+
+        it("closes the Special's request once the Special's own #1 is on disk", async () => {
+            db.attachedVolumes = [arkM];
+            // The release name the download wrote over the request's name.
+            db.requests = [requestRow('req_sp', { issueNumber: '1', activeDownloadName: 'Batman: Ark-M Special #1 (2026)' })];
+            db.issues = [fileRow('1', { attachedVolumeId: 'av_sp', attachedVolume: lane, filePath: '/comics/DC Comics/Batman (2016)/Batman Ark-M #001 (2026).cbz' })];
+
+            await closeRequestsFulfilledBySeries('s_batman');
+
+            expect(closedIds()).toEqual(['req_sp']);
+            expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.objectContaining({ title: 'Batman: Ark-M #1' }));
+        });
+
+        it("never closes the Special's request on the run's #1", async () => {
+            db.attachedVolumes = [arkM];
+            db.requests = [requestRow('req_sp', { issueNumber: '1', activeDownloadName: 'Batman: Ark-M #1' })];
+            db.issues = [fileRow('1'), fileRow('1', { attachedVolumeId: 'av_sp', attachedVolume: lane, filePath: null })];
+
+            await closeRequestsFulfilledBySeries('s_batman');
+
+            expect(prisma.request.updateMany).not.toHaveBeenCalled();
+        });
+
+        it("never closes the run's request on the Special's #1", async () => {
+            db.attachedVolumes = [arkM];
+            db.requests = [requestRow('req_run', { issueNumber: '1', activeDownloadName: 'Batman #1' })];
+            db.issues = [fileRow('1', { attachedVolumeId: 'av_sp', attachedVolume: lane })];
+
+            await closeRequestsFulfilledBySeries('s_batman');
+
+            expect(prisma.request.updateMany).not.toHaveBeenCalled();
+        });
+    });
+
     it("never closes a request for an attached volume on the run's issue of the same number", async () => {
         db.attachedVolumes = [{ id: 'av_annual', seriesId: 's_batman', metadataSource: 'COMICVINE', volumeId: '5555', kind: 'ANNUAL', name: 'Batman Annual' }];
         db.requests = [requestRow('req_annual', { volumeId: '5555', issueNumber: '1', activeDownloadName: 'Batman Annual #1' })];

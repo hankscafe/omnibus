@@ -232,6 +232,28 @@ describe('AttachedVolumesManager (COLLECTED)', () => {
 // A collected edition the provider has no volume for (field report by robotshavehearts2): attach
 // it by name. It lists as Local, never offers a provider id, and its files are the ones in the
 // folder whose names carry it.
+// #255: a one-shot attached as a Special — its own panel, its own copy, provider volumes only.
+describe('AttachedVolumesManager (SPECIAL)', () => {
+    beforeEach(() => { vi.clearAllMocks(); });
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    const special = { ...attachment, id: 'att3', kind: 'SPECIAL', volumeId: '169970', name: 'Batman: Ark-M' };
+
+    it('speaks about Specials, lists only its own kind, and offers no attaching by name', async () => {
+        stubFetchRouter([['/api/library/series/attachments', () => ok({ attachments: [attachment, special] })]]);
+
+        render(<AttachedVolumesManager {...baseProps} kind="SPECIAL" />);
+
+        expect(await screen.findByText('Batman: Ark-M')).toBeTruthy();
+        expect(screen.queryByText('Batman Annual')).toBeNull();
+        expect(screen.getByText('Specials')).toBeTruthy();
+        fireEvent.click(screen.getByText('Attach special'));
+        const input = await screen.findByPlaceholderText('Search the provider for the special');
+        expect((input as HTMLInputElement).value).toBe('Batman');
+        expect(screen.queryByRole('button', { name: 'Add it by name' })).toBeNull();
+    });
+});
+
 describe('AttachedVolumesManager (COLLECTED, local by name)', () => {
     beforeEach(() => { vi.clearAllMocks(); });
     afterEach(() => { vi.unstubAllGlobals(); });

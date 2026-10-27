@@ -105,6 +105,9 @@ describe('Metron request-path detail pass (metadata-fetcher)', () => {
 
         await syncSeriesMetadata('4000', '', 'METRON');
 
+        // #255: the in-series pairing snapshot is the run alone - no annual, no attached lane's row.
+        const snapshot = mocks.issueFindMany.mock.calls.map(c => c[0]).find((a: any) => a?.where?.seriesId === 's1' && a?.where?.isAnnual === false);
+        expect(snapshot?.where?.attachedVolumeId).toBeNull();
         const probe = mocks.issueFindFirst.mock.calls.map(c => c[0]).find((a: any) => a?.where?.metadataId === '9002');
         expect(probe?.where).toMatchObject({ metadataSource: 'METRON', seriesId: { not: 's1' }, isAnnual: false });
         expect(probe?.where?.attachedVolumeId).toBeNull();

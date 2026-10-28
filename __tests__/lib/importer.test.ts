@@ -376,6 +376,52 @@ describe('File System: Importer Engine', () => {
             expect((prisma.issue.update as any).mock.calls.some((c: any[]) => c[0].where?.id === 'sp_1' && c[0].data?.filePath)).toBe(false);
             expect(mocks.createIssue.mock.calls.at(-1)![0].data.filePath).toContain('Batman #001.cbz');
         });
+
+        // By import time activeDownloadName is the release's title, which needn't start with the
+        // Special's name. The file's ComicInfo id is checked first: it names the Special's row.
+        const unnamedRelease = async (comicInfo: Record<string, unknown>) => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_sp', status: 'DOWNLOADING', activeDownloadName: 'Ark-M 001 (2026).cbz', volumeId: 'cv_123', createdAt: new Date(),
+            });
+            mocks.parseComicInfo.mockResolvedValueOnce({ number: '1', ...comicInfo });
+            parent();
+            const prisma = await lanes([
+                issueRow({ filePath: '/library/comics/DC Comics/Batman (2016)/Batman #001.cbz', status: 'DOWNLOADED' }),
+                issueRow({ id: 'sp_1', metadataId: '1151955', attachedVolumeId: 'av_sp', filePath: null, status: 'WANTED', releaseDate: '2026-01-14' }),
+            ]);
+            await Importer.importRequest('req_sp');
+            return (prisma.issue.update as any).mock.calls.map((c: any[]) => c[0]).filter((u: any) => u.data?.filePath);
+        };
+
+        it("fills the Special's row its ComicInfo id names, though the release title doesn't name it", async () => {
+            const filled = await unnamedRelease({ metadataIssueId: '1151955', metadataSource: 'COMICVINE' });
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'sp_1' }]);
+            expect(filled[0].data.filePath).toContain('Batman Ark-M #001 (2026).cbz');
+        });
+
+        it("takes the id only with its provider: the same number from another provider is not the Special's", async () => {
+            const filled = await unnamedRelease({ metadataIssueId: '1151955', metadataSource: 'METRON' });
+            expect(filled.some((u: any) => u.where?.id === 'sp_1')).toBe(false);
+        });
+
+        // Only a Special's row decides by id. A Special's file a tagger matched to the parent's #1 still
+        // carries a name that says what it is, and goes to its lane by that.
+        it("still goes to its lane by name when its ComicInfo carries the run's id", async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_sp', status: 'DOWNLOADING', activeDownloadName: 'Batman Ark-M Special 01 (2026).cbz', volumeId: 'cv_123', createdAt: new Date(),
+            });
+            mocks.parseComicInfo.mockResolvedValueOnce({ number: '1', metadataIssueId: '900001', metadataSource: 'COMICVINE' });
+            parent();
+            const prisma = await lanes([
+                issueRow({ filePath: '/library/comics/DC Comics/Batman (2016)/Batman #001.cbz', status: 'DOWNLOADED' }),
+                issueRow({ id: 'sp_1', metadataId: '1151955', attachedVolumeId: 'av_sp', filePath: null, status: 'WANTED', releaseDate: '2026-01-14' }),
+            ]);
+
+            await Importer.importRequest('req_sp');
+
+            const filled = (prisma.issue.update as any).mock.calls.map((c: any[]) => c[0]).filter((u: any) => u.data?.filePath);
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'sp_1' }]);
+        });
     });
 
     // The naming cleanup (#244): a download is named by the same rules as every other path - padded

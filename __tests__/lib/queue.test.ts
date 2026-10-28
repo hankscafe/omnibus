@@ -830,6 +830,35 @@ describe('Cron: BullMQ Worker Router', () => {
         }
     });
 
+    // #255: a Special's request carries the parent's volume, so the parent's rows hold both "#1"s. The
+    // UNRELEASED upgrade reads the Special's own date, never the run's #1 that happens to come first.
+    it("upgrades a Special's UNRELEASED request by the Special's own release date, not the run's #1 (#255)", async () => {
+        const arkM = { name: 'Absolute Batman: Ark-M', kind: 'SPECIAL' };
+        mocks.requestFindMany
+            .mockResolvedValueOnce([   // Phase 3: two Specials' requests, filed under their parents' volumes
+                { id: 'req_later', volumeId: 'v1', activeDownloadName: 'Absolute Batman: Ark-M #1' },
+                { id: 'req_out', volumeId: 'v2', activeDownloadName: 'Absolute Batman: Ark-M #1' }
+            ])
+            .mockResolvedValueOnce([]); // Phase 3b
+        mocks.seriesFindMany.mockResolvedValueOnce([
+            // v1: the run's #1 is long out, the Special's #1 is not.
+            { id: 's1', metadataId: 'v1', name: 'Absolute Batman', publisher: 'DC Comics', isManga: false, issues: [
+                { number: '1', releaseDate: '2024-10-09', attachedVolumeId: null, attachedVolume: null },
+                { number: '1', releaseDate: '2099-01-01', attachedVolumeId: 'av_arkm', attachedVolume: arkM }
+            ] },
+            // v2: the Special's #1 is out, and is searched with its own year.
+            { id: 's2', metadataId: 'v2', name: 'Absolute Batman', publisher: 'DC Comics', isManga: false, issues: [
+                { number: '1', releaseDate: '2024-10-09', attachedVolumeId: null, attachedVolume: null },
+                { number: '1', releaseDate: '2026-02-04', attachedVolumeId: 'av_arkm2', attachedVolume: arkM }
+            ] }
+        ]);
+
+        await runMonitor([]);
+
+        expect(mocks.requestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'req_later' } }));
+        expect(mocks.searchAndDownload.mock.calls.map(c => [c[0], c[2]])).toEqual([['req_out', '2026']]);
+    });
+
     // The 5-second gap between searches is kept here, as each search STARTS — not handed out as a
     // delay when it is queued, where no priority could overtake it.
     it('waits for its turn in the 5-second search spacing before asking the engine to search', async () => {
@@ -955,6 +984,39 @@ describe('Cron: BullMQ Worker Router', () => {
         const body = JSON.parse(searchCall![1].body);
         expect(body.year).toBe('2012');        // per-issue lane: the long-running-series anchor, untouched
         expect(body.series_year).toBe('2011'); // pack lane: the series start year the anchor was designed for
+    });
+
+    // #255: a missing Special is requested under its parent's volume, so the search worker finds the
+    // requested issue's row among the parent's. "Absolute Batman: Ark-M #1" is the Special's #1 (2026),
+    // not the run's #1 (2024): GetComics drops a post more than a year off the requested year.
+    describe("the requested issue's year (#255)", () => {
+        const searchYearFor = async (requestName: string) => {
+            initWorker();
+            mocks.requestFindUnique.mockResolvedValue({ id: 'req_sp', status: 'PENDING', volumeId: '160294', metadataSource: 'COMICVINE', activeDownloadName: requestName, failedLinks: '[]' });
+            mocks.seriesFindFirst.mockResolvedValue({ id: 's1', name: 'Absolute Batman', metadataId: '160294', metadataSource: 'COMICVINE', year: 2024 });
+            mocks.issueCount.mockResolvedValue(1);
+            mocks.issueFindMany.mockResolvedValue([
+                // The Special's #1 is listed first, so the run's own lookup can't pass by luck.
+                { number: '1', releaseDate: '2026-02-04', attachedVolumeId: 'av_arkm', attachedVolume: { name: 'Absolute Batman: Ark-M', kind: 'SPECIAL' } },
+                { number: '1', releaseDate: '2024-10-09', attachedVolumeId: null, attachedVolume: null },
+            ]);
+            mocks.engineFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false }) });
+            await mocks.workerCb.current({
+                id: 'job_special_year',
+                data: { type: 'SEARCH_AND_DOWNLOAD', requestId: 'req_sp', name: requestName, year: '2024', isManga: false, skipIndexers: false },
+                updateProgress: vi.fn()
+            });
+            const searchCall = mocks.engineFetch.mock.calls.find((c: any[]) => String(c[0]).includes('/api/automation/search'));
+            return JSON.parse(searchCall![1].body).year;
+        };
+
+        it("asks the engine for the Special's own year", async () => {
+            expect(await searchYearFor('Absolute Batman: Ark-M #1')).toBe('2026');
+        });
+
+        it("keeps the run's year for the run's own #1", async () => {
+            expect(await searchYearFor('Absolute Batman #1')).toBe('2024');
+        });
     });
 
     it('parks the request as STALLED when every DDL hoster candidate fails (no more orphaned DOWNLOADING)', async () => {

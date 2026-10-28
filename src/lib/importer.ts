@@ -808,18 +808,34 @@ export const Importer = {
     const isAnnualImport = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, rawFileName);
 
     // #255: a Special is requested against its PARENT's volume under its own name (request-name.ts),
-    // so the import lands in the parent — where its "#1" is not the run's #1. The release name (or the
-    // file's own) names the Special: the download takes the Special's pattern and its lane's row.
+    // so the import lands in the parent — where its "#1" is not the run's #1. The download takes the
+    // Special's pattern and its lane's row when the file's own ComicInfo carries the provider id of
+    // one of the series' Special rows — whatever the names say: by now activeDownloadName is the
+    // release's title, which needn't start with the Special's name ("Batman: Ark-M #1") — or else
+    // when the release name (or the file's own) names the Special. Otherwise, the run.
     const specialLanes = series?.id && !isAnnualImport
         ? await prisma.attachedVolume.findMany({ where: { seriesId: series.id, kind: 'SPECIAL' }, select: { id: true, name: true, kind: true } })
             .catch(() => [] as Array<{ id: string; name: string | null; kind: string }>)
         : [];
-    const specialMatch = specialLanes.length > 0
-        ? (attachmentForFilename(req.activeDownloadName || '', series?.name || '', specialLanes)
-            ?? attachmentForFilename(rawFileName, series?.name || '', specialLanes))
-        : null;
-    const specialLane = specialMatch ? specialLanes.find(a => a.id === specialMatch.id) ?? null : null;
     const specialIds = new Set(specialLanes.map(a => a.id));
+    const seriesRows = series?.id
+        ? await prisma.issue.findMany({
+            where: { seriesId: series.id },
+            select: { number: true, isAnnual: true, releaseDate: true, attachedVolumeId: true, metadataId: true, metadataSource: true },
+        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null; attachedVolumeId: string | null; metadataId: string | null; metadataSource: string | null }>)
+        : [];
+    const embeddedIssueId = xmlMeta?.metadataIssueId ? String(xmlMeta.metadataIssueId) : null;
+    const specialById = embeddedIssueId
+        ? seriesRows.find(r => r.attachedVolumeId && specialIds.has(r.attachedVolumeId)
+            && r.metadataId === embeddedIssueId && r.metadataSource === xmlMeta.metadataSource) ?? null
+        : null;
+    const specialMatch = specialById
+        ? { id: specialById.attachedVolumeId as string, kind: 'SPECIAL', number: specialById.number }
+        : specialLanes.length > 0
+            ? (attachmentForFilename(req.activeDownloadName || '', series?.name || '', specialLanes)
+                ?? attachmentForFilename(rawFileName, series?.name || '', specialLanes))
+            : null;
+    const specialLane = specialMatch ? specialLanes.find(a => a.id === specialMatch.id) ?? null : null;
 
     // #243: {IssueYear} is THIS issue's year - its release date in the library (the year
     // Standardize writes), else the file's own ComicInfo <Year>, else the series year. A monitored
@@ -828,11 +844,7 @@ export const Importer = {
     let issueReleaseDate: string | null = null;
     if (series?.id) {
         const identity = xmlMeta?.number || specialMatch?.number || extractedNum;
-        const rows = await prisma.issue.findMany({
-            where: { seriesId: series.id },
-            select: { number: true, isAnnual: true, releaseDate: true, attachedVolumeId: true },
-        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null; attachedVolumeId: string | null }>);
-        issueReleaseDate = rows.find(r => (specialLane
+        issueReleaseDate = seriesRows.find(r => (specialLane
             ? r.attachedVolumeId === specialLane.id
             : ((r.isAnnual ?? false) === isAnnualImport) && !(r.attachedVolumeId && specialIds.has(r.attachedVolumeId)))
             && isSameIssue(r.number, identity))?.releaseDate ?? null;

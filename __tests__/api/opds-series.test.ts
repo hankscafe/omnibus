@@ -135,6 +135,24 @@ describe('API Route: OPDS Series Feed (/api/opds/series/[id])', () => {
         expect(posRun1).toBeLessThan(posRun2);
         expect(posRun2).toBeLessThan(posAnnual);
     });
+
+    // #255: a Special shelves after the run AND the annuals, titled after its own volume.
+    it('orders a Special after the annuals, titled after its own volume', async () => {
+        mocks.findUniqueSeries.mockResolvedValue(baseSeries([
+            { id: 'iss_s1', number: '1', isAnnual: false, attachedVolume: { name: 'Batman: Year 100', kind: 'SPECIAL' }, name: null, filePath: '/comics/batman year 100 01.cbz', pageCount: 48, coverUrl: null, description: null },
+            { id: 'iss_a1', number: '1', isAnnual: true, name: null, filePath: '/comics/batman annual 01.cbz', pageCount: 30, coverUrl: null, description: null },
+            { id: 'iss_1', number: '1', isAnnual: false, name: null, filePath: '/comics/batman 01.cbz', pageCount: 22, coverUrl: null, description: null },
+        ]));
+
+        const xml = await (await GET(createReq(), { params: createParams() }) as Response).text();
+
+        const posRun1 = xml.indexOf('<title>Batman #1</title>');
+        const posAnnual = xml.indexOf('<title>Batman Annual #1</title>');
+        const posSpecial = xml.indexOf('<title>Batman: Year 100 #1</title>');
+        expect(posRun1).toBeGreaterThan(-1);
+        expect(posRun1).toBeLessThan(posAnnual);
+        expect(posAnnual).toBeLessThan(posSpecial);
+    });
 });
 
 // #218: entry metadata — creators as separate <author> elements, the publisher in <dc:publisher>,

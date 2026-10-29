@@ -15,7 +15,8 @@
 //
 // "In the library" is the monitor's own question (monitor.rs in_library_or_covered): a run issue with
 // a file, or one reprinted in a collected edition you own; an annual only by an annual; a request made
-// for an attached volume by that volume's own issue. A request is tied to a series by its provider id -
+// for an attached volume by that volume's own issue; a Special's request (#255: filed against the
+// parent's volume under the Special's own name) only by that Special's own issue. A request is tied to a series by its provider id -
 // never by the bare number, which a Metron series and a ComicVine volume can share - by the other
 // provider's id the series stores (Series.cvId / metronId), or by the local id older rows carry. A
 // request with no series id (volumeId "0": a MyAnimeList or AniList import) can't be tied to anything.
@@ -25,6 +26,7 @@ import { Logger } from '@/lib/logger';
 import { SystemNotifier } from '@/lib/notifications';
 import { getErrorMessage } from '@/lib/utils/error';
 import { isSameIssue } from '@/lib/utils/issue-parser';
+import { attachmentForFilename } from '@/lib/utils/attachment-name';
 import { ownedCoverageBySeries } from '@/lib/coverage-ownership';
 import { issueNumberOf } from '@/lib/request-dedupe';
 import { COMPLETABLE_STATUSES, WAITING_STATUSES } from '@/lib/request-status';
@@ -72,7 +74,8 @@ const REQUEST_FIELDS = {
 } as const;
 type Candidate = Prisma.RequestGetPayload<{ select: typeof REQUEST_FIELDS }>;
 
-type Closing = { req: Candidate; series: SeriesRow; number: string; annual: boolean };
+/** `special`: the Special's own volume name, when the request was for one (#255) - it names the alert. */
+type Closing = { req: Candidate; series: SeriesRow; number: string; annual: boolean; special?: string };
 type Via = 'match' | 'monitor';
 
 /** Does a series answer to a request made for (source, volumeId)? */
@@ -121,6 +124,13 @@ async function closeFulfilled(where: Prisma.RequestWhereInput, statuses: readonl
         select: { seriesId: true, name: true, attachedVolume: { select: { name: true } } },
     });
     const coverage = await ownedCoverageBySeries({ seriesId: { in: seriesIds } });
+    // #255: each series' Specials, by name - a Special's request names the Special, not the series.
+    const specials = await prisma.attachedVolume.findMany({
+        where: { seriesId: { in: seriesIds }, kind: 'SPECIAL' },
+        select: { id: true, seriesId: true, name: true, kind: true },
+    });
+    const specialsOf = new Map<string, typeof specials>();
+    for (const a of specials) specialsOf.set(a.seriesId, [...(specialsOf.get(a.seriesId) ?? []), a]);
 
     const filesOf = new Map<string, typeof files>();
     for (const f of files) filesOf.set(f.seriesId, [...(filesOf.get(f.seriesId) ?? []), f]);
@@ -147,6 +157,14 @@ async function closeFulfilled(where: Prisma.RequestWhereInput, statuses: readonl
         }
         for (const s of seriesRows) {
             if (hit || !seriesAnswers(s, source, req.volumeId)) continue;
+            // A request named after one of the series' Specials is owned by that Special's own issue alone.
+            const special = attachmentForFilename(name, s.name, specialsOf.get(s.id) ?? []);
+            if (special) {
+                const owned = (filesOf.get(s.id) ?? []).some(f => f.attachedVolumeId === special.id && isSameIssue(f.number, number));
+                const specialName = (specials.find(a => a.id === special.id)?.name ?? '').trim();
+                if (owned) hit = { req, series: s, number, annual: false, special: specialName || undefined };
+                continue;
+            }
             const kind = requestKind(name, s, collectedNamesOf.get(s.id) ?? []);
             // A trade's request is left to the person who knows which book it is.
             if (kind === 'collected') continue;
@@ -167,7 +185,7 @@ async function closeFulfilled(where: Prisma.RequestWhereInput, statuses: readonl
         where: { id: { in: closing.map(c => c.req.id) }, status: { in: [...statuses] } },
         data: { status: 'COMPLETED', progress: 100, notified: false },
     });
-    const names = closing.map(c => `${c.series.name} ${labelOf(c)}`);
+    const names = closing.map(fullLabelOf);
     Logger.log(
         `[Requests] ${via === 'match' ? 'The match' : 'The Series Monitor'} closed ${closing.length} request(s) whose issue is in the library: ` +
         `${names.slice(0, 10).join(', ')}${names.length > 10 ? ` and ${names.length - 10} more` : ''}.`,
@@ -177,7 +195,9 @@ async function closeFulfilled(where: Prisma.RequestWhereInput, statuses: readonl
     return closing.length;
 }
 
-const labelOf = (c: Closing) => `${c.annual ? 'Annual ' : ''}#${c.number}`;
+const labelOf = (c: Closing) => c.special ? `${c.special} #${c.number}` : `${c.annual ? 'Annual ' : ''}#${c.number}`;
+/** "Batman Annual #1", or a Special's own "Absolute Batman: Ark-M #1" (its label already names it). */
+const fullLabelOf = (c: Closing) => c.special ? labelOf(c) : `${c.series.name} ${labelOf(c)}`;
 const inOrder = (a: Closing, b: Closing) =>
     a.series.name.localeCompare(b.series.name)
     || Number(a.annual) - Number(b.annual)
@@ -204,10 +224,10 @@ function announce(closing: Closing[], via: Via): void {
         let description: string;
         if (single) {
             const labels = [...new Set(items.map(labelOf))];
-            title = labels.length === 1 ? `${single.name} ${labels[0]}` : `${single.name} - ${labels.length} Issues Available!`;
+            title = labels.length === 1 ? fullLabelOf(first) : `${single.name} - ${labels.length} Issues Available!`;
             description = `${lead}${labels.join(', ')} ${labels.length === 1 ? 'is' : 'are'} in your library and ready to read.`;
         } else {
-            const names = [...new Set(items.map(c => `${c.series.name} ${labelOf(c)}`))];
+            const names = [...new Set(items.map(fullLabelOf))];
             title = `${names.length} Requested Issues Available!`;
             description = `${lead}${listOf(names)} are in your library and ready to read.`;
         }

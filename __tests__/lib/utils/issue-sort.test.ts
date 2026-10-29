@@ -82,3 +82,28 @@ describe('laneLabel', () => {
         expect(laneLabel({ isAnnual: true, attachmentName: '   ' })).toBe('Annual');
     });
 });
+
+// #255: a Special is its own domain — after the run and the annuals by number, and never read as
+// the run's "#1". Every surface that orders issues (the page, Komga, OPDS, the reader) shares this.
+describe('a Special', () => {
+    const withSpecial = [
+        { id: 'sp1', parsedNum: 1, isAnnual: false, isSpecial: true, releaseDate: '2026-01-14' },
+        { id: 'i2', parsedNum: 2, isAnnual: false, releaseDate: '2024-11-13' },
+        { id: 'a1', parsedNum: 1, isAnnual: true, releaseDate: '2025-10-22' },
+        { id: 'i1', parsedNum: 1, isAnnual: false, releaseDate: '2024-10-09' },
+    ];
+
+    it('sorts after the run and the annuals by number, in both directions', () => {
+        expect(ids(sortIssuesForDisplay(withSpecial, 'number_asc'))).toEqual(['i1', 'i2', 'a1', 'sp1']);
+        expect(ids(sortIssuesForDisplay(withSpecial, 'number_desc'))).toEqual(['i2', 'i1', 'a1', 'sp1']);
+    });
+
+    it('falls into place by release date like an annual', () => {
+        expect(ids(sortIssuesForDisplay(withSpecial, 'date_asc'))).toEqual(['i1', 'i2', 'a1', 'sp1']);
+    });
+
+    it('is labelled a Special, after its own volume', () => {
+        expect(laneLabel({ isSpecial: true, attachmentName: 'Absolute Batman: Ark-M' })).toBe('Absolute Batman: Ark-M · Special');
+        expect(laneLabel({ isSpecial: true, attachmentName: null })).toBe('Special');
+    });
+});

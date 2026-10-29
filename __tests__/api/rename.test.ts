@@ -341,6 +341,42 @@ describe('API Route: Bulk Library Renamer', () => {
         expect(targets).not.toContain('Batman Vol. 001 (2016).cbz');
     });
 
+    // #255: the local loop names a Special after its own volume, in the fixed Special pattern —
+    // beside the run's same number, whatever the series template says.
+    it("names a Special after its own volume beside the run's same number", async () => {
+        mocks.libraryFindMany.mockResolvedValue([{ id: 'lib_1', path: '/data/comics' }]);
+        mocks.fsExistsSync.mockImplementation((p: string | Buffer | URL) => {
+            if (!p) return false;
+            if (/#001|- 001/.test(p.toString())) return false;
+            return true;
+        });
+        mocks.seriesFindMany.mockResolvedValue([{
+            id: 'series_1', libraryId: 'lib_1', folderPath: '/data/comics/DC Comics/Batman (2016)',
+            publisher: 'DC Comics', name: 'Batman', year: 2016, isManga: false,
+        }]);
+        mocks.issueFindMany.mockResolvedValue([
+            {
+                id: 'sp1', seriesId: 'series_1', number: '1', name: 'A History of Arkham', releaseDate: '2026-01-14',
+                filePath: '/data/comics/DC Comics/Batman (2016)/Ark-M 01.cbz',
+                attachedVolume: { kind: 'SPECIAL', metadataSource: 'COMICVINE', name: 'Batman: Ark-M', seriesId: 'series_1' },
+            },
+            {
+                id: 'issue_1', seriesId: 'series_1', number: '1', name: null, releaseDate: '2016-06-15',
+                filePath: '/data/comics/DC Comics/Batman (2016)/Batman 1.cbz', attachedVolume: null,
+            },
+        ]);
+
+        const req = new NextRequest('http://localhost/api/library/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesIds: ['series_1'], folderPattern: '{Publisher}/{Series} ({Year})', filePattern: '{Series} - {Issue}' }),
+        });
+        const data = await (await POST(req)).json();
+        expect(data).toMatchObject({ success: true, filesRenamed: 2, conflicts: 0 });
+        const targets = mocks.fsMove.mock.calls.map(c => path.basename(c[1]));
+        expect(targets).toEqual(expect.arrayContaining(['Batman Ark-M #001 (2026).cbz', 'Batman - 001.cbz']));
+    });
+
     // #239: a collected volume kept as its own series ("Leave it as its own series") is Standardized
     // from its OWN page: its books take the collected pattern in its own folder, under its own name
     // and year, and each book keeps its own year. A row carrying ANOTHER series' attachment id (what

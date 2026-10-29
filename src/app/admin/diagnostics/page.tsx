@@ -14,10 +14,10 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 // two annual volumes on one series each own a "#1"); the index keeps it unique even in the
 // impossible event of a collision.
 const groupKey = (g: any, idx: number) => `${g.seriesId}_${g.attachedVolumeId || ''}_${g.issueNumber}_${idx}`;
-// What a group is called: "Annual #1", "Vol. 2" for a collected book, prefixed with the attached
+// What a group is called: "Annual #1", "Vol. 2" for a collected book, "Special #1" (#255), prefixed with the attached
 // volume's own name when the group lives in one — "The Amazing Spider-Man '96 · Annual #1".
 const groupLabel = (g: any) => {
-    const domain = g.laneKind === 'COLLECTED' ? 'Vol.' : g.isAnnual ? 'Annual' : 'Issue';
+    const domain = g.laneKind === 'COLLECTED' ? 'Vol.' : g.laneKind === 'SPECIAL' ? 'Special' : g.isAnnual ? 'Annual' : 'Issue';
     return `${g.laneName ? `${g.laneName} · ` : ''}${domain} #${g.issueNumber}`;
 };
 const DELETE_ALL = '__DELETE_ALL__';

@@ -33,6 +33,8 @@ export function parseIssueSortMode(raw: unknown): IssueSortMode | null {
 export interface SortableIssue {
     parsedNum?: number | null;
     isAnnual?: boolean | null;
+    /** #255: the row belongs to a SPECIAL attachment — its own domain, never the run's same number. */
+    isSpecial?: boolean | null;
     releaseDate?: string | null;
 }
 
@@ -41,9 +43,12 @@ const num = (i: SortableIssue) => {
     return Number.isFinite(n) ? n : 0;
 };
 
-/** The page's historical order: the run, then the annuals, by number within each. */
+/** The reading domain: the run, then the annuals, then (#255) the Specials. */
+export const domainRank = (i: SortableIssue) => (i.isAnnual ? 1 : i.isSpecial ? 2 : 0);
+
+/** The page's historical order: the run, then the annuals, then the Specials, by number within each. */
 const domainThenNumber = (a: SortableIssue, b: SortableIssue) =>
-    ((a.isAnnual ? 1 : 0) - (b.isAnnual ? 1 : 0)) || (num(a) - num(b));
+    (domainRank(a) - domainRank(b)) || (num(a) - num(b));
 
 const dateKey = (i: SortableIssue) => (typeof i.releaseDate === 'string' && i.releaseDate.trim()) ? i.releaseDate.trim() : null;
 
@@ -52,8 +57,8 @@ export function sortIssuesForDisplay<T extends SortableIssue>(issues: readonly T
     const dir = desc ? -1 : 1;
     const out = [...issues];
     if (mode.startsWith('number')) {
-        // The run stays ahead of the annuals in both directions — only the numbering flips.
-        out.sort((a, b) => ((a.isAnnual ? 1 : 0) - (b.isAnnual ? 1 : 0)) || dir * (num(a) - num(b)));
+        // The run stays ahead of the annuals (and the Specials) in both directions — only the numbering flips.
+        out.sort((a, b) => (domainRank(a) - domainRank(b)) || dir * (num(a) - num(b)));
         return out;
     }
     out.sort((a, b) => {
@@ -69,9 +74,10 @@ export function sortIssuesForDisplay<T extends SortableIssue>(issues: readonly T
     return out;
 }
 
-/** "The Amazing Spider-Man '96 · Annual", "Annual", "Issue" — the page appends " #N". */
-export function laneLabel(issue: { isAnnual?: boolean | null; attachmentName?: string | null }): string {
-    const domain = issue.isAnnual ? 'Annual' : 'Issue';
+/** "The Amazing Spider-Man '96 · Annual", "Absolute Batman: Ark-M · Special", "Annual", "Issue" — the
+ *  page appends " #N". */
+export function laneLabel(issue: { isAnnual?: boolean | null; isSpecial?: boolean | null; attachmentName?: string | null }): string {
+    const domain = issue.isAnnual ? 'Annual' : issue.isSpecial ? 'Special' : 'Issue';
     const lane = (issue.attachmentName || '').trim();
     return lane ? `${lane} · ${domain}` : domain;
 }

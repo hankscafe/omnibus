@@ -28,7 +28,7 @@ export const HAS_FILE = { filePath: { not: null } } as const;
 const ZERO_COUNTS: SeriesCounts = { booksCount: 0, booksReadCount: 0, booksInProgressCount: 0 };
 
 type SeriesRef = { id: string; name: string; libraryId?: string | null };
-type IssueWithLane = Prisma.IssueGetPayload<{ include: { attachedVolume: { select: { name: true } } } }>;
+type IssueWithLane = Prisma.IssueGetPayload<{ include: { attachedVolume: { select: { name: true, kind: true } } } }>;
 
 // ---------------------------------------------------------------------------------------------
 // Series
@@ -206,14 +206,19 @@ export interface LaneIssue extends KomgaIssueRow {
 }
 
 function withLane(row: IssueWithLane): LaneIssue {
-    return { ...row, filePath: row.filePath ?? '', attachmentName: row.attachedVolumeId ? (row.attachedVolume?.name ?? null) : null };
+    return {
+        ...row,
+        filePath: row.filePath ?? '',
+        attachmentName: row.attachedVolumeId ? (row.attachedVolume?.name ?? null) : null,
+        attachmentKind: row.attachedVolumeId ? (row.attachedVolume?.kind ?? null) : null,
+    };
 }
 
 /** A series' books in reading order (run, then annuals), with their 1-based positions. */
 export async function loadOrderedBooks(seriesId: string) {
     const rows = await prisma.issue.findMany({
         where: { seriesId, ...HAS_FILE },
-        include: { attachedVolume: { select: { name: true } } },
+        include: { attachedVolume: { select: { name: true, kind: true } } },
     });
     return orderBooks(rows.map(withLane));
 }
@@ -291,7 +296,7 @@ export async function healedPageCount(issue: { id: string; filePath: string | nu
 // ---------------------------------------------------------------------------------------------
 
 type ProgressWithIssue = Prisma.ReadProgressGetPayload<{
-    include: { issue: { include: { series: { select: { id: true; name: true; libraryId: true } }; attachedVolume: { select: { name: true } } } } };
+    include: { issue: { include: { series: { select: { id: true; name: true; libraryId: true } }; attachedVolume: { select: { name: true, kind: true } } } } };
 }>;
 
 async function tileFor(row: ProgressWithIssue['issue'], progress: ProgressRow | null) {
@@ -321,7 +326,7 @@ export async function inProgressBooks(userId: string, libs: AccessibleLibraries,
     const [rows, total] = await Promise.all([
         prisma.readProgress.findMany({
             where,
-            include: { issue: { include: { series: { select: { id: true, name: true, libraryId: true } }, attachedVolume: { select: { name: true } } } } },
+            include: { issue: { include: { series: { select: { id: true, name: true, libraryId: true } }, attachedVolume: { select: { name: true, kind: true } } } } },
             orderBy: { updatedAt: 'desc' },
             skip: page * size,
             take: size,
@@ -469,7 +474,7 @@ export async function searchBooks(args: { libs: AccessibleLibraries; userId: str
     const [rows, total] = await Promise.all([
         prisma.issue.findMany({
             where,
-            include: { series: { select: { id: true, name: true, libraryId: true } }, attachedVolume: { select: { name: true } } },
+            include: { series: { select: { id: true, name: true, libraryId: true } }, attachedVolume: { select: { name: true, kind: true } } },
             orderBy: [{ seriesId: 'asc' }, { number: 'asc' }, { id: 'asc' }],
             skip: page * size,
             take: size,

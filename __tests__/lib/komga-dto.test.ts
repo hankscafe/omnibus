@@ -163,6 +163,18 @@ describe('komga dto: book titles and order', () => {
         expect(ordered.map(b => b.issue.id)).toEqual(['i2', 'i13', 'i13h', 'i14', 'a1']);
         expect(ordered.map(b => b.position)).toEqual([1, 2, 3, 4, 5]);
     });
+
+    // #255: a Special is its own domain — titled after its own volume as a Special, and shelved after
+    // the run and the annuals, never as the run's #1.
+    it('titles a Special after its volume and shelves it after the annuals', () => {
+        const special = baseIssue({ id: 'sp1', name: null, number: '1', attachedVolumeId: 'att_sp', attachmentName: 'Batman: Ark-M', attachmentKind: 'SPECIAL' });
+        expect(bookTitle(special, 'Batman')).toBe('Batman: Ark-M · Special #1');
+        const ordered = orderBooks([special, baseIssue({ id: 'a1', number: '1', isAnnual: true }), baseIssue({ id: 'i2', number: '2' }), baseIssue({ id: 'i1', number: '1' })]);
+        expect(ordered.map(b => b.issue.id)).toEqual(['i1', 'i2', 'a1', 'sp1']);
+        // The kind on the relation (the OPDS search rows) orders the same way.
+        const viaRelation = orderBooks([{ ...baseIssue({ id: 'sp1', number: '1' }), attachedVolume: { kind: 'SPECIAL' } }, baseIssue({ id: 'i3', number: '3' })]);
+        expect(viaRelation.map(b => b.issue.id)).toEqual(['i3', 'sp1']);
+    });
 });
 
 describe('komga dto: series', () => {

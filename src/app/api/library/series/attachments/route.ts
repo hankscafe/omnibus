@@ -26,7 +26,8 @@ import { retainedChildren } from '@/lib/retained-attachments';
 // LOCAL: a collected edition (or annual run) the provider has no volume for — attached by name,
 // no sync lane; its books are the files whose names carry it (field report by robotshavehearts2).
 const VALID_SOURCES = ['COMICVINE', 'METRON', 'LOCAL'];
-const VALID_KINDS = ['ANNUAL', 'COLLECTED'];
+// SPECIAL (#255): a one-shot that belongs with the series but is neither an annual nor a trade.
+const VALID_KINDS = ['ANNUAL', 'COLLECTED', 'SPECIAL'];
 
 /**
  * Queue the series.json regeneration WITHOUT awaiting it. A `await queue.add(...)` never settles
@@ -222,6 +223,10 @@ export async function POST(request: Request) {
         }
         if (!VALID_KINDS.includes(kind)) {
             return NextResponse.json({ error: `Unknown attachment kind "${kind}"` }, { status: 400 });
+        }
+        // A Special is a provider volume: its files are named after it and found by it (#255, v1).
+        if (isLocal && kind === 'SPECIAL') {
+            return NextResponse.json({ error: 'A Special is attached from the provider, not by name.' }, { status: 400 });
         }
 
         const series = await prisma.series.findUnique({ where: { id: seriesId } });

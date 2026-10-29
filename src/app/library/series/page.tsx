@@ -90,6 +90,9 @@ function SeriesContent() {
   // #203 COLLECTED: trades/omnibuses attached to this series — their own shelf, out of the run.
   const [collectedEditions, setCollectedEditions] = useState<any[]>([]);
   const [missingCollectedEditions, setMissingCollectedEditions] = useState<any[]>([]);
+  // #255: Specials — one-shots attached to the series — are their own section, never the run.
+  const [specials, setSpecials] = useState<any[]>([]);
+  const [missingSpecials, setMissingSpecials] = useState<any[]>([]);
   // #203 COLLECTED coverage: main-run issues an OWNED collected edition reprints — not missing,
   // not on disk; each carries `coveredBy` naming the book.
   const [coveredIssues, setCoveredIssues] = useState<any[]>([]);
@@ -316,6 +319,8 @@ function SeriesContent() {
             setDuplicates(data.duplicates || []);
           setCollectedEditions(data.collectedEditions || []);
           setMissingCollectedEditions(data.missingCollectedEditions || []);
+          setSpecials(data.specials || []);
+          setMissingSpecials(data.missingSpecials || []);
           setCoveredIssues(data.coveredIssues || []);
             
             setSeriesInfo({
@@ -440,6 +445,8 @@ function SeriesContent() {
           setDuplicates(data.duplicates || []);
           setCollectedEditions(data.collectedEditions || []);
           setMissingCollectedEditions(data.missingCollectedEditions || []);
+          setSpecials(data.specials || []);
+          setMissingSpecials(data.missingSpecials || []);
           setCoveredIssues(data.coveredIssues || []);
       } catch (e) {
           Logger.log(`[Series] Couldn't refresh the issue lists after an attachment change: ${getErrorMessage(e)}`, 'debug');
@@ -569,6 +576,7 @@ function SeriesContent() {
         const { composite: compositeName, reqNum } = requestNameFor({
             seriesName: seriesInfo.name, number: issue.number, parsedNum: issue.parsedNum,
             name: issue.name, isAnnual: issue.isAnnual, isCollected: issue.isCollected, collectionName: issue.collectionName,
+            isSpecial: issue.isSpecial, specialName: issue.specialName,
         });
 
         setRequestingIds(prev => new Set(prev).add(issue.id));
@@ -1746,11 +1754,81 @@ function SeriesContent() {
                       <AttachedVolumesManager
                           seriesId={seriesInfo.id}
                           seriesName={seriesInfo.name}
+                          kind="SPECIAL"
+                          defaultProvider={seriesInfo.metadataSource}
+                          onChanged={reloadIssues}
+                      />
+                      <AttachedVolumesManager
+                          seriesId={seriesInfo.id}
+                          seriesName={seriesInfo.name}
                           kind="COLLECTED"
                           defaultProvider={seriesInfo.metadataSource}
                           onChanged={reloadIssues}
                       />
                   </>
+              )}
+
+              {/* #255: Specials read as their own section — never the run's "#1", never in its Missing
+                  count or Request Missing. A missing one is requested under its own name. */}
+              {(specials.length > 0 || missingSpecials.length > 0) && (
+                  <div className="space-y-4 mb-8">
+                      <div className="flex items-center justify-between border-b-2 border-border pb-4">
+                          <h4 className="font-black flex items-center gap-2 text-xl text-foreground tracking-tight">
+                              <Sparkles className="w-6 h-6 text-primary" /> Specials ({specials.length}{missingSpecials.length > 0 ? ` of ${specials.length + missingSpecials.length}` : ''})
+                          </h4>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
+                          {[...specials, ...missingSpecials].map(book => {
+                              const owned = !!book.fullPath;
+                              const isRequesting = requestingIds.has(book.id);
+                              const isRequested = requestedIds.has(book.id);
+                              return (
+                                  <div
+                                      key={book.id}
+                                      onClick={() => owned && setActiveIssue(book)}
+                                      className={cn(
+                                          "flex items-center gap-3 p-3 rounded-xl border bg-background shadow-sm transition-all",
+                                          owned ? "cursor-pointer hover:border-primary/50" : "opacity-80",
+                                          activeIssue?.id === book.id ? "border-primary ring-2 ring-primary/30" : "border-border"
+                                      )}
+                                  >
+                                      <div className="w-12 h-[68px] shrink-0 rounded overflow-hidden bg-muted border border-border relative">
+                                          {book.coverUrl
+                                              ? <img src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
+                                              : null}
+                                          {owned && <CollectedProgressBadge book={book} />}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                          <p className="text-sm font-bold text-foreground truncate" title={book.name}>{book.name}</p>
+                                          <p className="text-xs text-muted-foreground truncate">{laneLabel({ isSpecial: true, attachmentName: book.specialName })} #{book.number}</p>
+                                          {/* A Special kept as its own series (#239) lives in that series. */}
+                                          {book.retainedSeries && (
+                                              <Link
+                                                  href={`/library/series?path=${encodeURIComponent(book.retainedSeries.folderPath)}`}
+                                                  onClick={(e) => e.stopPropagation()}
+                                                  className="text-xs text-muted-foreground underline-offset-2 hover:underline block truncate"
+                                              >
+                                                  In {book.retainedSeries.name}
+                                              </Link>
+                                          )}
+                                      </div>
+                                      {owned && <CollectedReadButton book={book} seriesFolder={book.retainedSeries?.folderPath || folderPath || ''} />}
+                                      {!owned && canRequest && (
+                                          <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-8 px-2 text-[10px] font-black uppercase tracking-wider shrink-0 border-primary/30 text-primary hover:bg-primary/10"
+                                              disabled={isRequesting || isRequested}
+                                              onClick={(e) => { e.stopPropagation(); handleRequestMissing(book); }}
+                                          >
+                                              {isRequesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : (isRequested ? 'Requested' : 'Request')}
+                                          </Button>
+                                      )}
+                                  </div>
+                              );
+                          })}
+                      </div>
+                  </div>
               )}
 
               {/* Collected editions read as their own shelf — never mixed into the run, and never

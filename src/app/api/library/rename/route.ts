@@ -171,9 +171,11 @@ export async function POST(request: NextRequest) {
             // renamer.rs, so the preview and both renamers can never disagree about the result.
             const attachment = namingAttachment(issue);
             const isCollected = attachment?.kind === 'COLLECTED';
+            const isSpecial = attachment?.kind === 'SPECIAL';
             const patternToUse = filePatternForIssue({
                 isAnnual: (issue as any).isAnnual,
                 isCollected,
+                isSpecial,
                 isRetainedCollected: retainedCollected && !attachment,
                 isManga: s.isManga,
                 filePattern: activeFilePattern,
@@ -184,6 +186,7 @@ export async function POST(request: NextRequest) {
             // the only claim it has (twinned with the engine renamer + the preview).
             const seriesToken = seriesTokenForIssue({
                 isCollected,
+                isSpecial,
                 attachmentSource: attachment?.metadataSource,
                 attachmentName: attachment?.name,
                 seriesName: s.name || 'Unknown',

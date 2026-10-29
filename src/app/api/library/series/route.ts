@@ -110,6 +110,11 @@ export async function GET(request: Request) {
     // #7.5, and counting it among the run would double-count content the reader may already own.
     const collectedEditions: any[] = [];
     const missingCollectedEditions: any[] = [];
+    // #255: Specials — one-shots attached to the series — are their own section too. They are not
+    // annuals (isAnnual is false), so the run's lists, its Missing count and Request Missing would
+    // otherwise read a Special's "#1" as the run's #1.
+    const specials: any[] = [];
+    const missingSpecials: any[] = [];
     const duplicatesList: any[] = [];
 
     if (seriesRecord) {
@@ -355,13 +360,18 @@ export async function GET(request: Request) {
             const finalIssueCoverUrl = issueCoverUrl(issue, !!issue.filePath && existingPaths.has(issue.filePath));
 
             const isCollected = (issue as any).attachedVolume?.kind === 'COLLECTED';
+            const isSpecial = (issue as any).attachedVolume?.kind === 'SPECIAL';
+            const specialName = isSpecial ? ((issue as any).attachedVolume?.name ?? null) : null;
 
             const formatted = {
                 id: issue.id,
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
-                // #203: annuals compose as "Series Annual #N" and carry the flag for the page/OPDS.
-                name: issue.name || `${seriesRecord.name}${(issue as any).isAnnual ? ' Annual' : ''} #${issue.number}`,
+                // #203: annuals compose as "Series Annual #N" and carry the flag for the page/OPDS; a
+                // Special (#255) as its own volume's "Name #N".
+                name: issue.name || (specialName ? `${specialName} #${issue.number}` : `${seriesRecord.name}${(issue as any).isAnnual ? ' Annual' : ''} #${issue.number}`),
                 isAnnual: (issue as any).isAnnual ?? false,
+                isSpecial,
+                specialName,
                 // #203 Phase 1: which attached volume this annual belongs to (null = none yet), so
                 // the Annuals panel can tell "claimed" apart from "still on its own".
                 attachedVolumeId: (issue as any).attachedVolumeId ?? null,
@@ -396,6 +406,10 @@ export async function GET(request: Request) {
                 if (issue.filePath && existingPaths.has(issue.filePath)) collectedEditions.push(formatted);
                 else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingCollectedEditions.push(formatted);
             }
+            else if (isSpecial) {
+                if (issue.filePath && existingPaths.has(issue.filePath)) specials.push(formatted);
+                else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingSpecials.push(formatted);
+            }
             else if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted);
             else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingIssues.push(formatted);
         }
@@ -404,8 +418,11 @@ export async function GET(request: Request) {
         // books on this shelf. One row per book: the parent holds no skeletons for them, and a copy
         // the parent's lane does own (a file-backed lane row) wins over the child's for the same
         // provider issue. Owned books open in the child's folder; missing ones keep their Request.
-        const keptAttachments = await prisma.attachedVolume.findMany({ where: { seriesId: seriesRecord.id, kind: 'COLLECTED', retained: true } });
+        // #255: a Special kept as its own series lists its books in the Specials section the same way.
+        const keptAttachments = await prisma.attachedVolume.findMany({ where: { seriesId: seriesRecord.id, kind: { in: ['COLLECTED', 'SPECIAL'] }, retained: true } });
         for (const attachment of keptAttachments) {
+            const keptSpecial = attachment.kind === 'SPECIAL';
+            const [owns, misses] = keptSpecial ? [specials, missingSpecials] : [collectedEditions, missingCollectedEditions];
             const laneRows = existingIssues.filter(i => i.attachedVolumeId === attachment.id && i.metadataId);
             const parentOwns = new Set(laneRows.filter(i => i.filePath && existingPaths.has(i.filePath)).map(i => i.metadataId));
             for (const child of await retainedChildren(attachment)) {
@@ -433,22 +450,24 @@ export async function GET(request: Request) {
                     const parentSkeleton = providerId ? laneRows.find(i => i.metadataId === providerId) : undefined;
                     if (parentSkeleton) {
                         if (!owned) continue;
-                        const at = missingCollectedEditions.findIndex(m => m.id === parentSkeleton.id);
-                        if (at >= 0) missingCollectedEditions.splice(at, 1);
+                        const at = misses.findIndex(m => m.id === parentSkeleton.id);
+                        if (at >= 0) misses.splice(at, 1);
                     }
                     const p = progressById.get(book.id);
                     const total = p?.totalPages && !isNaN(p.totalPages) ? p.totalPages : 0;
                     const formatted = {
                         id: book.id,
                         cvId: providerId ? parseInt(providerId) : null,
-                        name: book.name || `${child.name} Vol. ${book.number}`,
+                        name: book.name || (keptSpecial ? `${child.name} #${book.number}` : `${child.name} Vol. ${book.number}`),
                         isAnnual: false,
+                        isSpecial: keptSpecial,
+                        specialName: keptSpecial ? (attachment.name ?? child.name) : null,
                         attachedVolumeId: null,
                         attachmentName: null,
                         releaseDate: book.releaseDate ?? null,
-                        isCollected: true,
-                        collectionName: attachment.name ?? child.name,
-                        coversIssues: book.coversIssues ?? null,
+                        isCollected: !keptSpecial,
+                        collectionName: keptSpecial ? null : (attachment.name ?? child.name),
+                        coversIssues: keptSpecial ? null : (book.coversIssues ?? null),
                         parsedNum: parseFloat(normalizeFractionNumbers(book.number)),
                         number: book.number,
                         fullPath: owned ? book.filePath : null,
@@ -463,8 +482,8 @@ export async function GET(request: Request) {
                         // The series the book lives in: the shelf links there and reads from its folder.
                         retainedSeries: child,
                     };
-                    if (owned) collectedEditions.push(formatted);
-                    else missingCollectedEditions.push(formatted);
+                    if (owned) owns.push(formatted);
+                    else misses.push(formatted);
                 }
             }
         }
@@ -504,6 +523,8 @@ export async function GET(request: Request) {
     const byNumber = (a: any, b: any) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0);
     collectedEditions.sort(byNumber);
     missingCollectedEditions.sort(byNumber);
+    specials.sort(domainThenNumber);
+    missingSpecials.sort(domainThenNumber);
     
     const finalSeriesCoverUrl = seriesRecord?.coverUrl && (seriesRecord.coverUrl.startsWith('http') || seriesRecord.coverUrl.match(/^[a-zA-Z]:\\/))
         ? `/api/library/cover?path=${encodeURIComponent(seriesRecord.coverUrl)}` 
@@ -577,6 +598,8 @@ export async function GET(request: Request) {
       coveredIssues,
       collectedEditions,
       missingCollectedEditions,
+      specials,
+      missingSpecials,
       duplicates: duplicatesList
     });
 

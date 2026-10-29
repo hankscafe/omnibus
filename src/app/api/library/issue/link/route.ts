@@ -11,7 +11,7 @@ import { moveFileSafe } from '@/lib/utils/safe-fs';
 import { countArchivePages } from '@/lib/utils/archive-pages';
 import { carriedStamp } from '@/lib/file-added';
 import { issueFileName, issuePaddingFromSetting, issueTitleForName } from '@/lib/utils/naming';
-import { ANNUAL_FILE_PATTERN } from '@/lib/utils/file-pattern';
+import { filePatternForIssue, namingAttachment, seriesTokenForIssue } from '@/lib/utils/file-pattern';
 
 export async function POST(request: NextRequest) {
     try {
@@ -35,7 +35,8 @@ export async function POST(request: NextRequest) {
         });
 
         const targetIssue = await prisma.issue.findUnique({
-            where: { id: targetId }
+            where: { id: targetId },
+            include: { attachedVolume: { select: { kind: true, metadataSource: true, name: true, seriesId: true } } },
         });
 
         if (!unmatchedIssue || !targetIssue) {
@@ -62,15 +63,23 @@ export async function POST(request: NextRequest) {
         const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
         // 3. Name the file with the shared naming rules (src/lib/utils/naming.ts) - the name Standardize
-        //    would give it. #203 Phase 1: an ANNUAL takes the Mylar shape, outranking the manga template.
-        const filePatternToUse = (targetIssue as any).isAnnual
-            ? ANNUAL_FILE_PATTERN
-            : series.isManga
-                ? (config.manga_file_naming_pattern || "{Series} Vol. {Issue}")
-                : (config.file_naming_pattern || "{Series} #{Issue}");
+        //    would give it, through the same pattern choice (#203: an ANNUAL takes the Mylar shape; a
+        //    collected book its collected pattern; #255: a Special its own, after its own volume).
+        const attachment = namingAttachment(targetIssue);
+        const isCollected = attachment?.kind === 'COLLECTED';
+        const isSpecial = attachment?.kind === 'SPECIAL';
+        const filePatternToUse = filePatternForIssue({
+            isAnnual: targetIssue.isAnnual,
+            isCollected,
+            isSpecial,
+            isManga: series.isManga,
+            filePattern: config.file_naming_pattern || "{Series} #{Issue}",
+            mangaFilePattern: config.manga_file_naming_pattern || "{Series} Vol. {Issue}",
+            collectedFilePattern: config.collected_file_naming_pattern,
+        });
         const stem = issueFileName(filePatternToUse, {
             publisher: series.publisher,
-            series: series.name,
+            series: seriesTokenForIssue({ isCollected, isSpecial, attachmentSource: attachment?.metadataSource, attachmentName: attachment?.name, seriesName: series.name }),
             seriesYear: series.year,
             issueNumber: targetIssue.number,
             releaseDate: targetIssue.releaseDate,

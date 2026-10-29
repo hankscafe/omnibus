@@ -14,7 +14,7 @@
 //     never match, or every main-run file would;
 //   - among several matches the most specific name wins (most tokens, then longest);
 //   - the number is parsed with the attachment's name as the series hint.
-import { describeIssueFromFilename, stripSeriesPrefix } from '@/lib/utils/issue-parser';
+import { describeIssueFromFilename, isSameIssue, stripSeriesPrefix } from '@/lib/utils/issue-parser';
 
 export interface AttachmentNameRef { id: string; name?: string | null; kind?: string | null }
 export interface AttachmentFileMatch { id: string; kind: string; number: string }
@@ -39,4 +39,29 @@ export function attachmentForFilename(fileName: string, seriesName: string, atta
     if (!best) return null;
     const number = describeIssueFromFilename(fileName, (best.name as string).trim()).number;
     return { id: best.id, kind: (best.kind || 'ANNUAL').toUpperCase(), number };
+}
+
+export interface LaneIssueRow {
+    number: string;
+    attachedVolumeId?: string | null;
+    attachedVolume?: { name?: string | null; kind?: string | null } | null;
+}
+
+// #255: the row a request is for, among its series' rows. A Special's request carries the PARENT's
+// volume id, so its "#1" and the run's "#1" are both rows of that series: the request's name picks
+// the Special's lane when it names one (the rule above), and otherwise the Specials' rows are left
+// out, so the run's own #N is never shadowed by a lane's. Annual and collected rows are as before.
+// The search worker's issue-year lookup and the Series Monitor's UNRELEASED upgrade (queue.ts) both
+// read the requested issue's release date through this; the importer makes the same choice, with
+// the downloaded file's own ComicInfo id first.
+export function requestedIssueRow<T extends LaneIssueRow>(rows: T[], number: string, requestName: string, seriesName: string): T | undefined {
+    const specials = new Map<string, AttachmentNameRef>();
+    for (const r of rows) {
+        if (r.attachedVolumeId && r.attachedVolume?.kind === 'SPECIAL') {
+            specials.set(r.attachedVolumeId, { id: r.attachedVolumeId, name: r.attachedVolume.name, kind: 'SPECIAL' });
+        }
+    }
+    const special = specials.size > 0 ? attachmentForFilename(requestName, seriesName, [...specials.values()]) : null;
+    return rows.find(r => isSameIssue(r.number, number)
+        && (special ? r.attachedVolumeId === special.id : !(r.attachedVolumeId && specials.has(r.attachedVolumeId))));
 }

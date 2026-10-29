@@ -19,7 +19,8 @@ import { WATCHED_DIR, isInsideLibraryRoot } from '@/lib/utils/paths';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
 import { issueFileName, issuePaddingFromSetting, seriesFolderSegments, type NamingInput } from '@/lib/utils/naming';
-import { ANNUAL_FILE_PATTERN } from '@/lib/utils/file-pattern';
+import { ANNUAL_FILE_PATTERN, SPECIAL_FILE_PATTERN } from '@/lib/utils/file-pattern';
+import { attachmentForFilename } from '@/lib/utils/attachment-name';
 import { readZipEntryNames } from '@/lib/utils/archive-pages';
 import { fixMagicNumberSync } from '@/lib/utils/archive-signature';
 import { storedFolderProblem } from '@/lib/utils/stored-folder';
@@ -806,23 +807,53 @@ export const Importer = {
     // renamer.rs / watched_sync.rs) so it reads correctly beside the main run from the first write.
     const isAnnualImport = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, rawFileName);
 
+    // #255: a Special is requested against its PARENT's volume under its own name (request-name.ts),
+    // so the import lands in the parent — where its "#1" is not the run's #1. The download takes the
+    // Special's pattern and its lane's row when the file's own ComicInfo carries the provider id of
+    // one of the series' Special rows — whatever the names say: by now activeDownloadName is the
+    // release's title, which needn't start with the Special's name ("Batman: Ark-M #1") — or else
+    // when the release name (or the file's own) names the Special. Otherwise, the run.
+    const specialLanes = series?.id && !isAnnualImport
+        ? await prisma.attachedVolume.findMany({ where: { seriesId: series.id, kind: 'SPECIAL' }, select: { id: true, name: true, kind: true } })
+            .catch(() => [] as Array<{ id: string; name: string | null; kind: string }>)
+        : [];
+    const specialIds = new Set(specialLanes.map(a => a.id));
+    const seriesRows = series?.id
+        ? await prisma.issue.findMany({
+            where: { seriesId: series.id },
+            select: { number: true, isAnnual: true, releaseDate: true, attachedVolumeId: true, metadataId: true, metadataSource: true },
+        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null; attachedVolumeId: string | null; metadataId: string | null; metadataSource: string | null }>)
+        : [];
+    const embeddedIssueId = xmlMeta?.metadataIssueId ? String(xmlMeta.metadataIssueId) : null;
+    const specialById = embeddedIssueId
+        ? seriesRows.find(r => r.attachedVolumeId && specialIds.has(r.attachedVolumeId)
+            && r.metadataId === embeddedIssueId && r.metadataSource === xmlMeta.metadataSource) ?? null
+        : null;
+    const specialMatch = specialById
+        ? { id: specialById.attachedVolumeId as string, kind: 'SPECIAL', number: specialById.number }
+        : specialLanes.length > 0
+            ? (attachmentForFilename(req.activeDownloadName || '', series?.name || '', specialLanes)
+                ?? attachmentForFilename(rawFileName, series?.name || '', specialLanes))
+            : null;
+    const specialLane = specialMatch ? specialLanes.find(a => a.id === specialMatch.id) ?? null : null;
+
     // #243: {IssueYear} is THIS issue's year - its release date in the library (the year
     // Standardize writes), else the file's own ComicInfo <Year>, else the series year. A monitored
     // download already has its row (the monitor's placeholder), so look it up before naming -
     // same identity as the dedupe below: number + annual domain.
     let issueReleaseDate: string | null = null;
     if (series?.id) {
-        const identity = xmlMeta?.number || extractedNum;
-        const rows = await prisma.issue.findMany({
-            where: { seriesId: series.id },
-            select: { number: true, isAnnual: true, releaseDate: true },
-        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null }>);
-        issueReleaseDate = rows.find(r => ((r.isAnnual ?? false) === isAnnualImport) && isSameIssue(r.number, identity))?.releaseDate ?? null;
+        const identity = xmlMeta?.number || specialMatch?.number || extractedNum;
+        issueReleaseDate = seriesRows.find(r => (specialLane
+            ? r.attachedVolumeId === specialLane.id
+            : ((r.isAnnual ?? false) === isAnnualImport) && !(r.attachedVolumeId && specialIds.has(r.attachedVolumeId)))
+            && isSameIssue(r.number, identity))?.releaseDate ?? null;
     }
-    const filePatToUse = isAnnualImport ? ANNUAL_FILE_PATTERN : (isManga ? mangaFilePattern : filePattern);
+    const filePatToUse = specialLane ? SPECIAL_FILE_PATTERN : isAnnualImport ? ANNUAL_FILE_PATTERN : (isManga ? mangaFilePattern : filePattern);
     const newFileName = issueFileName(filePatToUse, {
         ...seriesValues,
-        issueNumber: extractedNum,
+        ...(specialLane?.name?.trim() ? { series: specialLane.name.trim() } : {}),
+        issueNumber: specialLane ? (xmlMeta?.number || specialMatch?.number || extractedNum) : extractedNum,
         releaseDate: issueReleaseDate,
         comicInfoYear: xmlMeta?.issueYear,
         issueTitle: xmlMeta?.title,
@@ -913,6 +944,7 @@ export const Importer = {
 
       if (series?.id) {
          let issueNum = extractIssueNumber(fileName);
+         if (specialMatch) issueNum = specialMatch.number;
          if (xmlMeta?.number) issueNum = xmlMeta.number;
          // #203: annual domain — part of numbering identity, so the dedupe below never pairs
          // "Annual #1" with the plain #1. Signals: ComicInfo <Format> / <Number> shape / filename.
@@ -949,7 +981,11 @@ export const Importer = {
          const allSeriesIssues = await prisma.issue.findMany({
              where: { seriesId: series.id }
          });
-         const existingIssue = allSeriesIssues.find(i => (((i as any).isAnnual ?? false) === isAnnual) && isSameIssue(i.number, issueNum));
+         // A Special's download fills its lane's own row; anything else never takes a Special's row
+         // (#255). Not found: a new row, unbound, which the lane's name claim then binds.
+         const existingIssue = specialLane
+             ? allSeriesIssues.find(i => i.attachedVolumeId === specialLane.id && isSameIssue(i.number, issueNum))
+             : allSeriesIssues.find(i => (((i as any).isAnnual ?? false) === isAnnual) && !(i.attachedVolumeId && specialIds.has(i.attachedVolumeId)) && isSameIssue(i.number, issueNum));
          const targetMetaId = xmlMeta?.metadataIssueId ? xmlMeta.metadataIssueId.toString() : `unmatched_${Math.random()}`;
          const targetMetaSource = xmlMeta?.metadataIssueId ? xmlMeta.metadataSource : 'LOCAL';
          const matchState = xmlMeta?.metadataIssueId ? 'MATCHED' : 'UNMATCHED';

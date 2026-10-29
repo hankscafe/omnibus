@@ -107,6 +107,30 @@ describe('API Route: Rename Preview', () => {
         ]);
     });
 
+    // #255: a Special is promised the name both renamers give it — its own volume's, in the fixed
+    // Special pattern — beside the run's same number.
+    it("promises a Special its own volume's name beside the run", async () => {
+        mocks.issueFindMany.mockResolvedValue([
+            {
+                id: 'sp1', number: '1', name: 'A History of Arkham', releaseDate: '2026-01-14',
+                filePath: '/data/comics/DC Comics/Batman (2016)/Ark-M 01.cbz',
+                attachedVolume: { kind: 'SPECIAL', metadataSource: 'COMICVINE', name: 'Batman: Ark-M' },
+            },
+            {
+                id: 'issue_1', number: '1', name: null, releaseDate: '2016-06-15',
+                filePath: '/data/comics/DC Comics/Batman (2016)/Batman 1.cbz', attachedVolume: null,
+            },
+        ]);
+
+        const res = await post({ seriesIds: ['series_1'], folderPattern: '{Publisher}/{Series} ({Year})', filePattern: '{Series} - {Issue}' });
+        const { previews } = await res.json();
+
+        expect(previews.map((p: { newPath: string }) => p.newPath)).toEqual([
+            '/data/comics/DC Comics/Batman (2016)/Batman Ark-M #001 (2026).cbz',
+            '/data/comics/DC Comics/Batman (2016)/Batman - 001.cbz',
+        ]);
+    });
+
     it('refuses a non-admin', async () => {
         const { getToken } = await import('next-auth/jwt');
         vi.mocked(getToken).mockResolvedValueOnce({ id: 'u1', role: 'USER' } as never);

@@ -168,6 +168,26 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
             .toBe('/comics/DC Comics/Batman (2016)/Batman #001.cbz');
     });
 
+    // #255: a run file matched into a series never adopts an attached lane's row of the same number
+    // (a Special's "#1", a trade's "Vol. 1") — it would take over that row and its provider link.
+    it("never adopts a Special's row for the run's issue of the same number", async () => {
+        vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p) === '/unmatched/Batman 001.cbz');
+        vi.mocked(fs.promises.stat).mockResolvedValueOnce({ isFile: () => true } as any);
+        vi.mocked(fs.promises.readdir).mockResolvedValueOnce(['Batman 001.cbz'] as any);
+        const specialRow = { id: 'sp_1', number: '1', name: 'A History of Arkham', releaseDate: '2026-01-14' };
+        mocks.findManyIssues.mockImplementation(async ({ where }: any) =>
+            where?.isAnnual === false && where?.attachedVolumeId !== null ? [specialRow] : []);
+
+        const res = await POST(createReq({
+            oldFolderPath: '/unmatched/Batman 001.cbz', metadataId: '1234',
+            name: 'Batman', year: 2016, publisher: 'DC Comics', exactIssueNumber: '1',
+        }));
+
+        expect(res.status).toBe(200);
+        expect(mocks.updateIssue.mock.calls.some(c => c[0]?.where?.id === 'sp_1')).toBe(false);
+        expect(mocks.createIssue).toHaveBeenCalled();
+    });
+
     // The naming cleanup (#244): a matched file is named by the same rules as every other path. The
     // Smart Matcher used to leave {IssueTitle} in the name as literal text and pad only one digit.
     it.each([

@@ -8,6 +8,7 @@ import { countArchivePages, isPageCountable, countArchivePagesViaEngine, isEngin
 import { getPublicBaseUrl } from '@/lib/opds-base-url';
 import { atomFeed, feedContentType, feedUpdated, issueEntry } from '@/lib/opds-feed';
 import { progressByIssueId } from '@/lib/opds-progress';
+import { domainRank } from '@/lib/utils/issue-sort';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +28,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         where: { id: seriesId },
         include: {
             issues: {
-                where: { filePath: { not: null } }
+                where: { filePath: { not: null } },
+                // #255: a Special's title and its place after the run and the annuals.
+                include: { attachedVolume: { select: { kind: true, name: true } } },
             }
         }
     });
@@ -41,8 +44,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     }
 
     const sortedIssues = series.issues.sort((a, b) => {
-        // #203: annuals shelve AFTER the main run (same order as the series page), then by number.
-        const domain = ((a as any).isAnnual ? 1 : 0) - ((b as any).isAnnual ? 1 : 0);
+        // #203: annuals shelve AFTER the main run (same order as the series page), then (#255) the
+        // Specials, then by number.
+        const domain = domainRank({ isAnnual: a.isAnnual, isSpecial: a.attachedVolume?.kind === 'SPECIAL' })
+            - domainRank({ isAnnual: b.isAnnual, isSpecial: b.attachedVolume?.kind === 'SPECIAL' });
         if (domain !== 0) return domain;
         // Added the '-' character to the regex to preserve negative numbers
         const numA = parseFloat(a.number.replace(/[^0-9.-]/g, '')) || 0;

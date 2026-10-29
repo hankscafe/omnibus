@@ -1357,6 +1357,45 @@ mod tests {
         assert_eq!(bound.as_deref(), Some("att"));
     }
 
+    // #255: a SPECIAL lane is a one-shot's own volume. Its rows are never annuals, it claims a file
+    // that names it, and it never reaches for an annual row by number or by id — those passes are
+    // for local annual files.
+    #[tokio::test]
+    async fn a_special_lane_claims_its_file_by_name_and_never_takes_an_annual() {
+        let db = fixture_prisma("apply_special").await;
+        seed_absolute_batman(&db, false).await;
+        sqlx::query(r#"UPDATE "AttachedVolume" SET kind = 'SPECIAL', "volumeId" = '169970', name = 'Absolute Batman: Ark-M' WHERE id = 'att'"#)
+            .execute(&db.pool).await.unwrap();
+        // The Special's file, scanned as an unmatched run row; and an unbound annual #1 that even
+        // carries the Special's issue id (a mistagged file) — the shapes the annual passes take.
+        add_issue(&db, "sp_file", "parent", "1", "unmatched_sp", Some("/c/DC Comics/Absolute Batman (2024)/Absolute Batman Ark-M #001 (2026).cbz"), None).await;
+        add_issue(&db, "annual_row", "parent", "1", "1151955", Some("/c/DC Comics/Absolute Batman (2024)/Absolute Batman Annual 001.cbz"), None).await;
+        sqlx::query(r#"UPDATE "Issue" SET "isAnnual" = true WHERE id = 'annual_row'"#).execute(&db.pool).await.unwrap();
+        let special = Lane { kind: "SPECIAL", volume_id: "169970", ..lane(false) };
+
+        let summary = apply_lane(&db, &special, &LaneVolume::default(), &[lane_issue("1151955", "1")]).await.unwrap();
+        assert_eq!((summary.claimed, summary.created), (1, 0));
+        let row = |id: &'static str| {
+            let db = &db;
+            async move {
+                sqlx::query(r#"SELECT "attachedVolumeId", "metadataId", CAST("isAnnual" AS INTEGER) AS annual FROM "Issue" WHERE id = $1"#)
+                    .bind(id).fetch_one(&db.pool).await
+                    .map(|r| (r.get::<Option<String>, _>("attachedVolumeId"), r.get::<Option<String>, _>("metadataId"), r.get::<i64, _>("annual"))).unwrap()
+            }
+        };
+        assert_eq!(row("sp_file").await, (Some("att".to_string()), Some("1151955".to_string()), 0), "claimed by name, and not an annual");
+        assert_eq!(row("annual_row").await.0, None, "the annual is never taken");
+
+        // With nothing to claim, the lane's skeleton is a non-annual row too.
+        sqlx::query(r#"DELETE FROM "Issue" WHERE id = 'sp_file'"#).execute(&db.pool).await.unwrap();
+        let summary = apply_lane(&db, &special, &LaneVolume::default(), &[lane_issue("1151955", "1")]).await.unwrap();
+        assert_eq!((summary.claimed, summary.created), (0, 1));
+        let skeleton: (i64, Option<String>) = sqlx::query(r#"SELECT CAST("isAnnual" AS INTEGER) AS annual, "filePath" FROM "Issue" WHERE "attachedVolumeId" = 'att'"#)
+            .fetch_one(&db.pool).await.map(|r| (r.get("annual"), r.get("filePath"))).unwrap();
+        assert_eq!(skeleton, (0, None));
+        assert_eq!(row("annual_row").await.0, None);
+    }
+
     #[tokio::test]
     async fn the_lane_finds_its_rows_only_in_its_own_series() {
         let db = fixture_prisma("apply_guard").await;

@@ -562,7 +562,10 @@ export async function POST(request: Request) {
                     if (existingRecord) {
                         try {
                             domainRows = await prisma.issue.findMany({
-                                where: { seriesId: existingRecord.id, isAnnual: isAnnualFile },
+                                // #255: a run file never adopts an attached lane's row (a Special's "#1", a trade's "Vol. 1").
+                                where: isAnnualFile
+                                    ? { seriesId: existingRecord.id, isAnnual: true }
+                                    : { seriesId: existingRecord.id, isAnnual: false, attachedVolumeId: null },
                                 select: { id: true, number: true, name: true, releaseDate: true },
                             });
                         } catch (e) {

@@ -95,3 +95,32 @@ describe('POST /api/library/issue/link — the linked file name', () => {
         expect(String((moveFileSafe as any).mock.calls[0][1]).replace(/\\/g, '/')).toBe(`/comics/Batman (2016)/${expected}`);
     });
 });
+
+// #255: a file linked to a Special's row takes the name Standardize gives it — the Special's own
+// volume, in the fixed Special pattern — not the series template (it would read as the run's #N).
+describe('POST /api/library/issue/link — a Special', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        (prisma.issue.findUnique as any).mockImplementation(async ({ where }: any) => {
+            if (where.id === 'unm_1') return {
+                id: 'unm_1', seriesId: 's1', filePath: '/comics/Batman (2016)/ark-m 1.cbz', fileAddedAt: OLD, createdAt: BORN,
+                series: { id: 's1', name: 'Batman', publisher: 'DC Comics', year: 2016 },
+            };
+            if (where.id === 'tgt_sp') return {
+                id: 'tgt_sp', seriesId: 's1', number: '1', name: 'A History of Arkham', filePath: null, releaseDate: '2026-01-14', isAnnual: false,
+                attachedVolume: { kind: 'SPECIAL', metadataSource: 'COMICVINE', name: 'Batman: Ark-M', seriesId: 's1' },
+            };
+            return null;
+        });
+    });
+
+    it("names the file after the Special's own volume", async () => {
+        (prisma.systemSetting.findMany as any).mockResolvedValue([{ key: 'file_naming_pattern', value: '{Series} - {Issue}' }]);
+        const { moveFileSafe } = await import('@/lib/utils/safe-fs');
+
+        const res = await POST(req({ unmatchedId: 'unm_1', targetId: 'tgt_sp' }));
+
+        expect(res.status).toBe(200);
+        expect(String((moveFileSafe as any).mock.calls[0][1]).replace(/\\/g, '/')).toBe('/comics/Batman (2016)/Batman Ark-M #001 (2026).cbz');
+    });
+});

@@ -41,6 +41,8 @@ export interface KomgaIssueRow {
     attachedVolumeId?: string | null;
     /** The attached volume's name (#203 lane label) — the data layer lifts it off the relation. */
     attachmentName?: string | null;
+    /** The attached volume's kind (#255: a SPECIAL is its own domain), lifted the same way. */
+    attachmentKind?: string | null;
     name?: string | null;
     description?: string | null;
     releaseDate?: string | null;
@@ -179,12 +181,12 @@ export function titleSortKey(title: string): string {
  * back to "Series #N"; an annual says so; an attached row carries its volume's name (#203 lane
  * label — seven volumes' "Annual #1" must stay tellable apart in a flat chapter list).
  */
-export function bookTitle(issue: Pick<KomgaIssueRow, 'name' | 'number' | 'isAnnual' | 'attachmentName'>, seriesName: string): string {
+export function bookTitle(issue: Pick<KomgaIssueRow, 'name' | 'number' | 'isAnnual' | 'attachmentName' | 'attachmentKind'>, seriesName: string): string {
     const name = (issue.name ?? '').trim();
     const num = String(issue.number ?? '').trim();
     const lane = (issue.attachmentName ?? '').trim();
     if (lane) {
-        const base = `${laneLabel({ isAnnual: issue.isAnnual, attachmentName: lane })} #${num}`;
+        const base = `${laneLabel({ isAnnual: issue.isAnnual, isSpecial: issue.attachmentKind === 'SPECIAL', attachmentName: lane })} #${num}`;
         return name ? `${base}: ${name}` : base;
     }
     if (issue.isAnnual) {
@@ -194,18 +196,30 @@ export function bookTitle(issue: Pick<KomgaIssueRow, 'name' | 'number' | 'isAnnu
     return name || `${seriesName} #${num}`;
 }
 
+/** Where a row's attached-volume kind can come from: lifted by the data layer, or on the relation. */
+export interface LaneKindSource {
+    attachmentKind?: string | null;
+    attachedVolume?: { kind?: string | null } | null;
+}
+
+export function laneKindOf(issue: LaneKindSource): string | null {
+    return issue.attachmentKind ?? issue.attachedVolume?.kind ?? null;
+}
+
 export interface OrderedBook<T> {
     issue: T;
     /** 1-based place in the series' reading order — Komga's numberSort. */
     position: number;
 }
 
-/** The series page's default order: the run by number (fractions in place), then the annuals. */
-export function orderBooks<T extends Pick<KomgaIssueRow, 'number' | 'isAnnual' | 'releaseDate'>>(issues: readonly T[]): OrderedBook<T>[] {
+/** The series page's default order: the run by number (fractions in place), then the annuals, then
+ *  (#255) the Specials. A row's lane kind comes lifted (`attachmentKind`) or on its relation. */
+export function orderBooks<T extends Pick<KomgaIssueRow, 'number' | 'isAnnual' | 'releaseDate'> & LaneKindSource>(issues: readonly T[]): OrderedBook<T>[] {
     const keyed = issues.map(issue => ({
         issue,
         parsedNum: parseFloat(bookNumber(issue.number)),
         isAnnual: issue.isAnnual,
+        isSpecial: laneKindOf(issue) === 'SPECIAL',
         releaseDate: issue.releaseDate,
     }));
     return sortIssuesForDisplay(keyed, 'number_asc').map((k, idx) => ({ issue: k.issue, position: idx + 1 }));

@@ -74,14 +74,17 @@ function creditsOrSeries(own: string | null | undefined, seriesColumn: string | 
 
 /**
  * The issue entry's title (#218): `Series #N - Title`, reduced to `Series #N` when there is no story
- * title or the title only repeats the series and the number. An annual says so, matching the series page.
+ * title or the title only repeats the series and the number. An annual says so, matching the series page; a
+ * Special (#255) is titled after its own volume.
  */
 export function issueEntryTitle(
     seriesName: string,
-    issue: { number: string; name?: string | null; isAnnual?: boolean | null },
+    issue: { number: string; name?: string | null; isAnnual?: boolean | null; attachedVolume?: { kind?: string | null; name?: string | null } | null },
 ): string {
     const num = String(issue.number ?? '').trim();
-    const base = `${seriesName}${issue.isAnnual ? ' Annual' : ''} #${num}`;
+    // #255: a Special is titled after its own volume ("Absolute Batman: Ark-M #1"), never the run's "#1".
+    const special = issue.attachedVolume?.kind === 'SPECIAL' ? (issue.attachedVolume.name ?? '').trim() : '';
+    const base = special ? `${special} #${num}` : `${seriesName}${issue.isAnnual ? ' Annual' : ''} #${num}`;
     const name = (issue.name ?? '').trim();
     if (!name) return base;
     if (name.toLowerCase() === seriesName.trim().toLowerCase()) return base;
@@ -110,6 +113,7 @@ export interface IssueFeedRow {
     number: string;
     name?: string | null;
     isAnnual?: boolean | null;
+    attachedVolume?: { kind?: string | null; name?: string | null } | null;
     description?: string | null;
     filePath?: string | null;
     writers?: string | null;

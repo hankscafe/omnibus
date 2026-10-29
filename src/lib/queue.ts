@@ -16,6 +16,7 @@ import packageJson from '../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
+import { requestedIssueRow } from '@/lib/utils/attachment-name';
 import { issueNumberOf, settleDuplicateOnLink } from '@/lib/request-dedupe';
 import { processPageSweepChunk } from '@/lib/pages/page-sweep';
 import { SCHEDULE_SEED_KEY, newScheduleSeed, scheduleOffsetMs } from '@/lib/schedule-jitter';
@@ -276,8 +277,13 @@ export function initWorker() {
                                 const cleanReqName = (freshReq.activeDownloadName || name).replace(/\.\w+$/, '');
                                 const issueNumMatch = cleanReqName.match(/(?:#|issue\s*#?|ch(?:apter)?\s*\.?)\s*0*(-?\d+(?:\.\d+)?[a-zA-Z]?)/i);
                                 if (issueNumMatch) {
-                                    const allSeriesIssues = await prisma.issue.findMany({ where: { seriesId: localSeries.id } });
-                                    const issueSkeleton = allSeriesIssues.find(i => isSameIssue(i.number, issueNumMatch[1]));
+                                    const allSeriesIssues = await prisma.issue.findMany({
+                                        where: { seriesId: localSeries.id },
+                                        include: { attachedVolume: { select: { name: true, kind: true } } }
+                                    });
+                                    // #255: a Special's request carries the parent's volume — its "#1" is the
+                                    // Special's row, not the run's #1 (whose year would make the search drop it).
+                                    const issueSkeleton = requestedIssueRow(allSeriesIssues, issueNumMatch[1], cleanReqName, localSeries.name || '');
                                     if (issueSkeleton && issueSkeleton.releaseDate) {
                                         requestedIssueReleaseDate = issueSkeleton.releaseDate;
                                         const parsedIssueYear = issueSkeleton.releaseDate.split('-')[0];
@@ -1067,7 +1073,10 @@ export function initWorker() {
                     const localSeriesList = unreleasedVolumeIds.length
                         ? await prisma.series.findMany({
                             where: { OR: [{ metadataId: { in: unreleasedVolumeIds } }, { id: { in: unreleasedVolumeIds } }] },
-                            select: { id: true, metadataId: true, publisher: true, isManga: true, issues: { select: { number: true, releaseDate: true } } }
+                            select: {
+                                id: true, metadataId: true, name: true, publisher: true, isManga: true,
+                                issues: { select: { number: true, releaseDate: true, attachedVolumeId: true, attachedVolume: { select: { name: true, kind: true } } } }
+                            }
                         })
                         : [];
                     for (const req of unreleasedRequests) {
@@ -1078,7 +1087,8 @@ export function initWorker() {
                         if (!isNaN(reqNum)) {
                             const matchedSeries = localSeriesList.find(s => s.metadataId === req.volumeId || s.id === req.volumeId);
                             if (matchedSeries) {
-                                const skeleton = matchedSeries.issues.find((i: any) => parseFloat(i.number) === reqNum);
+                                // #255: the Special's own row when the request names one (search worker twin).
+                                const skeleton = requestedIssueRow(matchedSeries.issues, reqNumString, req.activeDownloadName || '', matchedSeries.name || '');
                                 if (skeleton && skeleton.releaseDate) {
                                     if (isReleasedYet(skeleton.releaseDate, skeleton.releaseDate)) {
                                         await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING' } });

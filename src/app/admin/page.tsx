@@ -1000,7 +1000,8 @@ const mappedRequests = requests.map(req => {
                                 </div>
                               </div>
                               
-                              <div className="flex items-center gap-2 w-full md:w-auto shrink-0 justify-end pt-1 md:pt-0 border-t md:border-t-0 border-border md:border-transparent mt-1 md:mt-0">
+                              {/* #260: wraps, so a narrow card never pushes buttons off its edges */}
+                              <div className="flex flex-wrap items-center gap-2 w-full md:w-auto shrink-0 justify-end pt-1 md:pt-0 border-t md:border-t-0 border-border md:border-transparent mt-1 md:mt-0">
                                   {isExhausted && (
                                       <div className="text-[10px] text-red-600 bg-red-50 dark:bg-red-900/20 px-2 py-1.5 rounded border border-red-200 dark:border-red-900 flex items-center gap-1 font-bold animate-pulse">
                                           <AlertTriangle className="w-3 h-3 hidden sm:block" /> Needs Admin
@@ -1014,7 +1015,9 @@ const mappedRequests = requests.map(req => {
                                       </Button>
                                   )}
                                   {req.status === 'MANUAL_DDL' && (
-                                      <div className="flex gap-1.5 w-full sm:w-auto">
+                                      // Two per line until lg: below it one row of all four is wider than the card.
+                                      // From md, beside the title, the pair takes only the width it needs.
+                                      <div className="grid grid-cols-2 gap-1.5 w-full md:w-auto lg:flex">
                                           <Button size="sm" variant="outline" asChild title="Open the GetComics download link in your browser to clear the Cloudflare check and download the file" className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground" onClick={(e) => e.stopPropagation()}>
                                               <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Download Manually</a>
                                           </Button>
@@ -1120,7 +1123,7 @@ const mappedRequests = requests.map(req => {
                             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full xl:w-auto mt-2 xl:mt-0">
                                 <div className="flex items-center gap-2 w-full sm:w-auto">
                                     <select 
-                                        className="flex-1 sm:w-56 h-12 sm:h-9 rounded-md border border-input bg-background px-3 py-1 text-sm sm:text-xs shadow-sm text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
+                                        className="flex-1 min-w-0 sm:w-56 h-12 sm:h-9 rounded-md border border-input bg-background px-3 py-1 text-sm sm:text-xs shadow-sm text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
                                         id={`select-${torrent.id}`}
                                     >
                                         <option value="">Link to request...</option>

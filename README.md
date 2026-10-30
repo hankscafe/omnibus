@@ -244,7 +244,8 @@ services:
 
       # Folders on separate drives? Replace the ./data line with one line per folder, all under
       # /data, and copy the same lines to the engine below. Moves between separate mounts are
-      # copies, so they're slower.
+      # copies, so they're slower. Watched and unmatched need two different folders: unmatched must
+      # not be the watched folder or inside it, or watched-folder imports stop.
       # - /path/to/comics:/data/comics
       # - /path/to/manga:/data/manga
       # - /path/to/downloads:/data/downloads

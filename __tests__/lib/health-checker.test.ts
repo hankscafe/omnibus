@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runSystemHealthCheck } from '@/lib/health-checker';
 import fs from 'fs-extra';
 import { pinPlatform } from '../helpers/platform';
+import { WATCHED_DIR, UNMATCHED_DIR } from '@/lib/utils/paths';
 
 // 1. Hoist Mocks
 const mocks = vi.hoisted(() => ({
@@ -12,7 +13,12 @@ const mocks = vi.hoisted(() => ({
     countDownloadClients: vi.fn().mockResolvedValue(1),
     log: vi.fn(),
     sendAlert: vi.fn().mockResolvedValue(true),
-    fetch: vi.fn()
+    fetch: vi.fn(),
+    unmatchedReachable: vi.fn().mockResolvedValue(false)
+}));
+
+vi.mock('@/lib/utils/ingest-folders', () => ({
+    unmatchedReachableFromWatched: mocks.unmatchedReachable
 }));
 
 // 2. Mock Dependencies
@@ -122,6 +128,42 @@ describe('System Health & Diagnostics', () => {
         result = await runSystemHealthCheck();
         const ok = result.checks.find(c => c.id === 'solver_unresponsive');
         expect(ok?.status).toBe('ok');
+    });
+
+    // #261: one host folder mounted as both /data/watched and /data/unmatched. Every sweep parked the
+    // files it couldn't import back into the folder it read them from - 1.4.9 renamed them
+    // "(copy 1)" each run, and the cross-mount move before that deleted them. The engine now refuses
+    // to sweep; the health check is where the admin learns why.
+    describe('Unmatched folder of its own (#261)', () => {
+        beforeEach(() => {
+            vi.mocked(fs.promises.statfs).mockResolvedValue({ bsize: 1024, bavail: 15 * 1024 * 1024 * 1024 / 1024 } as any);
+            vi.mocked(fs.promises.access).mockResolvedValue(undefined);
+            mocks.unmatchedReachable.mockReset();
+        });
+
+        it('is an error when unmatched is the watched folder or inside it, and says how to fix it', async () => {
+            mocks.unmatchedReachable.mockResolvedValue(true);
+
+            const result = await runSystemHealthCheck();
+
+            expect(mocks.unmatchedReachable).toHaveBeenCalledWith(WATCHED_DIR, UNMATCHED_DIR);
+            const check = result.checks.find(c => c.id === 'unmatched_dir');
+            expect(check?.status).toBe('error');
+            expect(check?.message).toContain(`(${UNMATCHED_DIR}) is the watched folder (${WATCHED_DIR}) or inside it`);
+            expect(check?.message).toContain('OMNIBUS_AWAITING_MATCH_DIR');
+            expect(result.checks.filter(c => c.id === 'unmatched_dir')).toHaveLength(1);
+            expect(result.status).toBe('DEGRADED');
+        });
+
+        it('stays ok when unmatched has a folder of its own', async () => {
+            mocks.unmatchedReachable.mockResolvedValue(false);
+
+            const result = await runSystemHealthCheck();
+
+            const check = result.checks.find(c => c.id === 'unmatched_dir');
+            expect(check?.status).toBe('ok');
+            expect(result.checks.filter(c => c.id === 'unmatched_dir')).toHaveLength(1);
+        });
     });
 
     it('should return a warning when a library folder is read-only', async () => {

@@ -13,6 +13,7 @@ import { WAITING_STATUSES } from '@/lib/request-status';
 import { describeMetronHealth, metronCalls24h, type MetronSnapshot } from '@/lib/metron/health';
 import { metronCredentialKind } from '@/lib/metron/credentials';
 import { IMPORTING_STALE_MS } from '@/lib/import-handoff';
+import { unmatchedReachableFromWatched } from '@/lib/utils/ingest-folders';
 
 export interface HealthCheckResult {
     id: string;
@@ -397,6 +398,16 @@ export async function runSystemHealthCheck() {
                 results.push({ id: check.id, name: check.name, status: 'warning', message: `${check.dir} exists but lacks Read/Write permissions. Imports through this folder will fail.` });
             }
         }
+    }
+    // #261: a file parked in unmatched is swept again when unmatched is the watched folder (one host
+    // folder mounted at both paths counts) or inside it. The engine refuses to sweep then; this is
+    // where the admin learns why.
+    if (await unmatchedReachableFromWatched(WATCHED_DIR, UNMATCHED_DIR)) {
+        const at = results.findIndex(r => r.id === 'unmatched_dir');
+        results[at] = {
+            id: 'unmatched_dir', name: 'Unmatched Directory', status: 'error',
+            message: `The unmatched folder (${UNMATCHED_DIR}) is the watched folder (${WATCHED_DIR}) or inside it, so every file parked there would be swept again. Watched-folder imports are stopped until it has a folder of its own: point OMNIBUS_AWAITING_MATCH_DIR at a different host folder than the watched one.`
+        };
     }
 
     // 10. Backup Status

@@ -181,7 +181,10 @@ where
 pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     let watched_dir = std::env::var("OMNIBUS_WATCHED_DIR").unwrap_or_else(|_| "/watched".to_string());
     let unmatched_dir = std::env::var("OMNIBUS_AWAITING_MATCH_DIR").unwrap_or_else(|_| "/unmatched".to_string());
-    
+    sweep_folders(db, watched_dir, unmatched_dir).await
+}
+
+async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Result<(i32, i32, String)> {
     std::fs::create_dir_all(&watched_dir)?;
     std::fs::create_dir_all(&unmatched_dir)?;
 
@@ -199,6 +202,18 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
 
     if files_to_process.is_empty() {
         return Ok((0, 0, "No files found in watched folder.".to_string()));
+    }
+
+    // #261: a file parked in unmatched must never be swept again. With unmatched the watched folder
+    // (one host folder mounted at both paths counts) or inside it, every file this sweep can't
+    // import comes back on the next run - 1.4.9 renamed it "(copy 1)" each time, and the cross-mount
+    // move before that deleted it. Nothing is converted, moved or imported until the folders differ.
+    if probe_reaches(Path::new(&watched_dir), Path::new(&unmatched_dir)) {
+        anyhow::bail!(
+            "The unmatched folder ({}) is the watched folder ({}) or inside it, so every file parked there would be swept again. Nothing was imported. Give unmatched a folder of its own: point OMNIBUS_AWAITING_MATCH_DIR at a different host folder than the watched one.",
+            unmatched_dir,
+            watched_dir
+        );
     }
 
     // ==========================================
@@ -771,6 +786,12 @@ fn robust_move(src: &Path, dest: &Path) -> Result<()> {
 /// destination under a temp name of its own, swap it into place, then remove the source. A failed
 /// copy or swap removes the staged copy and keeps the source.
 fn copy_then_replace(src: &Path, dest: &Path) -> Result<()> {
+    // #261: a destination that is the source under another path (one host folder mounted at two
+    // paths) is already in place. Swapping a copy into it and then removing the "source" would
+    // delete the only copy.
+    if same_file(src, dest) {
+        return Ok(());
+    }
     let tmp_dest = crate::converter::temp_sibling(dest, "move");
     let staged = (|| -> Result<()> {
         std::fs::copy(src, &tmp_dest)?;
@@ -787,6 +808,46 @@ fn copy_then_replace(src: &Path, dest: &Path) -> Result<()> {
     std::fs::remove_file(src)?;
 
     Ok(())
+}
+
+/// Whether two paths name one existing file: device + inode on Unix (two mounts of one folder
+/// agree there), the resolved paths elsewhere.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
+    }
+}
+
+/// #261: whether a file parked in `unmatched` would be swept again from `watched` - the two are one
+/// folder or unmatched sits inside watched. Paths can't show one host folder mounted at two paths,
+/// so a probe file is written to unmatched and looked for by the sweep's own walk of watched
+/// (hidden entries skipped). Parity: src/lib/utils/ingest-folders.ts.
+fn probe_reaches(watched: &Path, unmatched: &Path) -> bool {
+    // Not a dot-name (the walk skips those) and never a comic extension, so nothing else picks it up.
+    let name = format!("omnibus-unmatched-check-{}.tmp", uuid::Uuid::new_v4());
+    let probe = unmatched.join(&name);
+    if std::fs::write(&probe, b"").is_err() {
+        // Nothing can be parked in a folder nothing can be written to, so there is nothing to stop.
+        return false;
+    }
+    let seen = jwalk::WalkDir::new(watched)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| entry.file_name().to_str() == Some(name.as_str()));
+    let _ = std::fs::remove_file(&probe);
+    seen
 }
 
 /// The name a file takes in /unmatched when its own is already there: "<stem> (copy N).<ext>",
@@ -995,6 +1056,138 @@ mod tests {
         assert!(!src.exists(), "the source is removed after the move");
         assert_eq!(std::fs::read(&theirs).unwrap(), b"another mover's bytes", "another move's temp file is untouched");
         assert_eq!(names_in(&to), vec!["Batman 001.cbz", "Batman 001.tmp_move"], "no temp file of ours left behind");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A second path to the same folder: a symlink on Unix, a junction on Windows (no admin needed).
+    /// False when this machine can't make one.
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target)
+                .output().map(|o| o.status.success()).unwrap_or(false)
+        }
+    }
+
+    fn unlink_dir(link: &Path) {
+        // The link itself, never what it points at.
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(link);
+        #[cfg(windows)]
+        let _ = std::fs::remove_dir(link);
+    }
+
+    // ==== #261: one folder mounted at two paths. The cross-mount move copied the file, swapped the
+    // copy into the destination - the source itself under its other path - then removed the
+    // "source": the only copy. A link stands in for the second mount.
+
+    #[test]
+    fn copy_then_replace_leaves_a_file_that_is_already_its_own_destination() {
+        let (base, src, _to) = move_fixture();
+        let alias = base.join("alias");
+        if !link_dir(&base.join("watched"), &alias) {
+            eprintln!("skipped: this machine can't link a folder");
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        copy_then_replace(&alias.join("Batman 001.cbz"), &src).unwrap();
+
+        assert_eq!(std::fs::read(&src).unwrap(), b"the comic", "the only copy survives");
+        assert_eq!(names_in(&base.join("watched")), vec!["Batman 001.cbz"], "and nothing is staged beside it");
+        unlink_dir(&alias);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ==== #261: unmatched must be a folder the sweep doesn't read. The probe is written to unmatched
+    // and looked for the way the sweep walks watched, so one host folder mounted at both paths is
+    // seen too - paths alone can't show that.
+
+    fn probe_fixture() -> PathBuf {
+        let base = std::env::temp_dir().join(format!("omnibus_probe_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn the_probe_sees_unmatched_when_it_is_the_watched_folder() {
+        let base = probe_fixture();
+        let shared = base.join("quarantine");
+        std::fs::create_dir_all(&shared).unwrap();
+
+        assert!(probe_reaches(&shared, &shared));
+        assert!(names_in(&shared).is_empty(), "the probe is removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_probe_sees_unmatched_inside_the_watched_folder() {
+        let base = probe_fixture();
+        let watched = base.join("watched");
+        let unmatched = watched.join("deeper").join("unmatched");
+        std::fs::create_dir_all(&unmatched).unwrap();
+
+        assert!(probe_reaches(&watched, &unmatched));
+        assert!(names_in(&unmatched).is_empty(), "the probe is removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_probe_sees_one_folder_reached_by_two_paths() {
+        let base = probe_fixture();
+        let watched = base.join("quarantine");
+        std::fs::create_dir_all(&watched).unwrap();
+        let unmatched = base.join("unmatched");
+        if !link_dir(&watched, &unmatched) {
+            eprintln!("skipped: this machine can't link a folder");
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        assert!(probe_reaches(&watched, &unmatched));
+        assert!(names_in(&watched).is_empty(), "the probe is removed");
+        unlink_dir(&unmatched);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_probe_leaves_a_folder_of_its_own_alone() {
+        let base = probe_fixture();
+        let (watched, unmatched) = (base.join("watched"), base.join("unmatched"));
+        std::fs::create_dir_all(&watched).unwrap();
+        std::fs::create_dir_all(&unmatched).unwrap();
+        std::fs::write(watched.join("Batman 001.cbz"), b"x").unwrap();
+
+        assert!(!probe_reaches(&watched, &unmatched));
+        assert!(names_in(&unmatched).is_empty(), "the probe is removed");
+        assert_eq!(names_in(&watched), vec!["Batman 001.cbz"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_probe_ignores_unmatched_in_a_hidden_folder_the_sweep_never_reads() {
+        let base = probe_fixture();
+        let watched = base.join("watched");
+        let unmatched = watched.join(".unmatched");
+        std::fs::create_dir_all(&unmatched).unwrap();
+
+        assert!(!probe_reaches(&watched, &unmatched));
+        assert!(names_in(&unmatched).is_empty(), "the probe is removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_probe_that_cannot_be_written_finds_nothing() {
+        let base = probe_fixture();
+        let watched = base.join("watched");
+        std::fs::create_dir_all(&watched).unwrap();
+
+        // No unmatched folder to write into: parking would fail too, so there is nothing to stop.
+        assert!(!probe_reaches(&watched, &watched.join("missing")));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1484,6 +1677,77 @@ mod handoff_tests {
             .expect("read the row");
         assert_eq!(outcome, "UNMATCHED", "the batch settles instead of waiting on a PENDING row");
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    /// #261: one host folder as both watched and unmatched. Every sweep parked each file it couldn't
+    /// import into the folder it had just read it from - 1.4.9 renamed it "(copy 1)" each run, and
+    /// before that the cross-mount move deleted it. The sweep now refuses, says why, and touches
+    /// nothing: no conversion, no move, no rename.
+    #[tokio::test]
+    async fn a_sweep_refuses_when_unmatched_is_the_watched_folder_and_touches_nothing() {
+        let base = std::env::temp_dir().join(format!("omnibus_shared_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let db = handoff_db(&base).await;
+        let shared = base.join("quarantine");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("Batman 001.cbz"), b"no comicinfo").unwrap();
+        let shared_str = shared.to_string_lossy().to_string();
+
+        let err = sweep_folders(db, shared_str.clone(), shared_str.clone()).await.expect_err("the sweep refuses");
+
+        let msg = err.to_string();
+        assert!(msg.contains(&format!("({0}) is the watched folder ({0}) or inside it", shared_str)), "it says why: {}", msg);
+        assert!(msg.contains("OMNIBUS_AWAITING_MATCH_DIR"), "and how to fix it: {}", msg);
+        assert_eq!(names_in(&shared), vec!["Batman 001.cbz"], "the file keeps its name, nothing is left beside it");
+        assert_eq!(std::fs::read(shared.join("Batman 001.cbz")).unwrap(), b"no comicinfo");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn a_sweep_refuses_when_unmatched_is_inside_the_watched_folder() {
+        let base = std::env::temp_dir().join(format!("omnibus_nested_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let db = handoff_db(&base).await;
+        let watched = base.join("watched");
+        let unmatched = watched.join("unmatched");
+        std::fs::create_dir_all(&unmatched).unwrap();
+        std::fs::write(watched.join("Batman 001.cbz"), b"no comicinfo").unwrap();
+
+        let (watched_str, unmatched_str) = (watched.to_string_lossy().to_string(), unmatched.to_string_lossy().to_string());
+        let err = sweep_folders(db, watched_str.clone(), unmatched_str.clone()).await.expect_err("the sweep refuses");
+
+        assert!(err.to_string().contains(&format!("({}) is the watched folder ({}) or inside it", unmatched_str, watched_str)), "{}", err);
+        assert_eq!(names_in(&watched), vec!["Batman 001.cbz", "unmatched"]);
+        assert!(names_in(&unmatched).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The usual setup gets past the check. This fixture has no settings or library tables, so the
+    /// sweep stops at its first query - after the check, which is what this pins.
+    #[tokio::test]
+    async fn a_sweep_with_unmatched_of_its_own_gets_past_the_check() {
+        let base = std::env::temp_dir().join(format!("omnibus_apart_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let db = handoff_db(&base).await;
+        let (watched, unmatched) = (base.join("watched"), base.join("unmatched"));
+        std::fs::create_dir_all(&watched).unwrap();
+        std::fs::create_dir_all(&unmatched).unwrap();
+        std::fs::write(watched.join("Batman 001.cbz"), b"no comicinfo").unwrap();
+
+        let res = sweep_folders(db, watched.to_string_lossy().to_string(), unmatched.to_string_lossy().to_string()).await;
+
+        if let Err(e) = &res {
+            assert!(!e.to_string().contains("or inside it"), "a folder of its own is never refused: {}", e);
+        }
+        assert!(names_in(&unmatched).is_empty(), "the probe is removed");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

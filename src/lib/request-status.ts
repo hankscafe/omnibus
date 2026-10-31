@@ -88,8 +88,9 @@ export function requestStatusMatches(status: string, filter: string): boolean {
     return filter === 'ALL' || requestStatusLabel(status) === requestStatusLabel(filter);
 }
 
-/** Request Management's status filter, in the order a person looks for them. */
+/** Request Management's status filter, in the order a person looks for them: one per label, covering
+ *  every status the list can show (#263: Cancelled, Failed and Error had none). */
 export const REQUEST_STATUS_FILTERS: readonly { value: string; label: string }[] = [
     'PENDING_APPROVAL', 'PENDING', 'DOWNLOADING', 'MANUAL_DDL', 'IMPORTING', 'IMPORTED',
-    'UNRELEASED', 'AWAITING_RELEASE', 'NOT_FOUND', 'STALLED', 'NEEDS_REVIEW',
+    'UNRELEASED', 'AWAITING_RELEASE', 'NOT_FOUND', 'STALLED', 'FAILED', 'ERROR', 'NEEDS_REVIEW', 'CANCELLED',
 ].map(value => ({ value, label: requestStatusLabel(value) }));

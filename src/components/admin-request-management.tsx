@@ -121,6 +121,10 @@ export function AdminRequestManagement() {
   
   useEffect(() => { if (currentPage > totalPages) setCurrentPage(totalPages); }, [totalPages, currentPage])
 
+  // #263: a selection belongs to the filters it was made under. Changing one clears it, so Delete and
+  // Mark completed never reach a request the list no longer shows. The 15-second refresh keeps it.
+  useEffect(() => { setSelectedIds(new Set()); }, [searchQuery, statusFilter, userFilter])
+
   const paginatedRequests = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return sortedRequests.slice(start, start + pageSize);

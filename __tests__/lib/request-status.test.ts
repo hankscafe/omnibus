@@ -65,10 +65,11 @@ describe('request status labels', () => {
         expect(requestStatusMatches('STALLED', 'ALL')).toBe(true);
     });
 
+    // #263: Cancelled, Failed and Error rows were listed but had no filter, so they couldn't be picked
+    // out to delete. Every status the list can show now has one, and one filter per label.
     it("offers Request Management a filter for every status it can show, with the same labels", () => {
-        const values = REQUEST_STATUS_FILTERS.map(f => f.value);
-        for (const status of ['NOT_FOUND', 'AWAITING_RELEASE', 'MANUAL_DDL', 'UNRELEASED', 'STALLED', 'IMPORTING', 'NEEDS_REVIEW', 'PENDING_APPROVAL']) {
-            expect(values).toContain(status);
+        for (const status of KNOWN) {
+            expect(REQUEST_STATUS_FILTERS.filter(f => requestStatusMatches(status, f.value)), status).toHaveLength(1);
         }
         for (const f of REQUEST_STATUS_FILTERS) expect(f.label).toBe(requestStatusLabel(f.value));
     });

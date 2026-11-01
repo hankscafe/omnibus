@@ -114,6 +114,13 @@ describe('SmartMatchMetadataDialog keep/replace + issue title (#199 round 4 Beta
         expect(saved.writer).toBeUndefined();
         expect(saved.name).toBe('Provider Name');
     });
+
+    // The example under Issue Title was an Italian title ("L'alba dei morti viventi").
+    it('gives an English example for the issue title', () => {
+        render(<SmartMatchMetadataDialog {...baseProps} seed={seed} prefill={prefill} onSave={vi.fn()} />);
+
+        expect(screen.getByLabelText(/issue title/i).getAttribute('placeholder')).toBe('e.g. The Night Gwen Stacy Died (optional)');
+    });
 });
 
 describe('SmartMatchMetadataDialog issue-cover provenance (#199)', () => {

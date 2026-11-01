@@ -510,7 +510,7 @@ export default function SmartMatchMetadataDialog({
                   id="sm-issue-title"
                   value={issueTitle}
                   onChange={e => setIssueTitle(e.target.value)}
-                  placeholder="e.g. L'alba dei morti viventi (optional)"
+                  placeholder="e.g. The Night Gwen Stacy Died (optional)"
                   className="bg-background border-border h-9"
                 />
               </div>

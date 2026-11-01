@@ -15,7 +15,7 @@
 // its 1 s budget had to cover whole-page renders of 24 then 26 cards (measured 2026-09-29: page 2
 // requested at ~1.05 s, Series 26 on screen at ~2.9 s — slow, never stuck).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { ok, stubFetchRouter } from '../../helpers/fetch';
 
 const toast = vi.fn();
@@ -198,5 +198,52 @@ describe('LibraryPage empty state', { timeout: 15_000 }, () => {
         await act(async () => { render(<LibraryPage />); });
 
         screen.getByText('No comics found matching your criteria.');
+    });
+});
+
+// The grid card's hover actions (md+) were one row that never wrapped: an admin's four icons need
+// ~146px and a reading-list view adds a fifth, but the overlay has ~116-148px at 4-8 columns, so the
+// outer icons were cut off. They sit two per row under Read now, with Remove from List - the only
+// one that can be left over - on a row of its own.
+describe('LibraryPage grid card: hover actions fit the card', { timeout: 15_000 }, () => {
+    const classes = (el: Element) => el.className.split(/\s+/);
+
+    beforeEach(() => {
+        viewer.role = 'ADMIN';
+        localStorage.clear();
+        localStorage.setItem('omnibus-library-view', 'grid');
+        vi.stubGlobal('IntersectionObserver', class { observe() {} unobserve() {} disconnect() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
+        // Radix Select (the reading-list filter) calls these, and jsdom has neither.
+        window.HTMLElement.prototype.scrollIntoView = vi.fn();
+        window.HTMLElement.prototype.hasPointerCapture = vi.fn();
+        stubFetchRouter([
+            ['/api/library/follow', () => ok({ seriesIds: [] })],
+            ['/api/reading-lists', () => ok([{ id: 'rl1', name: 'Events', items: [] }])],
+            ['/api/library?', (u) => new URL(u, 'http://localhost').searchParams.get('namesOnly')
+                ? ok({ names: [] })
+                : ok({ series: [makeSeries(1)], hasMore: false, publishers: ['DC'] })],
+        ]);
+    });
+
+    it("an admin's four actions sit two per row under Read", async () => {
+        await act(async () => { render(<LibraryPage />); });
+
+        const actions = screen.getByLabelText('Add Series 01 to a reading list').parentElement!;
+        expect(classes(actions)).toEqual(expect.arrayContaining(['grid', 'grid-cols-2']));
+        within(actions).getByLabelText('Edit metadata for Series 01');
+        within(actions).getByLabelText('Refresh cover art for Series 01');
+        expect(within(actions).getAllByRole('button')).toHaveLength(4);
+    });
+
+    it('in a reading list, Remove from List takes a row of its own', async () => {
+        await act(async () => { render(<LibraryPage />); });
+        await act(async () => { fireEvent.keyDown(screen.getByRole('combobox', { name: 'Filter by reading list' }), { key: 'ArrowDown' }); });
+        await act(async () => { fireEvent.click(screen.getByRole('option', { name: 'Events' })); });
+
+        const remove = screen.getByLabelText('Remove Series 01 from current list');
+        expect(remove.parentElement).toBe(screen.getByLabelText('Add Series 01 to a reading list').parentElement);
+        expect(classes(remove)).toContain('col-span-2');
     });
 });

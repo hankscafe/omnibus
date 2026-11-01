@@ -223,15 +223,16 @@ export function ForYouCard({ item, layout, canRequest, busy, onMonitor, onDismis
         <p className="text-xs text-muted-foreground truncate">{item.startYear || '????'} · {item.publisher} · {item.countOfIssues} {item.countOfIssues === 1 ? 'issue' : 'issues'}</p>
         <p className="text-xs text-primary/90 mt-1 line-clamp-2"><Sparkles className="w-3 h-3 inline-block mr-1 -mt-0.5" />Because you collect {reason}</p>
       </div>
-      <div className="flex gap-2">
+      {/* Stacked, each full width: side by side they need ~205px, and a grid card is 146-225px. */}
+      <div className="flex flex-col gap-1.5">
         {canRequest && (
           <Button size="sm" aria-label={`Monitor ${item.name}`} disabled={busy} onClick={() => onMonitor(item)}
-            className="flex-1 h-8 text-[11px] font-black uppercase tracking-wider">
+            className="w-full h-8 text-[11px] font-black uppercase tracking-wider">
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Eye className="w-3.5 h-3.5 mr-1" /> Monitor</>}
           </Button>
         )}
         <Button size="sm" variant="outline" aria-label={`Not interested in ${item.name}`} disabled={busy} onClick={() => onDismiss(item)}
-          className="h-8 text-[11px] font-bold border-border text-muted-foreground hover:text-foreground px-2">
+          className="w-full h-8 text-[11px] font-bold border-border text-muted-foreground hover:text-foreground px-2">
           <EyeOff className="w-3.5 h-3.5 mr-1" /> Not interested
         </Button>
       </div>

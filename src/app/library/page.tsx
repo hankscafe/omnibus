@@ -1266,7 +1266,8 @@ function LibraryContent() {
                             {navigatingTo === navId ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 shrink-0" />}
                             <span>{navigatingTo === navId ? "Loading..." : "Read"}</span>
                         </Button>
-                        <div className="flex gap-1.5 w-full justify-center">
+                        {/* Two per row: four or five icons in one row are wider than the card at 4-8 columns. */}
+                        <div className="grid grid-cols-2 gap-1.5 w-full justify-items-center">
                           <FollowBell seriesId={item.id} seriesName={item.name} isFollowing={followedIds.has(item.id)} onToggled={handleFollowToggled} />
                           <Button
                             variant="secondary"
@@ -1296,7 +1297,7 @@ function LibraryContent() {
                             </Button>
                         )}
                         {activeCollection !== "ALL" && (
-                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="icon-sm" className="shadow-md" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }} title="Remove from List">
+                            <Button aria-label={`Remove ${item.name} from current list`} variant="destructive" size="icon-sm" className="shadow-md col-span-2" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveFromCollection(item.id); }} title="Remove from List">
                                 <Minus className="w-4 h-4" />
                             </Button>
                         )}

@@ -82,6 +82,23 @@ describe('/library/for-you', () => {
         expect(screen.getByText(/2 series/)).toBeTruthy();
     });
 
+    // Monitor was flex-1 beside a fixed-width Not interested, so in a 146-225px grid card it got
+    // whatever was left (~40-70px) and its label was crushed. The two stack, each full width, the way
+    // the front-page shelf's hover overlay already does.
+    it("the grid card stacks Monitor over Not interested, each full width", async () => {
+        setup([item('1', 'Avengers')]);
+        render(<ForYouPage />);
+        const card = await screen.findByTestId('for-you-card-1');
+        const monitor = within(card).getByRole('button', { name: 'Monitor Avengers' });
+        const dismiss = within(card).getByRole('button', { name: 'Not interested in Avengers' });
+        const classes = (el: Element) => el.className.split(/\s+/);
+
+        expect(monitor.parentElement).toBe(dismiss.parentElement);
+        expect(classes(monitor.parentElement!)).toContain('flex-col');
+        expect(classes(monitor)).toContain('w-full');
+        expect(classes(dismiss)).toContain('w-full');
+    });
+
     it("Monitor files the reading-list's monitor-only request payload and takes the card off the page", async () => {
         setup([item('158000', 'Avengers'), item('2', 'Other')]);
         render(<ForYouPage />);

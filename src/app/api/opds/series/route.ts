@@ -7,6 +7,7 @@ import { getAccessibleLibraryIds, canAccessLibraryId, seriesAccessWhere } from '
 import { getPublicBaseUrl } from '@/lib/opds-base-url';
 import { escapeXml } from '@/lib/utils/xml';
 import { atomFeed, feedContentType, feedUpdated, seriesEntry } from '@/lib/opds-feed';
+import { opdsFlavourFor } from '@/lib/opds-flavour';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,7 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const baseUrl = getPublicBaseUrl(req);
+    const flavour = opdsFlavourFor(req);
     const page = parseInt(url.searchParams.get('page') || '1');
     const limit = 50;
     const skip = (page - 1) * limit;
@@ -51,15 +53,15 @@ export async function GET(req: Request) {
     const hasNext = seriesList.length > limit;
     const items = hasNext ? seriesList.slice(0, limit) : seriesList;
 
-    const entries = items.map(s => seriesEntry(baseUrl, s)).join('');
+    const entries = items.map(s => seriesEntry(baseUrl, s, flavour)).join('');
 
     const scope = libraryId ? `library=${encodeURIComponent(libraryId)}` : '';
-    const pageHref = (p: number) => `${baseUrl}/api/opds/series?page=${p}${scope ? `&${scope}` : ''}`;
+    const pageHref = (p: number) => `${baseUrl}${flavour.base}/series?page=${p}${scope ? `&${scope}` : ''}`;
     const kind = 'application/atom+xml;profile=opds-catalog;kind=navigation';
     const links = [
         `<link rel="self" href="${escapeXml(pageHref(page))}" type="${kind}"/>`,
-        `<link rel="start" href="${baseUrl}/api/opds" type="${kind}"/>`,
-        `<link rel="up" href="${baseUrl}/api/opds" type="${kind}"/>`,
+        `<link rel="start" href="${baseUrl}${flavour.root}" type="${kind}"/>`,
+        `<link rel="up" href="${baseUrl}${flavour.root}" type="${kind}"/>`,
         hasNext ? `<link rel="next" href="${escapeXml(pageHref(page + 1))}" type="${kind}"/>` : '',
         page > 1 ? `<link rel="previous" href="${escapeXml(pageHref(page - 1))}" type="${kind}"/>` : '',
     ].filter(Boolean).join('\n  ');
@@ -72,6 +74,7 @@ export async function GET(req: Request) {
         links,
         entries,
         namespaces: ' xmlns:dc="http://purl.org/dc/elements/1.1/"',
+        flavour,
     });
 
     return new Response(xml, { headers: { 'Content-Type': feedContentType('navigation') } });

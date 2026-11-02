@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:pse="http://vaemendis.net/opds-pse/ns" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <id>urn:omnibus:recent</id>
+  <title>Recently Added</title>
+  <updated>2026-09-20T18:30:00.000Z</updated>
+  <author><name>Omnibus</name></author>
+<link rel="self" href="http://localhost/api/opds/sections/recent" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="up" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  
+  <entry>
+    <title>Tower Dungeon #1 - The Tower</title>
+    <id>urn:omnibus:issue:iss_1</id>
+    <updated>2026-09-01T10:00:00.000Z</updated>
+    <author><name>Tsutomu Nihei</name></author>
+    <dc:publisher>Kodansha</dc:publisher>
+    <content type="text">Chapter one.</content>
+    <link rel="http://opds-spec.org/image" href="http://localhost/api/opds/cover/issue/iss_1" type="image/webp"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="http://localhost/api/opds/cover/issue/iss_1?w=320" type="image/webp"/>
+    <link rel="http://vaemendis.net/opds-pse/stream" type="image/webp" href="http://localhost/api/opds/page/iss_1/{pageNumber}" pse:count="156" pse:lastRead="49" pse:lastReadDate="2026-09-20T18:30:00.000Z"/>
+    <link rel="http://opds-spec.org/acquisition" href="http://localhost/api/opds/download?issueId=iss_1" type="application/vnd.comicbook+zip"/>
+  </entry>
+  <entry>
+    <title>Tower Dungeon #2 - The Dragon</title>
+    <id>urn:omnibus:issue:iss_2</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <author><name>Tsutomu Nihei</name></author>
+    <dc:publisher>Kodansha</dc:publisher>
+    <content type="text">Chapter one.</content>
+    <link rel="http://opds-spec.org/image" href="http://localhost/api/opds/cover/issue/iss_2" type="image/webp"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="http://localhost/api/opds/cover/issue/iss_2?w=320" type="image/webp"/>
+    <link rel="http://vaemendis.net/opds-pse/stream" type="image/webp" href="http://localhost/api/opds/page/iss_2/{pageNumber}" pse:count="160" pse:lastRead="160" pse:lastReadDate="2026-09-20T18:30:00.000Z"/>
+    <link rel="http://opds-spec.org/acquisition" href="http://localhost/api/opds/download?issueId=iss_2" type="application/vnd.comicbook-rar"/>
+  </entry>
+</feed>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+  <ShortName>Omnibus</ShortName>
+  <Description>Search the Omnibus catalog</Description>
+  <InputEncoding>UTF-8</InputEncoding>
+  <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition" template="http://localhost/api/opds/search?q={searchTerms}"/>
+</OpenSearchDescription>

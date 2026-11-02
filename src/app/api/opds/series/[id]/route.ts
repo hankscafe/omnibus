@@ -7,6 +7,7 @@ import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-acces
 import { countArchivePages, isPageCountable, countArchivePagesViaEngine, isEngineCountable } from '@/lib/utils/archive-pages';
 import { getPublicBaseUrl } from '@/lib/opds-base-url';
 import { atomFeed, feedContentType, feedUpdated, issueEntry } from '@/lib/opds-feed';
+import { opdsFlavourFor } from '@/lib/opds-flavour';
 import { progressByIssueId } from '@/lib/opds-progress';
 import { domainRank } from '@/lib/utils/issue-sort';
 
@@ -20,6 +21,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         }
 
     const baseUrl = getPublicBaseUrl(req);
+    const flavour = opdsFlavourFor(req);
 
     const resolvedParams = await params;
     const seriesId = resolvedParams.id;
@@ -80,22 +82,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         entries.push(issueEntry(baseUrl, series, issue, {
             pageCount,
             progress: progress.get(issue.id) ?? null,
+            flavour,
         }));
     }
 
     const kind = 'application/atom+xml;profile=opds-catalog;kind=navigation';
     const xml = atomFeed({
-        id: `urn:omnibus:series:${series.id}`,
+        id: flavour.entryId('series', series.id),
         title: series.name,
         updated: feedUpdated(sortedIssues.map(i => i.updatedAt)),
         // A series' own feed is an acquisition feed: its entries are publications.
         links: [
-            `<link rel="self" href="${baseUrl}/api/opds/series/${series.id}" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>`,
-            `<link rel="start" href="${baseUrl}/api/opds" type="${kind}"/>`,
-            `<link rel="up" href="${baseUrl}/api/opds/series" type="${kind}"/>`,
+            `<link rel="self" href="${baseUrl}${flavour.base}/series/${series.id}" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>`,
+            `<link rel="start" href="${baseUrl}${flavour.root}" type="${kind}"/>`,
+            `<link rel="up" href="${baseUrl}${flavour.base}/series" type="${kind}"/>`,
         ].join('\n  '),
         entries: entries.join(''),
         namespaces: ' xmlns:pse="http://vaemendis.net/opds-pse/ns" xmlns:dc="http://purl.org/dc/elements/1.1/"',
+        flavour,
     });
 
     return new Response(xml, { headers: { 'Content-Type': feedContentType('acquisition') } });

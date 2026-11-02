@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
 import { getPublicBaseUrl } from '@/lib/opds-base-url';
 import { atomFeed, feedContentType, feedUpdated } from '@/lib/opds-feed';
+import { opdsFlavourFor } from '@/lib/opds-flavour';
 import { isSectionName, loadIssueSection, loadLibrariesSection, loadRecentSection } from '@/lib/opds-sections';
 
 export const dynamic = 'force-dynamic';
@@ -23,12 +24,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ name: st
         if (!isSectionName(name)) return new Response('Not Found', { status: 404 });
 
         const baseUrl = getPublicBaseUrl(req);
+        const flavour = opdsFlavourFor(req);
         const libs = await getAccessibleLibraryIds(auth.user.id, auth.user.role);
         const section = name === 'libraries'
-            ? await loadLibrariesSection(libs, baseUrl)
+            ? await loadLibrariesSection(libs, baseUrl, flavour)
             : name === 'recent'
-                ? await loadRecentSection(auth.user.id, libs, baseUrl)
-                : await loadIssueSection(name, auth.user.id, libs, baseUrl);
+                ? await loadRecentSection(auth.user.id, libs, baseUrl, flavour)
+                : await loadIssueSection(name, auth.user.id, libs, baseUrl, flavour);
 
         const navType = 'application/atom+xml;profile=opds-catalog;kind=navigation';
         const acqType = 'application/atom+xml;profile=opds-catalog;kind=acquisition';
@@ -37,12 +39,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ name: st
             title: section.title,
             updated: feedUpdated(section.stamps),
             links: [
-                `<link rel="self" href="${baseUrl}/api/opds/sections/${name}" type="${section.kind === 'navigation' ? navType : acqType}"/>`,
-                `<link rel="start" href="${baseUrl}/api/opds" type="${navType}"/>`,
-                `<link rel="up" href="${baseUrl}/api/opds" type="${navType}"/>`,
+                `<link rel="self" href="${baseUrl}${flavour.base}/sections/${name}" type="${section.kind === 'navigation' ? navType : acqType}"/>`,
+                `<link rel="start" href="${baseUrl}${flavour.root}" type="${navType}"/>`,
+                `<link rel="up" href="${baseUrl}${flavour.root}" type="${navType}"/>`,
             ].join('\n  '),
             entries: section.entries,
             namespaces: ' xmlns:pse="http://vaemendis.net/opds-pse/ns" xmlns:dc="http://purl.org/dc/elements/1.1/"',
+            flavour,
         });
 
         return new Response(xml, { headers: { 'Content-Type': feedContentType(section.kind) } });

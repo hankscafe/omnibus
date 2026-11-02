@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
 import { getPublicBaseUrl } from '@/lib/opds-base-url';
 import { atomFeed, feedContentType, feedUpdated, issueEntry, searchLink, seriesEntry } from '@/lib/opds-feed';
+import { opdsFlavourFor } from '@/lib/opds-flavour';
 import { searchIssueRows, searchSeriesRows, issuesInReadingOrder } from '@/lib/opds-search';
 import { progressByIssueId } from '@/lib/opds-progress';
 
@@ -22,6 +23,7 @@ export async function GET(req: Request) {
 
         const url = new URL(req.url);
         const baseUrl = getPublicBaseUrl(req);
+        const flavour = opdsFlavourFor(req);
         const terms = (url.searchParams.get('q') || '').trim();
 
         let seriesEntries = '';
@@ -40,11 +42,12 @@ export async function GET(req: Request) {
             // other issue feeds carry.
             const issues = issuesInReadingOrder(matchedIssues);
             const progress = await progressByIssueId(auth.user.id, issues.map((i) => i.id));
-            seriesEntries = series.map((s) => seriesEntry(baseUrl, s)).join('');
+            seriesEntries = series.map((s) => seriesEntry(baseUrl, s, flavour)).join('');
             issueEntries = issues
                 .map((i) => issueEntry(baseUrl, i.series, i, {
                     pageCount: i.pageCount ?? 0,
                     progress: progress.get(i.id) ?? null,
+                    flavour,
                 }))
                 .join('');
             stamps = [...series.map((s) => s.updatedAt), ...issues.map((i) => i.updatedAt)];
@@ -57,13 +60,14 @@ export async function GET(req: Request) {
             title: terms ? `Search: ${terms}` : 'Search',
             updated: feedUpdated(stamps),
             links: [
-                `<link rel="self" href="${baseUrl}/api/opds/search?q=${encodeURIComponent(terms)}" type="${acqType}"/>`,
-                `<link rel="start" href="${baseUrl}/api/opds" type="${navType}"/>`,
-                `<link rel="up" href="${baseUrl}/api/opds" type="${navType}"/>`,
-                searchLink(baseUrl),
+                `<link rel="self" href="${baseUrl}${flavour.base}/search?q=${encodeURIComponent(terms)}" type="${acqType}"/>`,
+                `<link rel="start" href="${baseUrl}${flavour.root}" type="${navType}"/>`,
+                `<link rel="up" href="${baseUrl}${flavour.root}" type="${navType}"/>`,
+                searchLink(baseUrl, flavour),
             ].join('\n  '),
             entries: seriesEntries + issueEntries,
             namespaces: ' xmlns:pse="http://vaemendis.net/opds-pse/ns" xmlns:dc="http://purl.org/dc/elements/1.1/"',
+            flavour,
         });
 
         return new Response(xml, { headers: { 'Content-Type': feedContentType('acquisition') } });

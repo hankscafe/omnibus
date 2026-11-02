@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:pse="http://vaemendis.net/opds-pse/ns" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <id>urn:omnibus:libraries</id>
+  <title>Libraries</title>
+  <updated>2026-09-20T18:30:00.000Z</updated>
+  <author><name>Omnibus</name></author>
+<link rel="self" href="http://localhost/api/opds/sections/libraries" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="up" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  
+  <entry>
+    <title>Manga</title>
+    <id>urn:omnibus:library:lib_1</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <content type="text">Manga</content>
+    <link rel="subsection" href="http://localhost/api/opds/series?library=lib_1" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  </entry>
+  <entry>
+    <title>Comics</title>
+    <id>urn:omnibus:library:lib_2</id>
+    <updated>1970-01-01T00:00:00.000Z</updated>
+    <content type="text">Comics</content>
+    <link rel="subsection" href="http://localhost/api/opds/series?library=lib_2" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  </entry>
+</feed>

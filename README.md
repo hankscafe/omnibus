@@ -590,7 +590,7 @@ A completely custom, zero-friction reading experience built natively into the br
 ### External Readers & OPDS Support
 Omnibus features a native OPDS 1.2 server with the **Page Streaming Extension (PSE)**, allowing you to read your server's library directly in your favorite mobile and tablet apps without downloading the entire file first. Streaming covers `.cbz` and `.cbr`/`.rar` alike — RAR pages are served through the Rust engine, so Panels and friends can read your unconverted archives too.
 
-The catalog's home screen has **All Series**, **Continue Reading**, **Recently Added**, **On Deck** and, when you can see more than one library, **Libraries**, and apps that support OPDS search can search it by series or issue title. Streaming apps that support it resume each issue on the page Omnibus last recorded for you - from the web reader, KOReader sync or Paperback. Downloads carry the file's real type and name, and interrupted downloads can resume.
+The catalog's home screen has **All Series**, **Continue Reading**, **Recently Added**, **On Deck** and, when you can see more than one library, **Libraries**, and apps that support OPDS search can search it by series or issue title. Streaming apps that support it resume each issue on the page Omnibus last recorded for you - from the web reader, KOReader sync, Paperback or Panels. Downloads carry the file's real type and name, and interrupted downloads can resume.
 
 **Supported OPDS Apps:**
 * **iOS / iPadOS:** Panels, Chunky
@@ -614,6 +614,14 @@ For security, external apps do not use your main account password.
 Save the settings (on the 0.8 source, tap **Try settings**) to confirm the connection. Series, covers, page streaming (CBZ and CBR alike), search, and the Recently added / Recently updated shelves work right away. To send finished issues back to Omnibus, add the series to your Paperback **Library** and link the source as its **tracker** (from the series' tracking options). Paperback then reports each chapter you finish in the background; it counts on your Omnibus profile like one finished in the web reader, and **On Deck** offers the next issue. Paperback only reports finished chapters — never the page you're on — so a half-read issue doesn't appear in **Continue Reading**.
 
 > On Paperback 0.9 the pre-installed **Paperback** source can't be linked as a tracker ("Method `getMangaProgress` is not implemented"), so it never syncs read status — use the **Komga** extension there.
+
+**Panels (iOS / iPadOS) with reading progress:** Panels reads the OPDS catalog above, but it only sends reading progress back to a server it recognizes as Komga. To have what you read in Panels land in Omnibus, add the server in **Library → Connect Service → OPDS** with the same catalog at its Komga-shaped address instead:
+   * **Host:** `http://<your-omnibus-ip>/komga/opds/v1.2/catalog`
+   * **Port:** `3000`
+   * **Username:** Your Omnibus username
+   * **Password:** An API Key (generated the same way as above)
+
+Panels then reports the page you're on when you close an issue, and marks it finished when you reach the end, for streamed and downloaded issues alike; the web reader and **Continue Reading** pick up from there. It works the other way too: Panels opens each issue on the page Omnibus last recorded, from any device, and shows its progress bar and **Completed** badge from it.
 
 ### Native e-Ink Sync (KOReader)
 Omnibus acts as a master "save state" for your physical e-ink devices (Kobo, Kindle, Pocketbook). Using our custom KOReader sync endpoints, your eReader will automatically ping Omnibus every time you turn a page, and you can view your real-time progress right on your Omnibus Profile!

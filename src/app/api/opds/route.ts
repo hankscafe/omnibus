@@ -6,6 +6,7 @@ import { getPublicBaseUrl } from '@/lib/opds-base-url';
 import { escapeXml } from '@/lib/utils/xml';
 import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
 import { feedContentType, feedUpdated, searchLink } from '@/lib/opds-feed';
+import { opdsFlavourFor } from '@/lib/opds-flavour';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +40,9 @@ export async function GET(req: Request) {
         }
 
         const baseUrl = getPublicBaseUrl(req);
+        // #262: the same catalog at /komga/opds/v1.2/catalog, shaped like Komga's.
+        const flavour = opdsFlavourFor(req);
+        const feeds = `${baseUrl}${flavour.base}`;
 
         // #218: the feed's <updated> is a real, stable timestamp rather than "now" — the newest series
         // the caller may see (which is what the "All Series" entry leads to). A client can then tell
@@ -60,24 +64,24 @@ export async function GET(req: Request) {
         // navigation feed. "Libraries" is only worth showing when there is more than one to choose
         // between.
         const entries = [
-            navEntry('All Series', 'urn:omnibus:series:all', 'Browse all comic and manga series in your library.', `${baseUrl}/api/opds/series`, updated),
-            navEntry('Continue Reading', 'urn:omnibus:continue', 'Pick up where you left off.', `${baseUrl}/api/opds/sections/continue`, updated, 'acquisition'),
-            navEntry('Recently Added', 'urn:omnibus:recent', 'The newest arrivals in your library.', `${baseUrl}/api/opds/sections/recent`, updated, 'acquisition'),
-            navEntry('On Deck', 'urn:omnibus:ondeck', 'The next issue after the one you finished.', `${baseUrl}/api/opds/sections/ondeck`, updated, 'acquisition'),
+            navEntry('All Series', 'urn:omnibus:series:all', 'Browse all comic and manga series in your library.', `${feeds}/series`, updated),
+            navEntry('Continue Reading', 'urn:omnibus:continue', 'Pick up where you left off.', `${feeds}/sections/continue`, updated, 'acquisition'),
+            navEntry('Recently Added', 'urn:omnibus:recent', 'The newest arrivals in your library.', `${feeds}/sections/recent`, updated, 'acquisition'),
+            navEntry('On Deck', 'urn:omnibus:ondeck', 'The next issue after the one you finished.', `${feeds}/sections/ondeck`, updated, 'acquisition'),
             libraryCount > 1
-                ? navEntry('Libraries', 'urn:omnibus:libraries', 'Browse one library at a time.', `${baseUrl}/api/opds/sections/libraries`, updated)
+                ? navEntry('Libraries', 'urn:omnibus:libraries', 'Browse one library at a time.', `${feeds}/sections/libraries`, updated)
                 : '',
         ].join('');
 
         const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <id>urn:omnibus:root</id>
+  <id>${flavour.rootId}</id>
   <title>Omnibus Catalog</title>
   <updated>${updated}</updated>
-  <author><name>Omnibus</name></author>
-  <link rel="self" href="${baseUrl}/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
-  <link rel="start" href="${baseUrl}/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
-  ${searchLink(baseUrl)}
+  ${flavour.author}
+  <link rel="self" href="${baseUrl}${flavour.root}" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start" href="${baseUrl}${flavour.root}" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  ${searchLink(baseUrl, flavour)}
   ${entries}
 </feed>`;
 

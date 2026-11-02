@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { loggerLog, loggerGetLevel } from '../helpers/setup-global';
 import { GET as getSeriesBooks } from '@/app/komga/api/v1/series/[id]/books/route';
 import { GET as getSeriesThumb } from '@/app/komga/api/v1/series/[id]/thumbnail/route';
+import { GET as getBook } from '@/app/komga/api/v1/books/[id]/route';
 import { GET as getBookPages } from '@/app/komga/api/v1/books/[id]/pages/route';
 import { GET as getBookPage } from '@/app/komga/api/v1/books/[id]/pages/[n]/route';
 import { GET as getBookThumb } from '@/app/komga/api/v1/books/[id]/thumbnail/route';
@@ -142,6 +143,56 @@ describe('Komga facade: GET /series/{id}/books', () => {
         expect((await getSeriesBooks(req('/series/x/books'), params({ id: 'x' }))).status).toBe(404);
         mocks.getAccessibleLibraryIds.mockResolvedValue(['lib_other']);
         expect((await getSeriesBooks(req('/series/ser_1/books'), params({ id: 'ser_1' }))).status).toBe(403);
+    });
+});
+
+// #262: Panels asks for the book each time it opens one, and before every progress report.
+describe('Komga facade: GET /books/{id}', () => {
+    beforeEach(() => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue());
+        mocks.prisma.series.findUnique.mockResolvedValue({ id: 'ser_1', name: 'Batman', libraryId: 'lib_1' });
+        mocks.prisma.issue.findMany.mockResolvedValue([
+            issue({ id: 'iss_2', number: '2' }),
+            issue({ id: 'iss_a1', number: '1', isAnnual: true, attachedVolumeId: 'att_1', attachedVolume: { name: 'Batman Annual' } }),
+            issue({ id: 'iss_1', number: '1' }),
+        ]);
+        mocks.prisma.readProgress.findMany.mockResolvedValue([{ issueId: 'iss_1', currentPage: 9, isCompleted: false, updatedAt: MTIME }]);
+    });
+
+    it('answers the same BookDto as the series\' book list: its place in the series and the reader\'s page', async () => {
+        const res = await getBook(req('/books/iss_1'), params({ id: 'iss_1' }));
+        expect(res.status).toBe(200);
+        const book = await res.json();
+        expect(book).toEqual(expect.objectContaining({ id: 'iss_1', seriesId: 'ser_1', seriesTitle: 'Batman', number: 1 }));
+        expect(book.media).toEqual(expect.objectContaining({ status: 'READY', pagesCount: 24 }));
+        expect(book.readProgress).toEqual(expect.objectContaining({ page: 10, completed: false }));
+        expect(mocks.prisma.readProgress.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({ userId: 'user_1' }));
+
+        const listed = await (await getSeriesBooks(req('/series/ser_1/books?unpaged=true'), params({ id: 'ser_1' }))).json();
+        expect(book).toEqual(listed.content.find((b: { id: string }) => b.id === 'iss_1'));
+
+        // Another book of the same series: its own place, not the first one's.
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue({ id: 'iss_a1', number: '1', isAnnual: true, attachedVolumeId: 'att_1', attachedVolume: { name: 'Batman Annual' } }));
+        const annual = await (await getBook(req('/books/iss_a1'), params({ id: 'iss_a1' }))).json();
+        expect(annual).toEqual(expect.objectContaining({ id: 'iss_a1', number: 3, readProgress: null }));
+    });
+
+    it('404s a book without a file: the facade lists only books it can serve', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue({ id: 'iss_9', number: '9', filePath: null }));
+        expect((await getBook(req('/books/iss_9'), params({ id: 'iss_9' }))).status).toBe(404);
+    });
+
+    it('404s an unknown book, 403s one in another library, 401s without a key', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValueOnce(null);
+        expect((await getBook(req('/books/x'), params({ id: 'x' }))).status).toBe(404);
+
+        mocks.getAccessibleLibraryIds.mockResolvedValueOnce([]);
+        expect((await getBook(req('/books/iss_1'), params({ id: 'iss_1' }))).status).toBe(403);
+
+        mocks.validateApiKey.mockResolvedValueOnce({ valid: false, user: null });
+        const res = await getBook(req('/books/iss_1'), params({ id: 'iss_1' }));
+        expect(res.status).toBe(401);
+        expect(res.headers.get('www-authenticate')).toMatch(/^Basic /);
     });
 });
 

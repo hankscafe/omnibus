@@ -311,6 +311,21 @@ describe('komga dto: books, pages, libraries, collections', () => {
         expect(read.readProgress).toEqual(expect.objectContaining({ page: 24, completed: true, readDate: mtime.toISOString() }));
     });
 
+    it('reports the 0-based ReadProgress index as Komga\'s 1-based page; a finished book reports its last page', () => {
+        const dtoAt = (progress: { currentPage: number; isCompleted: boolean }, pageCount = 24) =>
+            toBookDto(baseIssue({ pageCount }), series, { position: 1, sizeBytes: 0, mtime, progress: { ...progress, updatedAt: mtime } }).readProgress;
+
+        expect(dtoAt({ currentPage: 0, isCompleted: false })).toEqual(expect.objectContaining({ page: 1, completed: false }));
+        expect(dtoAt({ currentPage: 7, isCompleted: false })).toEqual(expect.objectContaining({ page: 8, completed: false }));
+        // Finished: the web reader and KOReader store the page count itself, which is the last page.
+        expect(dtoAt({ currentPage: 24, isCompleted: true })).toEqual(expect.objectContaining({ page: 24, completed: true }));
+        // A stale index past the end never reports a page the book doesn't have.
+        expect(dtoAt({ currentPage: 30, isCompleted: false })).toEqual(expect.objectContaining({ page: 24 }));
+        // Unknown page count: the index still converts, and Komga's page stays positive.
+        expect(dtoAt({ currentPage: 4, isCompleted: false }, 0)).toEqual(expect.objectContaining({ page: 5 }));
+        expect(dtoAt({ currentPage: 0, isCompleted: true }, 0)).toEqual(expect.objectContaining({ page: 1, completed: true }));
+    });
+
     it('lists pages 1-based as JPEGs (the source only checks mediaType against its supported list)', () => {
         const pages = toPageDtos(3);
         expect(pages.map(p => p.number)).toEqual([1, 2, 3]);

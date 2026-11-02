@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { useToast } from "@/components/ui/use-toast"
 import { 
   Search, Trash2, ExternalLink, Info, Loader2, ChevronsUpDown, AlertTriangle,
-  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, Users, CheckCircle2
+  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, Users, CheckCircle2,
+  ArrowUpNarrowWide, ArrowDownWideNarrow
 } from "lucide-react"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
@@ -21,6 +22,15 @@ import { COMPLETABLE_STATUSES, REQUEST_STATUS_FILTERS, requestStatusClass, reque
 // the Series Monitor can't tie to a series (a MyAnimeList import, a request against the other provider,
 // a trade). Not a running download or an import.
 const canComplete = (req: { status: string }) => COMPLETABLE_STATUSES.includes(req.status)
+
+// #265: the phone layout's Sort menu - the table's sortable columns, sharing its order.
+const SORT_COLUMNS = [
+  { key: 'createdAt', label: 'Requested' },
+  { key: 'seriesName', label: 'Series' },
+  { key: 'userName', label: 'User' },
+  { key: 'status', label: 'Status' },
+  { key: 'updatedAt', label: 'Completed' },
+]
 
 export function AdminRequestManagement() {
   const [requests, setRequests] = useState<any[]>([])
@@ -202,9 +212,20 @@ export function AdminRequestManagement() {
     } finally { setIsCompleting(false); }
   }
 
+  // #265: Select all covers the page on screen. It adds that page to the selection or takes it out, so
+  // picks on other pages stay; comparing the selection's size with the page's read page 2 as ticked
+  // after a full page 1, and replaced the selection on a shorter page.
+  const pageSelected = paginatedRequests.length > 0 && paginatedRequests.every(r => selectedIds.has(r.id))
+
   const toggleAll = () => {
-    if (selectedIds.size === paginatedRequests.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(paginatedRequests.map(r => r.id)));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const r of paginatedRequests) {
+        if (pageSelected) next.delete(r.id);
+        else next.add(r.id);
+      }
+      return next;
+    });
   }
 
   // --- Details Fetcher ---
@@ -361,7 +382,7 @@ export function AdminRequestManagement() {
             <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
               <tr>
                 <th style={{ width: colWidths.checkbox }} className="px-4 py-3 text-center relative group/th">
-                  <Checkbox checked={selectedIds.size === paginatedRequests.length && paginatedRequests.length > 0} onCheckedChange={toggleAll} />
+                  <Checkbox checked={pageSelected} onCheckedChange={toggleAll} />
                   <ResizeHandle colKey="checkbox" />
                 </th>
                 <th style={{ width: colWidths.seriesName }} className="relative group/th px-4 py-3 cursor-pointer hover:bg-muted" onClick={() => handleSort('seriesName')}>
@@ -467,6 +488,34 @@ export function AdminRequestManagement() {
 
         {/* --- MOBILE STACKED CARDS VIEW (Hidden on Desktop) --- */}
         <div className="md:hidden divide-y divide-border">
+          {/* #265: the table's header row holds Select all and sorting; the cards get them here. */}
+          {!loading && paginatedRequests.length > 0 && (
+            <div className="flex items-center justify-between gap-3 p-3 bg-muted/50">
+              <div className="flex items-center gap-2.5">
+                <Checkbox id="select-page-cards" className="w-5 h-5 rounded-sm" checked={pageSelected} onCheckedChange={toggleAll} />
+                <label htmlFor="select-page-cards" className="text-sm font-medium text-foreground cursor-pointer">Select all</label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select value={sortConfig.key} onValueChange={handleSort}>
+                  <SelectTrigger aria-label="Sort by" className="h-10 w-[140px] bg-background border-border shadow-sm font-medium">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                    {SORT_COLUMNS.map(c => (
+                      <SelectItem key={c.key} value={c.key} className="focus:bg-primary/10 focus:text-primary">{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline" size="icon" className="h-10 w-10 bg-background border-border shrink-0"
+                  aria-label={sortConfig.direction === 'asc' ? 'Sorted ascending' : 'Sorted descending'} title="Reverse the order"
+                  onClick={() => setSortConfig(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))}
+                >
+                  {sortConfig.direction === 'asc' ? <ArrowUpNarrowWide className="w-5 h-5" /> : <ArrowDownWideNarrow className="w-5 h-5" />}
+                </Button>
+              </div>
+            </div>
+          )}
           {loading ? (
             <div className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></div>
           ) : paginatedRequests.length === 0 ? (

@@ -8,6 +8,7 @@ import { decryptSecret } from '@/lib/encryption';
 import { qbitAuthHeaders } from '@/lib/download-clients';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
+import { createTransmissionRpc, getTransmissionTorrents, mapTransmissionDownloads } from '@/lib/transmission';
 
 export async function GET() {
   // NOTE: the per-client polling below duplicates DownloadService.getAllActiveDownloads()
@@ -68,6 +69,11 @@ export async function GET() {
                     clientName: client.name
                 }));
                 allDownloads.push(...mapped);
+            }
+            else if (client.type === 'transmission') {
+                const rpc = createTransmissionRpc(client, headers, 15000);
+                const torrents = await getTransmissionTorrents(rpc);
+                allDownloads.push(...mapTransmissionDownloads(torrents, categoryString, client.name));
             }
             else if (client.type === 'deluge') {
                 const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers, timeout: 15000 });

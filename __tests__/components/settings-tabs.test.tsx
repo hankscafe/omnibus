@@ -154,6 +154,7 @@ describe('Settings tabs (Phase 1 reorganization)', () => {
     it('DownloadsTab merges clients, hosters, and the relocated network/lifecycle sections', () => {
         render(<DownloadsTab s={mkBag()} />);
         expect(screen.getByText(/Add Download Client/i)).toBeInTheDocument();
+        expect(screen.getByText('Transmission')).toBeInTheDocument();
         expect(screen.getByText(/Enable Direct Downloads/i)).toBeInTheDocument();
         expect(screen.getAllByText(/Hoster Priority/i).length).toBeGreaterThan(0);
         expect(screen.getByText(/Cloudflare Bypass \(FlareSolverr \/ Byparr\)/i)).toBeInTheDocument();

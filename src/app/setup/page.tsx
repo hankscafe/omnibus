@@ -241,8 +241,8 @@ export default function SetupWizard() {
   };
 
   const openClientSetup = (type: string) => {
-      const protocols: Record<string, 'Torrent' | 'Usenet'> = { qbit: 'Torrent', deluge: 'Torrent', sab: 'Usenet', nzbget: 'Usenet' };
-      const names: Record<string, string> = { qbit: 'qBittorrent', deluge: 'Deluge', sab: 'SABnzbd', nzbget: 'NZBGet' };
+    const protocols: Record<string, 'Torrent' | 'Usenet'> = { qbit: 'Torrent', deluge: 'Torrent', transmission: 'Torrent', sab: 'Usenet', nzbget: 'Usenet' };
+    const names: Record<string, string> = { qbit: 'qBittorrent', deluge: 'Deluge', transmission: 'Transmission', sab: 'SABnzbd', nzbget: 'NZBGet' };
       setTestStates(prev => ({ ...prev, clients: 'idle' }));
       setEditingClient({
           id: `tmp_${Math.random().toString(36).substr(2, 9)}`,
@@ -814,10 +814,10 @@ export default function SetupWizard() {
                     <div className="space-y-4 pt-2">
                         <Label className="uppercase text-xs text-muted-foreground tracking-widest font-bold">Add New Client</Label>
                         <div className="grid grid-cols-2 gap-4 mb-4">
-                            {['qbit', 'sab', 'deluge', 'nzbget'].map(type => (
+                            {[['qbit', 'qBittorrent'], ['sab', 'SABnzbd'], ['deluge', 'Deluge'], ['transmission', 'Transmission'], ['nzbget', 'NZBGet']].map(([type, name]) => (
                                 <Button key={type} variant="outline" className="h-12 font-bold" onClick={() => openClientSetup(type)}>
                                     {configuredClients.some(c => c.type === type) && <CheckCircle2 className="w-4 h-4 text-green-400 mr-2"/>}
-                                    {type.toUpperCase()}
+                                    {name}
                                 </Button>
                             ))}
                         </div>
@@ -1276,13 +1276,14 @@ export default function SetupWizard() {
                   <div className="grid gap-4 py-4">
                       <div className="grid gap-2">
                           <Label className="text-foreground font-semibold">Server URL</Label>
-                          <Input value={editingClient.url} onChange={e => updateEditingClient('url', e.target.value)} placeholder="http://192.168.1.100:8080" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                          <Input value={editingClient.url} onChange={e => updateEditingClient('url', e.target.value)} placeholder={editingClient.type === 'transmission' ? 'http://192.168.1.100:9091' : 'http://192.168.1.100:8080'} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
+                          {editingClient.type === 'transmission' && <p className="text-[11px] text-muted-foreground">Omnibus uses Transmission&apos;s RPC endpoint at <code>/transmission/rpc</code> (default port 9091). Enter the base URL or full RPC URL.</p>}
                       </div>
 
                       <div className="grid gap-2">
                           <Label className="text-foreground font-semibold">Download Category / Label</Label>
                           <Input value={editingClient.category || ""} onChange={e => updateEditingClient('category', e.target.value)} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
-                          <p className="text-[11px] text-muted-foreground">Comma-separated list of categories to track. New downloads use the first one. <strong className="text-orange-500">Categories MUST exist in your client!</strong></p>
+                          <p className="text-[11px] text-muted-foreground">Comma-separated categories; the first is used for new downloads. qBittorrent creates categories automatically; Transmission 3+ supports labels (added with the torrent on 4+); Deluge requires its Label plugin.</p>
                       </div>
 
                       <div className="border-t border-border pt-4 mt-2">
@@ -1305,12 +1306,13 @@ export default function SetupWizard() {
                           </p>
                       </div>
 
-                      {['qbit', 'deluge', 'nzbget'].includes(editingClient.type) && (
+                      {['qbit', 'deluge', 'transmission', 'nzbget'].includes(editingClient.type) && (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 border-t border-border pt-4">
                               <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user} onChange={e => updateEditingClient('user', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                               <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass} onChange={e => updateEditingClient('pass', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                           </div>
                       )}
+                      {editingClient.type === 'transmission' && <p className="text-[11px] text-muted-foreground">Username and password are only needed when RPC authentication is enabled. Transmission supports per-torrent seed ratios, but not a total seeding-time limit.</p>}
                       {['sab'].includes(editingClient.type) && (
                           <div className="grid gap-2 mt-2 border-t border-border pt-4"><Label className="text-foreground font-semibold">API Key</Label><Input value={editingClient.apiKey || ""} onChange={e => updateEditingClient('apiKey', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                       )}

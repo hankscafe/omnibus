@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     axiosGet: vi.fn(),
     axiosPost: vi.fn(),
     findManyHeaders: vi.fn(),
+    downloadClientsFindMany: vi.fn(),
     settingFindUnique: vi.fn(),
     log: vi.fn()
 }));
@@ -25,6 +26,7 @@ vi.mock('axios', () => ({
 vi.mock('@/lib/db', () => ({
     prisma: {
         customHeader: { findMany: mocks.findManyHeaders },
+        downloadClient: { findMany: mocks.downloadClientsFindMany },
         systemSetting: { findUnique: mocks.settingFindUnique }
     }
 }));
@@ -198,8 +200,8 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
     });
 
     it('labels the Deluge torrent with the configured category so a shared instance can be filtered', async () => {
-        // qBit/SAB/NZBGet set their native category on add; Deluge has no category, so Omnibus tags the
-        // torrent with the configured category as a Label-plugin label. Without this, Omnibus's own comics
+        // qBit/SAB/NZBGet set native categories and Transmission uses native labels; Deluge needs the Label plugin.
+        // Omnibus applies the configured Deluge category as a plugin label. Without this, Omnibus's own comics
         // torrents would be unlabeled and the category-filtered active-downloads list would hide them.
         mocks.axiosPost
             .mockResolvedValueOnce({ headers: { 'set-cookie': ['_session_id=abc'] }, data: { result: true } })  // auth.login
@@ -253,6 +255,149 @@ describe('External Integrations: Download Clients (qBittorrent)', () => {
         ).rejects.toThrow('Deluge add failed');
     });
 });
+
+describe('External Integrations: Download Clients (Transmission)', () => {
+    const transmissionClient = {
+        type: 'transmission',
+        name: 'Transmission',
+        url: 'http://transmission:9091',
+        user: 'rpc-user',
+        pass: 'rpc-pass',
+        category: 'comics,manga',
+    };
+
+    beforeEach(() => {
+        mocks.axiosPost.mockReset();
+        mocks.axiosGet.mockReset();
+        mocks.findManyHeaders.mockResolvedValue([]);
+        mocks.downloadClientsFindMany.mockResolvedValue([]);
+        mocks.settingFindUnique.mockResolvedValue(null);
+    });
+
+    it('adds magnets with Transmission labels and ratio limits using the negotiated RPC dialect', async () => {
+        mocks.axiosPost
+            .mockRejectedValueOnce({ response: { status: 409, headers: {
+                'x-transmission-session-id': 'session-token',
+                'x-transmission-rpc-version': '6.0.0',
+            } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { rpc_version: 18 } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { torrent_added: { id: 8, hash_string: 'added-hash' } } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: {} } });
+
+        const result = await DownloadService.addDownload(
+            transmissionClient,
+            'magnet:?xt=urn:btih:transmission-hash',
+            'Batman #1',
+            90,
+            2.5,
+        );
+
+        expect(result.success).toBe(true);
+        const [addUrl, addBody] = mocks.axiosPost.mock.calls[2];
+        expect(addUrl).toBe('http://transmission:9091/transmission/rpc');
+        expect(addBody).toMatchObject({
+            method: 'torrent_add',
+            params: {
+                filename: 'magnet:?xt=urn:btih:transmission-hash',
+                labels: ['comics'],
+            },
+        });
+        expect(addBody.params.seed_ratio_limit).toBeUndefined();
+        expect(mocks.axiosPost.mock.calls[2][2].auth).toEqual({ username: 'rpc-user', password: 'rpc-pass' });
+        expect(mocks.axiosPost.mock.calls[3][1]).toMatchObject({
+            method: 'torrent_set',
+            params: { ids: ['added-hash'], seed_ratio_limit: 2.5, seed_ratio_mode: 1 },
+        });
+        expect(mocks.axiosPost.mock.calls[3][1].params.seed_idle_limit).toBeUndefined();
+    });
+
+    it('sends torrent-file bytes as base64 metainfo instead of a URL', async () => {
+        const torrentBytes = Buffer.from('torrent metadata bytes');
+        mocks.axiosGet.mockResolvedValueOnce({ data: torrentBytes });
+        mocks.axiosPost
+            .mockRejectedValueOnce({ response: { status: 409, headers: {
+                'x-transmission-session-id': 'session-token',
+                'x-transmission-rpc-version': '6.0.0',
+            } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { rpc_version: 18 } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { torrent_added: { id: 9 } } } });
+
+        const result = await DownloadService.addDownload(
+            transmissionClient,
+            'https://downloads.example.com/comic.torrent',
+            'Batman #1',
+            0,
+            0,
+        );
+
+        expect(result.success).toBe(true);
+        expect(mocks.axiosPost.mock.calls[2][1].params).toEqual({ metainfo: torrentBytes.toString('base64'), labels: ['comics'] });
+    });
+
+    it('sets labels after adding on Transmission 3.x, where torrent_add has no labels argument', async () => {
+        mocks.axiosPost
+            .mockRejectedValueOnce({ response: { status: 409, headers: { 'x-transmission-session-id': 'legacy-token' } } })
+            .mockResolvedValueOnce({ data: { result: 'success', arguments: { 'rpc-version': 16 } } })
+            .mockResolvedValueOnce({ data: { result: 'success', arguments: { 'torrent-added': { id: 7, hashString: 'v3-hash' } } } })
+            .mockResolvedValueOnce({ data: { result: 'success', arguments: {} } });
+
+        const result = await DownloadService.addDownload(
+            transmissionClient,
+            'magnet:?xt=urn:btih:v3',
+            'Batman #1',
+            0,
+            0,
+        );
+
+        expect(result.success).toBe(true);
+        expect(mocks.axiosPost.mock.calls[2][1]).toEqual({
+            method: 'torrent-add', arguments: { filename: 'magnet:?xt=urn:btih:v3' }, tag: 2,
+        });
+        expect(mocks.axiosPost.mock.calls[3][1]).toEqual({
+            method: 'torrent-set', arguments: { ids: ['v3-hash'], labels: ['comics'] }, tag: 3,
+        });
+    });
+
+    it('removes torrents by stable hash and deletes their local data', async () => {
+        mocks.axiosPost
+            .mockRejectedValueOnce({ response: { status: 409, headers: {
+                'x-transmission-session-id': 'session-token',
+                'x-transmission-rpc-version': '6.0.0',
+            } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: {} } });
+
+        const result = await DownloadService.removeDownload(transmissionClient, 'stable-torrent-hash');
+
+        expect(result).toBe(true);
+        expect(mocks.axiosPost.mock.calls[1][1]).toMatchObject({
+            method: 'torrent_remove',
+            params: { ids: ['stable-torrent-hash'], delete_local_data: true },
+        });
+    });
+
+    it('lists only configured Transmission labels and maps RPC progress and statuses', async () => {
+        mocks.downloadClientsFindMany.mockResolvedValue([transmissionClient]);
+        mocks.axiosPost
+            .mockRejectedValueOnce({ response: { status: 409, headers: {
+                'x-transmission-session-id': 'session-token',
+                'x-transmission-rpc-version': '6.0.0',
+            } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { rpc_version: 18 } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { torrents: [
+                { id: 1, hash_string: 'comic-hash', name: 'Batman #1', percent_done: 0.5, total_size: 1048576, status: 4, labels: ['comics'] },
+                { id: 2, hash_string: 'other-hash', name: 'Other', percent_done: 0.1, total_size: 1048576, status: 4, labels: ['movies'] },
+            ] } } });
+
+        const downloads = await DownloadService.getAllActiveDownloads();
+
+        expect(downloads).toEqual([{
+            id: 'comic-hash', name: 'Batman #1', progress: '50.0', status: 'Downloading',
+            clientName: 'Transmission', size: '1.00 MB',
+        }]);
+        expect(mocks.axiosPost.mock.calls[2][1].params.fields).toContain('labels');
+    });
+});
+
 describe('Issue #197: Prowlarr NZB handoff fetches content instead of handing NZBGet a URL', () => {
     const nzbgetClient = {
         type: 'nzbget',

@@ -36,6 +36,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {[
                                 { id: 'qbit', name: 'qBittorrent', protocol: 'Torrent' },
+                                { id: 'transmission', name: 'Transmission', protocol: 'Torrent' },
                                 { id: 'sab', name: 'SABnzbd', protocol: 'Usenet' },
                                 { id: 'deluge', name: 'Deluge', protocol: 'Torrent' },
                                 { id: 'nzbget', name: 'NZBGet', protocol: 'Usenet' }

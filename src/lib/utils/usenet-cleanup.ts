@@ -5,7 +5,7 @@
 // NZBGet/SABnzbd it just strands the source file and its job folder forever. This helper removes
 // exactly the path the importer read from, and nothing else.
 //
-// Torrent clients (qbit/deluge) must never reach this — deleting their payload breaks seeding.
+// Torrent clients (qbit/deluge/Transmission) must never reach this — deleting their payload breaks seeding.
 // Callers gate on client type; the type check here is defense in depth, not the primary gate.
 
 import fs from 'fs-extra';

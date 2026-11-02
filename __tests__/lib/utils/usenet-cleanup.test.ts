@@ -49,7 +49,7 @@ describe('Usenet Cleanup: deleteUsenetSource (issue #198)', () => {
     });
 
     it('refuses torrent client types — deleting a torrent payload breaks seeding', async () => {
-        for (const clientType of ['qbit', 'deluge', null, undefined]) {
+        for (const clientType of ['qbit', 'deluge', 'transmission', null, undefined]) {
             expect(await deleteUsenetSource({ ...baseOpts, clientType })).toBe(false);
         }
         expect(fs.remove).not.toHaveBeenCalled();

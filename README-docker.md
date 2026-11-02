@@ -25,7 +25,7 @@ Built with Next.js 15, Tailwind v4, Prisma, and a serverless SQLite engine, Omni
 ## Core Features
 
   * **Dual Metadata Engines:** Choose between ComicVine (default) or Metron.Cloud as your primary source to automatically pull high-res covers, synopses, and creator credits. 
-  * **All-In-One Pipeline:** Discover new releases, request missing issues, send them to your download clients (qBittorrent, SABnzbd, etc.), and read them—all from one interface.
+  * **All-In-One Pipeline:** Discover new releases, request missing issues, send them to your download clients (qBittorrent, Transmission, Deluge, SABnzbd, etc.), and read them—all from one interface.
   * **Native Web Reader:** Blazing fast, zero-friction browser reading for `.cbz`, `.cbr`/`.rar` (read natively by the Rust engine — auto-conversion to cbz stays optional), and `.epub` archives with LTR, RTL (Manga), and Webtoon scroll support.
   * **Automated Organization & Smart Matcher:** Auto-extracts, renames, and routes downloaded files to your mapped library directories. Unmatched loose files can be instantly organized using the AI-assisted Smart Matcher with support for both ComicVine and Metron IDs.
   * **Smart Reading Lists:** Instantly auto-build reading orders by pasting a ComicVine or Metron Event ID. Easily import external lists from CBL files, CSVs (League of Comic Geeks), AniList, or MyAnimeList.
@@ -51,7 +51,7 @@ The database is a single SQLite file in your config folder, so there is no datab
 
 * **Docker with Docker Compose** on the machine that will run Omnibus. Docker Desktop (Windows/macOS) includes Compose; on Linux, follow [Docker's install guide](https://docs.docker.com/engine/install/) and check that `docker compose version` works.
 * **A free ComicVine API key** — Omnibus' default source for covers, synopses, and issue lists. Create an account at [comicvine.gamespot.com](https://comicvine.gamespot.com/), then open [comicvine.gamespot.com/api](https://comicvine.gamespot.com/api/) to see your key. ([Metron.Cloud](https://metron.cloud/) is an optional second source.) Both have their own terms of use; see [Metadata Sources, Licenses & Covers](https://github.com/hankscafe/omnibus#metadata-sources-licenses--covers).
-* **Optional — add them whenever you like:** Prowlarr (indexer search), a download client (qBittorrent, SABnzbd, …), FlareSolverr. You don't need any of them to organize and read the comics you already have.
+* **Optional — add them whenever you like:** Prowlarr (indexer search), a download client (qBittorrent, Transmission, Deluge, SABnzbd, …), FlareSolverr. You don't need any of them to organize and read the comics you already have.
 
 ### Step 1 — Make the folders
 

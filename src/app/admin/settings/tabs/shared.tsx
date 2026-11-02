@@ -61,7 +61,7 @@ export interface ScoringRule { id: string; term: string; score: number; }
 export interface ClientConfig {
     id: string;
     name: string;
-    type: 'qbit' | 'sab' | 'deluge' | 'nzbget';
+    type: 'qbit' | 'sab' | 'deluge' | 'transmission' | 'nzbget';
     protocol: 'Torrent' | 'Usenet';
     url: string;
     user: string;

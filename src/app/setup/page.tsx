@@ -1283,7 +1283,7 @@ export default function SetupWizard() {
                       <div className="grid gap-2">
                           <Label className="text-foreground font-semibold">Download Category / Label</Label>
                           <Input value={editingClient.category || ""} onChange={e => updateEditingClient('category', e.target.value)} placeholder="e.g. comics, manga" className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" />
-                          <p className="text-[11px] text-muted-foreground">Comma-separated categories; the first is used for new downloads. qBittorrent creates categories automatically; Transmission 3+ supports labels (added with the torrent on 4+); Deluge requires its Label plugin.</p>
+                          <p className="text-[11px] text-muted-foreground">Comma-separated categories; the first is used for new downloads. qBittorrent creates categories automatically; Transmission 3+ supports labels (added with the torrent on 4+); Deluge requires its Label plugin. Categories MUST already exist in SABnzbd and NZBGet; Omnibus filters their queues by category.</p>
                       </div>
 
                       <div className="border-t border-border pt-4 mt-2">

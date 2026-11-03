@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import axios from 'axios';
 import { createTransmissionRpc, getTransmissionTorrents, transmissionRpcUrl } from '@/lib/transmission';
 
 const mocks = vi.hoisted(() => ({ post: vi.fn() }));
@@ -8,6 +7,33 @@ vi.mock('axios', () => ({ default: { post: mocks.post } }));
 
 describe('Transmission RPC', () => {
     beforeEach(() => mocks.post.mockReset());
+
+    it('rejects JSON-RPC errors', async () => {
+        mocks.post.mockResolvedValueOnce({ data: {
+            jsonrpc: '2.0', error: { code: -32602, message: 'Invalid params' },
+        } });
+
+        const rpc = createTransmissionRpc({ url: 'http://transmission:9091' }, {}, 5000);
+
+        await expect(rpc('torrent_add')).rejects.toThrow('Transmission RPC torrent_add failed: Invalid params');
+    });
+
+    it('rejects unsuccessful legacy replies', async () => {
+        mocks.post.mockResolvedValueOnce({ data: { result: 'invalid or corrupt torrent file' } });
+
+        const rpc = createTransmissionRpc({ url: 'http://transmission:9091' }, {}, 5000);
+
+        await expect(rpc('torrent_add')).rejects.toThrow('Transmission RPC torrent_add failed: invalid or corrupt torrent file');
+    });
+
+    it('rejects a session challenge without a session ID', async () => {
+        mocks.post.mockRejectedValueOnce({ response: { status: 409, headers: {} } });
+
+        const rpc = createTransmissionRpc({ url: 'http://transmission:9091' }, {}, 5000);
+
+        await expect(rpc('session_get')).rejects.toThrow('Transmission returned HTTP 409 without an X-Transmission-Session-Id header.');
+        expect(mocks.post).toHaveBeenCalledTimes(1);
+    });
 
     it('retries the 409 session challenge using JSON-RPC 2.0 for Transmission 4.1+', async () => {
         mocks.post

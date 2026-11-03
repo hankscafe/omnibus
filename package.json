@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run --pool=forks",
+    "test:transmission": "node scripts/test-transmission.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

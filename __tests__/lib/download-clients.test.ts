@@ -311,6 +311,27 @@ describe('External Integrations: Download Clients (Transmission)', () => {
         expect(mocks.axiosPost.mock.calls[3][1].params.seed_idle_limit).toBeUndefined();
     });
 
+    it.each([
+        { isManga: false, label: 'comics' },
+        { isManga: true, label: 'manga' },
+    ])('adds the $label label directly at RPC 17 without torrent_set', async ({ isManga, label }) => {
+        mocks.axiosPost
+            .mockRejectedValueOnce({ response: { status: 409, headers: { 'x-transmission-session-id': 'v4-token' } } })
+            .mockResolvedValueOnce({ data: { result: 'success', arguments: { 'rpc-version': 17 } } })
+            .mockResolvedValueOnce({ data: { result: 'success', arguments: { 'torrent-added': { id: 7, hashString: 'v4-hash' } } } });
+
+        const result = await DownloadService.addDownload(
+            transmissionClient, 'magnet:?xt=urn:btih:v4', 'Comic #1', 0, 0, isManga,
+        );
+
+        expect(result.success).toBe(true);
+        expect(mocks.axiosPost.mock.calls[2][1]).toEqual({
+            method: 'torrent-add', arguments: { filename: 'magnet:?xt=urn:btih:v4', labels: [label] }, tag: 2,
+        });
+        expect(mocks.axiosPost).toHaveBeenCalledTimes(3);
+        expect(mocks.axiosPost.mock.calls.some(([, body]) => body.method === 'torrent-set')).toBe(false);
+    });
+
     it('sends torrent-file bytes as base64 metainfo instead of a URL', async () => {
         const torrentBytes = Buffer.from('torrent metadata bytes');
         mocks.axiosGet.mockResolvedValueOnce({ data: torrentBytes });
@@ -373,6 +394,20 @@ describe('External Integrations: Download Clients (Transmission)', () => {
             method: 'torrent_remove',
             params: { ids: ['stable-torrent-hash'], delete_local_data: true },
         });
+    });
+
+    it('lists every torrent when no labels are in use', async () => {
+        mocks.downloadClientsFindMany.mockResolvedValue([transmissionClient]);
+        mocks.axiosPost
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { rpc_version: 18 } } })
+            .mockResolvedValueOnce({ data: { jsonrpc: '2.0', result: { torrents: [
+                { id: 1, hash_string: 'comic-hash', name: 'Comic', labels: [] },
+                { id: 2, hash_string: 'other-hash', name: 'Other' },
+            ] } } });
+
+        const downloads = await DownloadService.getAllActiveDownloads();
+
+        expect(downloads.map(download => download.id)).toEqual(['comic-hash', 'other-hash']);
     });
 
     it('lists only configured Transmission labels and maps RPC progress and statuses', async () => {

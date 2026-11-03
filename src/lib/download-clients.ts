@@ -14,6 +14,7 @@ import { assertSafeFetchUrl, assertSafeRedirect, isTrustedConfiguredOrigin } fro
 import { looksLikeHtmlPage } from './utils/content-sniff';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { writeUnlessClosed } from '@/lib/request-guard';
+import { createTransmissionRpc, getTransmissionTorrents, mapTransmissionDownloads } from '@/lib/transmission';
 
 async function getNetworkHeaders() {
     const customHeaders = await prisma.customHeader.findMany();
@@ -161,6 +162,27 @@ export const DownloadService = {
           ...baseConfig, headers: { ...authHeaders, ...form.getHeaders() }
         });
       }
+            else if (client.type === 'transmission') {
+                const rpc = createTransmissionRpc(client, baseConfig.headers, baseConfig.timeout);
+                const session = await rpc('session_get');
+                const rpcVersion = Number(session.rpc_version);
+                const args: Record<string, unknown> = fileBuffer
+                    ? { metainfo: fileBuffer.toString('base64') }
+                    : { filename: downloadUrl };
+                if (rpcVersion >= 17) args.labels = [primaryCategory];
+                const addResult = await rpc('torrent_add', args);
+                const addedTorrent = addResult.torrent_added || addResult.torrent_duplicate;
+                const torrentId = addedTorrent?.hash_string || addedTorrent?.id;
+                if (torrentId !== undefined && (seedRatio > 0 || (rpcVersion >= 16 && rpcVersion < 17))) {
+                    const setArgs: Record<string, unknown> = { ids: [torrentId] };
+                    if (rpcVersion >= 16 && rpcVersion < 17) setArgs.labels = [primaryCategory];
+                    if (seedRatio > 0) {
+                        setArgs.seed_ratio_limit = seedRatio;
+                        setArgs.seed_ratio_mode = 1;
+                    }
+                    await rpc('torrent_set', setArgs);
+                }
+            }
       else if (client.type === 'deluge') {
         const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, baseConfig);
         const cookie = authRes.headers['set-cookie'];
@@ -251,6 +273,10 @@ export const DownloadService = {
                   params: { hashes: downloadId, deleteFiles: true },
                   headers: authHeaders
               });
+          }
+          else if (client.type === 'transmission') {
+              const rpc = createTransmissionRpc(client, baseConfig.headers, baseConfig.timeout);
+              await rpc('torrent_remove', { ids: [downloadId], delete_local_data: true });
           }
           else if (client.type === 'sab') {
               await axios.get(`${cleanUrl}/api`, {
@@ -558,6 +584,11 @@ export const DownloadService = {
             })));
           }
         }
+                else if (client.type === 'transmission') {
+                    const rpc = createTransmissionRpc(client, baseHeaders, 15000);
+                    const torrents = await getTransmissionTorrents(rpc);
+                    downloads.push(...mapTransmissionDownloads(torrents, categoryString, client.name));
+                }
         else if (client.type === 'deluge') {
             const authRes = await axios.post(`${cleanUrl}/json`, { method: "auth.login", params: [client.pass], id: 1 }, { headers: baseHeaders, timeout: 15000 });
             const cookie = authRes.headers['set-cookie'];

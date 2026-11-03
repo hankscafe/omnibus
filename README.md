@@ -145,7 +145,7 @@ The database is a single SQLite file in your config folder, so there is no datab
 
 * **Docker with Docker Compose** on the machine that will run Omnibus. Docker Desktop (Windows/macOS) includes Compose; on Linux, follow [Docker's install guide](https://docs.docker.com/engine/install/) and check that `docker compose version` works.
 * **A free ComicVine API key** — Omnibus' default source for covers, synopses, and issue lists. Create an account at [comicvine.gamespot.com](https://comicvine.gamespot.com/), then open [comicvine.gamespot.com/api](https://comicvine.gamespot.com/api/) to see your key. ([Metron.Cloud](https://metron.cloud/) is an optional second source.) Both have their own terms of use; see [Metadata Sources, Licenses & Covers](#metadata-sources-licenses--covers).
-* **Optional — add them whenever you like:** Prowlarr (indexer search), a download client (qBittorrent, SABnzbd, …), FlareSolverr. You don't need any of them to organize and read the comics you already have.
+* **Optional — add them whenever you like:** Prowlarr (indexer search), a download client (qBittorrent, Transmission, Deluge, SABnzbd, …), FlareSolverr. You don't need any of them to organize and read the comics you already have.
 
 ### Step 1 — Make the folders
 
@@ -378,7 +378,7 @@ To read on a phone or tablet instead, see [External Readers & OPDS Support](#ext
 2. Follow it in **My Requests**. A request from a user who isn't allowed to auto-approve waits for an admin first.
 3. When the download finishes, Omnibus moves it into your library and it shows up in **Library**.
 
-Omnibus searches GetComics out of the box. Prowlarr, download clients (qBittorrent, SABnzbd, …) and FlareSolverr are optional and live in **Admin → Settings**.
+Omnibus searches GetComics out of the box. Prowlarr, download clients (qBittorrent, Transmission, Deluge, SABnzbd, …) and FlareSolverr are optional and live in **Admin → Settings**.
 
 ### Where your files go
 
@@ -747,7 +747,7 @@ Settings are organized into **8 task-focused tabs** — Metadata, Library & File
 </p>
 
 * **High-Performance Architecture:** Built to handle massive terabyte-scale libraries. Features an optimized OPDS feed, asynchronous streaming cipher engines for backups, and B-Tree indexed database lookups.
-* **Download Client Integration:** Connects seamlessly with qBittorrent, Deluge, SABnzbd, and NZBGet. Supports complex Docker remote-path mapping to ensure files move perfectly between containers.
+* **Download Client Integration:** Connects with qBittorrent, Transmission, Deluge, SABnzbd, and NZBGet. Supports Docker remote-path mapping so files can move between containers.
 * **3rd-Party File Hosters:** Native support for bypassing landing pages and downloading directly from MediaFire, Mega, Pixeldrain, Rootz, Vikingfile, and Terabox. Supports injecting premium API keys/session cookies to bypass bandwidth limits.
 * **Anna's Archive Search Source:** Search Anna's Archive (the shadow-library aggregator) as a first-class source alongside GetComics and your indexers. Use it in interactive search (no API key required — gated files drop to the manual queue) or prioritize it as an automated source (requires a premium API key plus a passing connection test). Includes a configurable mirror base URL with automatic failover as Anna's Archive rotates domains.
 * **Selectable Cloudflare Solver:** Route requests through a FlareSolverr, Byparr, **or** Trawl container to seamlessly bypass Cloudflare protection (403 Forbidden errors) on sites like GetComics, with a configurable solve timeout. A built-in circuit breaker detects a wedged/unresponsive solver (pausing solve attempts and raising a health-panel alert with the fix) instead of silently grinding every download into the manual queue. The download pipeline drives the solver the way battle-tested tools do — reusing solver sessions, streaming from the solver's landed URL, and resuming partial transfers — so gated links that used to need hand-holding now usually finish on their own. When a link still stays gated, Omnibus holds it for manual download — and you can hand the file back via Manual File Upload. Run any of the three solvers as its own container and point the Cloudflare Solver URL in Settings at it.

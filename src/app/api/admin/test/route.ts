@@ -10,6 +10,7 @@ import { testAnnasArchiveKey } from '@/lib/annas-test';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { authFromSettings, metronGet } from '@/lib/metron/client';
+import { createTransmissionRpc } from '@/lib/transmission';
 
 export async function POST(request: Request) {
   let type = 'unknown';
@@ -313,6 +314,17 @@ export async function POST(request: Request) {
             } else {
                 throw new Error("Deluge Authentication Failed. Check password.");
             }
+        }
+        else if (clientType === 'transmission') {
+            const realPass = (pass === '********')
+                ? await decryptSecret((await prisma.downloadClient.findFirst({ where: { url: config.url } }))?.pass ?? null) || ''
+                : pass;
+            const rpc = createTransmissionRpc({ url: cleanUrl, user, pass: realPass }, headers, 5000);
+            const session = await rpc('session_get');
+            if (session.version) {
+                return NextResponse.json({ success: true, message: `Transmission Connected! (${session.version})` });
+            }
+            throw new Error('Transmission responded without a version. Check the RPC endpoint and credentials.');
         }
         
         return NextResponse.json({ success: true, message: 'Client Ping Sent.' });

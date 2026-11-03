@@ -67,6 +67,32 @@ npm test                    # vitest
 npm run build               # production build (CI runs this)
 ```
 
+### Transmission live integration test
+
+With Docker running, this opt-in command launches a preconfigured, authenticated
+Transmission 4.1.4 container, waits for RPC readiness, runs the real-daemon test,
+and removes the container and its anonymous volumes:
+
+```bash
+npm run test:transmission
+```
+
+RPC is published on a dynamically assigned localhost-only port. The test adds a
+unique paused magnet, verifies labels, seed ratio settings and Active Downloads
+mapping, then removes it even if an assertion fails. It does not download a
+payload or exercise the library importer. The normal `npm test` suite skips this
+test unless explicitly enabled.
+
+Set `TRANSMISSION_LIVE_IMAGE` to test another image, for example
+`lscr.io/linuxserver/transmission:4.0.6`. The default is pinned to
+`lscr.io/linuxserver/transmission:4.1.4-r0-ls367`.
+
+To use an existing daemon instead, set `TRANSMISSION_LIVE_URL` and, when RPC
+authentication is enabled, `TRANSMISSION_LIVE_USER` and `TRANSMISSION_LIVE_PASS`.
+The same command will use that daemon without starting or stopping a container.
+Only the test's own uniquely identified torrent is updated or removed. The test
+prints the actual daemon version and RPC version for the PR validation notes.
+
 **Engine (Rust), from `omnibus-engine/`:**
 
 ```bash

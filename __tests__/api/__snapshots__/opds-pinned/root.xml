@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>urn:omnibus:root</id>
+  <title>Omnibus Catalog</title>
+  <updated>2026-09-20T18:30:00.000Z</updated>
+  <author><name>Omnibus</name></author>
+  <link rel="self" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" href="http://localhost/api/opds/opensearch" title="Search Omnibus"/>
+  
+  <entry>
+    <title>All Series</title>
+    <id>urn:omnibus:series:all</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <content type="text">Browse all comic and manga series in your library.</content>
+    <link rel="subsection" href="http://localhost/api/opds/series" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  </entry>
+  <entry>
+    <title>Continue Reading</title>
+    <id>urn:omnibus:continue</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <content type="text">Pick up where you left off.</content>
+    <link rel="subsection" href="http://localhost/api/opds/sections/continue" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+  <entry>
+    <title>Recently Added</title>
+    <id>urn:omnibus:recent</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <content type="text">The newest arrivals in your library.</content>
+    <link rel="subsection" href="http://localhost/api/opds/sections/recent" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+  <entry>
+    <title>On Deck</title>
+    <id>urn:omnibus:ondeck</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <content type="text">The next issue after the one you finished.</content>
+    <link rel="subsection" href="http://localhost/api/opds/sections/ondeck" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+  <entry>
+    <title>Libraries</title>
+    <id>urn:omnibus:libraries</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <content type="text">Browse one library at a time.</content>
+    <link rel="subsection" href="http://localhost/api/opds/sections/libraries" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  </entry>
+</feed>

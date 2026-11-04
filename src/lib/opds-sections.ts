@@ -15,6 +15,7 @@ import { nestedSeriesAccessWhere, seriesAccessWhere, type AccessibleLibraries } 
 import { inProgressBooks, onDeckBooks } from '@/lib/komga/data';
 import { entryUpdated, issueEntry, type IssueProgress } from '@/lib/opds-feed';
 import { progressByIssueId } from '@/lib/opds-progress';
+import { OMNIBUS_OPDS, type OpdsFlavour } from '@/lib/opds-flavour';
 
 /** How many entries a root section shows. */
 export const SECTION_SIZE = 20;
@@ -54,11 +55,13 @@ function issueEntries(
     userId: string,
     rows: Awaited<ReturnType<typeof issuesByIds>>,
     progress: Map<string, IssueProgress>,
+    flavour: OpdsFlavour,
 ): string {
     return rows
         .map((r) => issueEntry(baseUrl, r.series, r, {
             pageCount: r.pageCount ?? 0,
             progress: progress.get(r.id) ?? null,
+            flavour,
         }))
         .join('');
 }
@@ -77,6 +80,7 @@ export async function loadIssueSection(
     userId: string,
     libs: AccessibleLibraries,
     baseUrl: string,
+    flavour: OpdsFlavour = OMNIBUS_OPDS,
 ): Promise<SectionFeed> {
     const page = kind === 'continue'
         ? await inProgressBooks(userId, libs, 0, SECTION_SIZE)
@@ -87,7 +91,7 @@ export async function loadIssueSection(
         id: `urn:omnibus:${kind}`,
         title: kind === 'continue' ? 'Continue Reading' : 'On Deck',
         kind: 'acquisition',
-        entries: issueEntries(baseUrl, userId, rows, progress),
+        entries: issueEntries(baseUrl, userId, rows, progress, flavour),
         stamps: rows.map((r) => r.updatedAt),
     };
 }
@@ -96,7 +100,7 @@ export async function loadIssueSection(
  * Recently Added, by `Issue.fileAddedAt` — when the file that is there now arrived. `createdAt`
  * would miss every download that filled a monitored placeholder (the skeleton row is older).
  */
-export async function loadRecentSection(userId: string, libs: AccessibleLibraries, baseUrl: string): Promise<SectionFeed> {
+export async function loadRecentSection(userId: string, libs: AccessibleLibraries, baseUrl: string, flavour: OpdsFlavour = OMNIBUS_OPDS): Promise<SectionFeed> {
     const rows = await prisma.issue.findMany({
         where: {
             AND: [
@@ -114,7 +118,7 @@ export async function loadRecentSection(userId: string, libs: AccessibleLibrarie
         id: 'urn:omnibus:recent',
         title: 'Recently Added',
         kind: 'acquisition',
-        entries: issueEntries(baseUrl, userId, rows, progress),
+        entries: issueEntries(baseUrl, userId, rows, progress, flavour),
         stamps: rows.map((r) => r.updatedAt),
     };
 }
@@ -123,7 +127,7 @@ export async function loadRecentSection(userId: string, libs: AccessibleLibrarie
  * The libraries the caller may browse, each a navigation entry into `?library=<id>`. A library has
  * no timestamp of its own, so its `<updated>` is its newest series' — the moment it last changed.
  */
-export async function loadLibrariesSection(libs: AccessibleLibraries, baseUrl: string): Promise<SectionFeed> {
+export async function loadLibrariesSection(libs: AccessibleLibraries, baseUrl: string, flavour: OpdsFlavour = OMNIBUS_OPDS): Promise<SectionFeed> {
     const [libraries, newest] = await Promise.all([
         prisma.library.findMany({
             where: libs === 'ALL' ? {} : { id: { in: libs } },
@@ -143,7 +147,7 @@ export async function loadLibrariesSection(libs: AccessibleLibraries, baseUrl: s
     <id>urn:omnibus:library:${lib.id}</id>
     <updated>${entryUpdated(lastChange.get(lib.id) ?? null)}</updated>
     <content type="text">${escapeXml(lib.name)}</content>
-    <link rel="subsection" href="${baseUrl}/api/opds/series?library=${encodeURIComponent(lib.id)}" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+    <link rel="subsection" href="${baseUrl}${flavour.base}/series?library=${encodeURIComponent(lib.id)}" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
   </entry>`).join('');
 
     return {

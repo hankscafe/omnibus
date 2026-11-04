@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { loggerLog, loggerGetLevel } from '../helpers/setup-global';
 import { GET as getSeriesBooks } from '@/app/komga/api/v1/series/[id]/books/route';
 import { GET as getSeriesThumb } from '@/app/komga/api/v1/series/[id]/thumbnail/route';
+import { GET as getBook } from '@/app/komga/api/v1/books/[id]/route';
 import { GET as getBookPages } from '@/app/komga/api/v1/books/[id]/pages/route';
 import { GET as getBookPage } from '@/app/komga/api/v1/books/[id]/pages/[n]/route';
 import { GET as getBookThumb } from '@/app/komga/api/v1/books/[id]/thumbnail/route';
@@ -20,6 +21,8 @@ import { GET as getSeriesOnDeck } from '@/app/komga/api/v1/series/ondeck/route';
 import { GET as getSeriesContinue } from '@/app/komga/api/v1/series/continue/route';
 import { GET as catchAllGet, POST as catchAllPost } from '@/app/komga/api/v1/[...rest]/route';
 import { POST as postSeriesOne } from '@/app/komga/api/v1/series/[id]/route';
+import { toBookDto } from '@/lib/komga/dto';
+import { issueEntry } from '@/lib/opds-feed';
 
 const mocks = vi.hoisted(() => ({
     validateApiKey: vi.fn(),
@@ -140,6 +143,56 @@ describe('Komga facade: GET /series/{id}/books', () => {
         expect((await getSeriesBooks(req('/series/x/books'), params({ id: 'x' }))).status).toBe(404);
         mocks.getAccessibleLibraryIds.mockResolvedValue(['lib_other']);
         expect((await getSeriesBooks(req('/series/ser_1/books'), params({ id: 'ser_1' }))).status).toBe(403);
+    });
+});
+
+// #262: Panels asks for the book each time it opens one, and before every progress report.
+describe('Komga facade: GET /books/{id}', () => {
+    beforeEach(() => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue());
+        mocks.prisma.series.findUnique.mockResolvedValue({ id: 'ser_1', name: 'Batman', libraryId: 'lib_1' });
+        mocks.prisma.issue.findMany.mockResolvedValue([
+            issue({ id: 'iss_2', number: '2' }),
+            issue({ id: 'iss_a1', number: '1', isAnnual: true, attachedVolumeId: 'att_1', attachedVolume: { name: 'Batman Annual' } }),
+            issue({ id: 'iss_1', number: '1' }),
+        ]);
+        mocks.prisma.readProgress.findMany.mockResolvedValue([{ issueId: 'iss_1', currentPage: 9, isCompleted: false, updatedAt: MTIME }]);
+    });
+
+    it('answers the same BookDto as the series\' book list: its place in the series and the reader\'s page', async () => {
+        const res = await getBook(req('/books/iss_1'), params({ id: 'iss_1' }));
+        expect(res.status).toBe(200);
+        const book = await res.json();
+        expect(book).toEqual(expect.objectContaining({ id: 'iss_1', seriesId: 'ser_1', seriesTitle: 'Batman', number: 1 }));
+        expect(book.media).toEqual(expect.objectContaining({ status: 'READY', pagesCount: 24 }));
+        expect(book.readProgress).toEqual(expect.objectContaining({ page: 10, completed: false }));
+        expect(mocks.prisma.readProgress.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({ userId: 'user_1' }));
+
+        const listed = await (await getSeriesBooks(req('/series/ser_1/books?unpaged=true'), params({ id: 'ser_1' }))).json();
+        expect(book).toEqual(listed.content.find((b: { id: string }) => b.id === 'iss_1'));
+
+        // Another book of the same series: its own place, not the first one's.
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue({ id: 'iss_a1', number: '1', isAnnual: true, attachedVolumeId: 'att_1', attachedVolume: { name: 'Batman Annual' } }));
+        const annual = await (await getBook(req('/books/iss_a1'), params({ id: 'iss_a1' }))).json();
+        expect(annual).toEqual(expect.objectContaining({ id: 'iss_a1', number: 3, readProgress: null }));
+    });
+
+    it('404s a book without a file: the facade lists only books it can serve', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue({ id: 'iss_9', number: '9', filePath: null }));
+        expect((await getBook(req('/books/iss_9'), params({ id: 'iss_9' }))).status).toBe(404);
+    });
+
+    it('404s an unknown book, 403s one in another library, 401s without a key', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValueOnce(null);
+        expect((await getBook(req('/books/x'), params({ id: 'x' }))).status).toBe(404);
+
+        mocks.getAccessibleLibraryIds.mockResolvedValueOnce([]);
+        expect((await getBook(req('/books/iss_1'), params({ id: 'iss_1' }))).status).toBe(403);
+
+        mocks.validateApiKey.mockResolvedValueOnce({ valid: false, user: null });
+        const res = await getBook(req('/books/iss_1'), params({ id: 'iss_1' }));
+        expect(res.status).toBe(401);
+        expect(res.headers.get('www-authenticate')).toMatch(/^Basic /);
     });
 });
 
@@ -309,7 +362,8 @@ describe('Komga facade: PATCH /books/{id}/read-progress', () => {
         const res = await patch('iss_1', { page: 1, completed: true });
 
         expect(res.status).toBe(204);
-        expect(mocks.recordDailyReading).toHaveBeenCalledWith('user_1', 'iss_1', 14);
+        // Index 10 means pages 1-11 were seen, so finishing adds pages 12-24.
+        expect(mocks.recordDailyReading).toHaveBeenCalledWith('user_1', 'iss_1', 13);
         const upsert = mocks.prisma.readProgress.upsert.mock.calls[0][0];
         expect(upsert.where).toEqual({ userId_issueId: { userId: 'user_1', issueId: 'iss_1' } });
         expect(upsert.update).toEqual(expect.objectContaining({ currentPage: 24, totalPages: 24, isCompleted: true }));
@@ -317,11 +371,29 @@ describe('Komga facade: PATCH /books/{id}/read-progress', () => {
         expect(mocks.evaluateTrophies).toHaveBeenCalledWith('user_1');
     });
 
-    it('a bare page update sets that page and keeps the book unfinished', async () => {
+    it('a bare page update stores Komga\'s 1-based page as the web reader\'s 0-based index, unfinished', async () => {
         const res = await patch('iss_1', { page: 5 });
         expect(res.status).toBe(204);
-        expect(mocks.recordDailyReading).toHaveBeenCalledWith('user_1', 'iss_1', 5); // first open: the whole delta
-        expect(mocks.prisma.readProgress.upsert.mock.calls[0][0].update).toEqual(expect.objectContaining({ currentPage: 5, isCompleted: false }));
+        expect(mocks.recordDailyReading).toHaveBeenCalledWith('user_1', 'iss_1', 5); // first open: pages 1-5
+        expect(mocks.prisma.readProgress.upsert.mock.calls[0][0].update).toEqual(expect.objectContaining({ currentPage: 4, totalPages: 24, isCompleted: false }));
+    });
+
+    it('page 1 is index 0: a book left on its first page reads as not started (the `currentPage > 0` checks)', async () => {
+        await patch('iss_1', { page: 1, completed: false });
+        expect(mocks.prisma.readProgress.upsert.mock.calls[0][0].update).toEqual(expect.objectContaining({ currentPage: 0, isCompleted: false }));
+    });
+
+    it('the last page finishes the book; a page past the end is clamped to it', async () => {
+        await patch('iss_1', { page: 24 });
+        expect(mocks.prisma.readProgress.upsert.mock.calls[0][0].update).toEqual(expect.objectContaining({ currentPage: 24, isCompleted: true }));
+        await patch('iss_1', { page: 99 });
+        expect(mocks.prisma.readProgress.upsert.mock.calls[1][0].update).toEqual(expect.objectContaining({ currentPage: 24, isCompleted: true }));
+    });
+
+    it('without a known page count, keeps the page as an index and leaves the book unfinished', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue({ pageCount: 0 }));
+        await patch('iss_1', { page: 7 });
+        expect(mocks.prisma.readProgress.upsert.mock.calls[0][0].update).toEqual(expect.objectContaining({ currentPage: 6, isCompleted: false }));
     });
 
     it('never records a negative delta when the client reports an earlier page', async () => {
@@ -330,11 +402,25 @@ describe('Komga facade: PATCH /books/{id}/read-progress', () => {
         expect(mocks.recordDailyReading).toHaveBeenCalledWith('user_1', 'iss_1', 0);
     });
 
+    it('a page written through the facade resumes on that page in the web reader, in OPDS and back through the facade', async () => {
+        mocks.prisma.issue.findUnique.mockResolvedValue(issue({ pageCount: 155 }));
+        await patch('iss_1', { page: 49, completed: false }); // what Panels sent on closing a 155-page volume
+        const stored = mocks.prisma.readProgress.upsert.mock.calls[0][0].update;
+        // The web reader opens pages[currentPage] and shows it as `currentPage + 1`.
+        expect(stored.currentPage).toBe(48);
+
+        const progress = { currentPage: stored.currentPage, isCompleted: stored.isCompleted, updatedAt: D };
+        const entry = issueEntry('http://h', { id: 'ser_1', name: 'Batman', publisher: null } as never, issue({ pageCount: 155 }) as never, { pageCount: 155, progress });
+        expect(entry).toContain('pse:lastRead="49"');
+        const dto = toBookDto(issue({ pageCount: 155 }) as never, { id: 'ser_1', name: 'Batman' }, { position: 1, sizeBytes: 0, mtime: D, progress });
+        expect(dto.readProgress).toEqual(expect.objectContaining({ page: 49, completed: false }));
+    });
+
     it('logs who reported which book, so a finished chapter that never syncs is visible', async () => {
         await patch('iss_1', { page: 1, completed: true });
         expect(loggerLog).toHaveBeenCalledWith('[Komga] adam finished "Batman #1" (book iss_1)', 'info');
 
-        await patch('iss_1', { page: 5 });
+        await patch('iss_1', { page: 5 }); // the reader's own (1-based) page number
         expect(loggerLog).toHaveBeenCalledWith('[Komga] adam is on page 5 of "Batman #1" (book iss_1)', 'info');
     });
 
@@ -366,7 +452,7 @@ describe('Komga facade: GET /books (Continue Reading) and /books/ondeck', () => 
         const body = await res.json();
         expect(body.totalElements).toBe(1);
         expect(body.content[0]).toEqual(expect.objectContaining({ id: 'iss_2', seriesId: 'ser_1' }));
-        expect(body.content[0].readProgress).toEqual(expect.objectContaining({ page: 7, completed: false }));
+        expect(body.content[0].readProgress).toEqual(expect.objectContaining({ page: 8, completed: false })); // index 7
         const call = mocks.prisma.readProgress.findMany.mock.calls[0][0];
         expect(call.where).toEqual(expect.objectContaining({ userId: 'user_1', isCompleted: false, currentPage: { gt: 0 } }));
         expect(JSON.stringify(call.where)).toContain('lib_1'); // library grants apply through the issue's series

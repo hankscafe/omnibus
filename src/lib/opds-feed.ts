@@ -7,6 +7,7 @@ import { escapeXml } from '@/lib/utils/xml';
 import { authorsFromRows, parseJsonList, seriesAuthors, type KomgaAuthor } from '@/lib/komga/dto';
 import { opdsCoverLinks } from '@/lib/opds-covers';
 import { mediaTypeForFile } from '@/lib/file-download';
+import { OMNIBUS_OPDS, type OpdsFlavour } from '@/lib/opds-flavour';
 
 /** An Atom `<updated>` is required even for an empty feed; 1970 is the only honest "no content" value. */
 export const OPDS_EPOCH = new Date(0).toISOString();
@@ -136,7 +137,7 @@ export interface IssueProgress {
 type SeriesRef = { id: string; name: string; publisher?: string | null; writers?: string | null; artists?: string | null };
 
 /** A series as a navigation entry: a subsection link to its own (acquisition) feed. */
-export function seriesEntry(baseUrl: string, series: SeriesFeedRow): string {
+export function seriesEntry(baseUrl: string, series: SeriesFeedRow, flavour: OpdsFlavour = OMNIBUS_OPDS): string {
     // Covers go through the OPDS-key cover route (lib/opds-covers.ts): the library cover route needs
     // a web session, which an OPDS client never has.
     const coverLinks = series.coverUrl || series.folderPath ? opdsCoverLinks(baseUrl, 'series', series.id) : '';
@@ -144,13 +145,13 @@ export function seriesEntry(baseUrl: string, series: SeriesFeedRow): string {
     return `
   <entry>
     <title>${escapeXml(series.name)}</title>
-    <id>urn:omnibus:series:${series.id}</id>
+    <id>${flavour.entryId('series', series.id)}</id>
     <updated>${entryUpdated(series.updatedAt)}</updated>
     ${authorElements(seriesAuthors(series))}
     ${publisherElement(series.publisher)}
     <content type="text">${escapeXml(series.description || 'No description available.')}</content>
     ${coverLinks}
-    <link rel="subsection" href="${baseUrl}/api/opds/series/${series.id}" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <link rel="subsection" href="${baseUrl}${flavour.base}/series/${series.id}" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
   </entry>`;
 }
 
@@ -178,8 +179,9 @@ export function issueEntry(
     baseUrl: string,
     series: SeriesRef,
     issue: IssueFeedRow,
-    options: { pageCount: number; progress?: IssueProgress | null },
+    options: { pageCount: number; progress?: IssueProgress | null; flavour?: OpdsFlavour },
 ): string {
+    const flavour = options.flavour ?? OMNIBUS_OPDS;
     // An uncounted issue (`pageCount` 0; only the series feed heals one) advertises no page stream at
     // all: `pse:count="0"` is a stream a client cannot render. The acquisition link still stands.
     const pseLink = options.pageCount > 0
@@ -191,13 +193,13 @@ export function issueEntry(
     // user without download rights, and dropping the entry would also drop the page-stream for a
     // user who can only stream. The declared type is the file's real media type (§5.3).
     const downloadLink = issue.filePath
-        ? `<link rel="http://opds-spec.org/acquisition" href="${baseUrl}/api/opds/download?issueId=${issue.id}" type="${mediaTypeForFile(issue.filePath)}"/>`
+        ? `<link rel="http://opds-spec.org/acquisition" href="${flavour.acquisitionHref(baseUrl, { id: issue.id, filePath: issue.filePath })}" type="${mediaTypeForFile(issue.filePath)}"/>`
         : '';
 
     return `
   <entry>
     <title>${escapeXml(issueEntryTitle(series.name, issue))}</title>
-    <id>urn:omnibus:issue:${issue.id}</id>
+    <id>${flavour.entryId('issue', issue.id)}</id>
     <updated>${entryUpdated(issue.updatedAt)}</updated>
     ${authorElements(issueCreators(issue, series))}
     ${publisherElement(series.publisher)}
@@ -209,8 +211,8 @@ export function issueEntry(
 }
 
 /** The `rel="search"` link a catalog root advertises, pointing at the OpenSearch description document. */
-export function searchLink(baseUrl: string): string {
-    return `<link rel="search" type="application/opensearchdescription+xml" href="${baseUrl}/api/opds/opensearch" title="Search Omnibus"/>`;
+export function searchLink(baseUrl: string, flavour: OpdsFlavour = OMNIBUS_OPDS): string {
+    return `<link rel="search" type="application/opensearchdescription+xml" href="${baseUrl}${flavour.base}/opensearch" title="Search Omnibus"/>`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,13 +231,15 @@ export function atomFeed(options: {
     links: string;
     entries: string;
     namespaces?: string;
+    /** Whose feed this is (#262): Omnibus's own, or the Komga-shaped one. */
+    flavour?: OpdsFlavour;
 }): string {
     return `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog"${options.namespaces ?? ''}>
   <id>${options.id}</id>
   <title>${escapeXml(options.title)}</title>
   <updated>${options.updated}</updated>
-  <author><name>Omnibus</name></author>
+  ${(options.flavour ?? OMNIBUS_OPDS).author}
 ${options.links}
   ${options.entries}
 </feed>`;

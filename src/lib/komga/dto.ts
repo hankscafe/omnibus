@@ -73,6 +73,22 @@ export interface ProgressRow {
     updatedAt: Date;
 }
 
+// Komga numbers pages from 1 (`ReadProgressUpdateDto.page` is @Positive); ReadProgress.currentPage is
+// the web reader's 0-based index (#217). The facade converts both ways (#262), by the same rule as
+// the OPDS feed's `pse:lastRead`: a finished book reports its last page.
+
+/** The 0-based ReadProgress index for Komga's 1-based `page` (a page at or past the end is a finished book). */
+export function readProgressIndex(page: number): number {
+    return Math.max(0, Math.floor(page) - 1);
+}
+
+/** Komga's 1-based page for a ReadProgress row: its index + 1, or the last page once finished. */
+export function komgaPageNumber(progress: { currentPage: number; isCompleted: boolean }, pageCount: number): number {
+    if (progress.isCompleted) return Math.max(1, pageCount > 0 ? pageCount : progress.currentPage);
+    const page = progress.currentPage + 1;
+    return pageCount > 0 ? Math.min(page, pageCount) : page;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Page envelope (Spring Data `Page`) — the source reads only `.content`
 // ---------------------------------------------------------------------------------------------
@@ -440,7 +456,7 @@ export function toBookDto(issue: KomgaIssueRow, series: { id: string; name: stri
         },
         readProgress: extras.progress && readAt
             ? {
-                page: extras.progress.currentPage,
+                page: komgaPageNumber(extras.progress, issue.pageCount ?? 0),
                 completed: extras.progress.isCompleted,
                 readDate: readAt,
                 created: readAt,

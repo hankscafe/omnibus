@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <id>urn:omnibus:series:library:lib_1</id>
+  <title>Manga</title>
+  <updated>2026-09-20T18:30:00.000Z</updated>
+  <author><name>Omnibus</name></author>
+<link rel="self" href="http://localhost/api/opds/series?page=2&amp;library=lib_1" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="up" href="http://localhost/api/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="previous" href="http://localhost/api/opds/series?page=1&amp;library=lib_1" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  
+  <entry>
+    <title>Tower Dungeon</title>
+    <id>urn:omnibus:series:ser_1</id>
+    <updated>2026-09-20T18:30:00.000Z</updated>
+    <author><name>Tsutomu Nihei</name></author>
+    <dc:publisher>Kodansha</dc:publisher>
+    <content type="text">A tower &amp; its dungeon.</content>
+    <link rel="http://opds-spec.org/image" href="http://localhost/api/opds/cover/series/ser_1" type="image/webp"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="http://localhost/api/opds/cover/series/ser_1?w=320" type="image/webp"/>
+    <link rel="subsection" href="http://localhost/api/opds/series/ser_1" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+  <entry>
+    <title>Biomega</title>
+    <id>urn:omnibus:series:ser_2</id>
+    <updated>2026-09-01T10:00:00.000Z</updated>
+    <author><name>Tsutomu Nihei</name></author>
+    <dc:publisher>Kodansha</dc:publisher>
+    <content type="text">A tower &amp; its dungeon.</content>
+    
+    <link rel="subsection" href="http://localhost/api/opds/series/ser_2" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+</feed>

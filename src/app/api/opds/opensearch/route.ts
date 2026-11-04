@@ -7,6 +7,7 @@ import { validateApiKey } from '@/lib/api-auth';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { getPublicBaseUrl } from '@/lib/opds-base-url';
+import { opdsFlavourFor } from '@/lib/opds-flavour';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,13 +19,14 @@ export async function GET(req: Request) {
         }
 
         const baseUrl = getPublicBaseUrl(req);
+        const flavour = opdsFlavourFor(req);
 
         const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
   <ShortName>Omnibus</ShortName>
   <Description>Search the Omnibus catalog</Description>
   <InputEncoding>UTF-8</InputEncoding>
-  <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition" template="${baseUrl}/api/opds/search?q={searchTerms}"/>
+  <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition" template="${baseUrl}${flavour.base}/search?q={searchTerms}"/>
 </OpenSearchDescription>`;
 
         return new Response(xml, {

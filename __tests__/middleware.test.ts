@@ -102,6 +102,19 @@ describe('Security: Next.js Front-Door Middleware', () => {
         }
     });
 
+    // #262: Panels reads the Komga-flavoured OPDS catalog with Basic auth and no session cookie,
+    // like any OPDS client; each route validates the key itself, like /api/opds.
+    it('should pass /komga/opds requests through to their self-authenticating handlers', async () => {
+        for (const pathname of ['/komga/opds/v1.2/catalog', '/komga/opds/v1.2/series/abc', '/komga/opds/v1.2/sections/continue', '/komga/opds/v1.2/search', '/komga/opds/v1.2/books/x/file/Batman%20001.cbz']) {
+            mocks.getToken.mockResolvedValueOnce(null);
+            const res = await middleware(createReq(pathname)) as Response;
+
+            expect(res?.status, `${pathname} must not be blocked by the middleware`).not.toBe(401);
+            expect(res?.headers.get('Location'), `${pathname} must not redirect`).toBeNull();
+            expect(res.headers.get('x-middleware-request-x-pathname')).toBe(pathname);
+        }
+    });
+
     it('still guards the rest of /komga (a page path) like any other UI route', async () => {
         mocks.getToken.mockResolvedValueOnce(null);
         const res = await middleware(createReq('/komga')) as Response;

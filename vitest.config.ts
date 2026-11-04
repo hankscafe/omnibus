@@ -20,6 +20,11 @@ export default defineConfig({
     // thread-safe here). Forks with the DEFAULT heap is green since the jsdom purge; the old
     // 8GB --max-old-space-size flag is gone. Do not switch to threads without re-testing on
     // Windows.
+    // TIMEOUT NOTE (v1.4.11-beta.004): the jsdom page and component tests render whole pages, and on
+    // a loaded full-suite run on Windows some took 5.4-8.9 s against vitest's 5 s default — slow,
+    // never stuck (#265's pagination tests, admin-dashboard-approvals, jobs-page-ownership; measured
+    // 2026-11-04). 15 s outlasts that and still fails a test that hangs.
+    testTimeout: 15_000,
     // Replaces ~99 per-file beforeEach(vi.clearAllMocks) blocks. This is mockClear (call history
     // only) — implementations like setup-global's mockResolvedValue defaults survive every test.
     clearMocks: true,

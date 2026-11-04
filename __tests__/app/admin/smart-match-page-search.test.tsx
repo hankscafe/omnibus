@@ -316,5 +316,5 @@ describe('Smart Matcher — Start Auto-Scan error handling (review of #231)', ()
         await screen.findByRole('button', { name: /Start Auto-Scan/ }, slow);
         expect(searches).toHaveLength(1);
         expect(searches[0]).toContain('Conan');
-    }, 15000);
+    });
 });

@@ -65,8 +65,9 @@ let listCalls: string[] = [];
 
 // The per-test timeout is the only clock left. A stalled chain can't spend it (act() returns once
 // React work runs out, and the assertions fail in well under a second); it only has to outlast a
-// slow-but-correct drain — up to 2.8 s measured on a loaded full-suite run vs vitest's 5 s default.
-describe('LibraryPage grid pagination (scroll-saga client half)', { timeout: 15_000 }, () => {
+// slow-but-correct drain — up to 2.8 s measured on a loaded full-suite run, under the 15 s
+// testTimeout in vitest.config.ts.
+describe('LibraryPage grid pagination (scroll-saga client half)', () => {
     beforeEach(() => {
         viewer.role = 'ADMIN';
         listCalls = [];
@@ -129,7 +130,7 @@ describe('LibraryPage grid pagination (scroll-saga client half)', { timeout: 15_
 // Found in the v1.4.7 permission sweep: the list view's Edit Metadata button was the one opener
 // of the series editor without an admin gate (the grid card and the series page had one). A
 // regular user got the editor, its read of the admin settings, and a save the server refuses.
-describe('LibraryPage list view: Edit Metadata is admin-only', { timeout: 15_000 }, () => {
+describe('LibraryPage list view: Edit Metadata is admin-only', () => {
     beforeEach(() => {
         localStorage.clear();
         localStorage.setItem('omnibus-library-view', 'list');
@@ -165,7 +166,7 @@ describe('LibraryPage list view: Edit Metadata is admin-only', { timeout: 15_000
 // First-run checklist: an empty Library explains what to do (the checklist's library variant)
 // instead of "No comics found matching your criteria." - which stays for a filter that matches
 // nothing in a library that does have comics.
-describe('LibraryPage empty state', { timeout: 15_000 }, () => {
+describe('LibraryPage empty state', () => {
     const emptyLibraryWith = (status: unknown) => {
         stubFetchRouter([
             ['/api/library/follow', () => ok({ seriesIds: [] })],
@@ -205,7 +206,7 @@ describe('LibraryPage empty state', { timeout: 15_000 }, () => {
 // ~146px and a reading-list view adds a fifth, but the overlay has ~116-148px at 4-8 columns, so the
 // outer icons were cut off. They sit two per row under Read now, with Remove from List - the only
 // one that can be left over - on a row of its own.
-describe('LibraryPage grid card: hover actions fit the card', { timeout: 15_000 }, () => {
+describe('LibraryPage grid card: hover actions fit the card', () => {
     const classes = (el: Element) => el.className.split(/\s+/);
 
     beforeEach(() => {

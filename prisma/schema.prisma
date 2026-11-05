@@ -206,6 +206,11 @@ model Series {
   status          String?
   genres          String?  // JSON array string (same convention as Issue.genres) — Metron series genres / CV volume concepts (issue #180)
   bookType        String?  // 'Print' | 'OneShot' | 'TPB' | 'GN' (Mylar booktype values); null = unknown
+  // Who set bookType: 'ADMIN' | 'FILE' (a file's <Format>) | 'METRON' (series_type) | 'GUESS' (the
+  // ComicVine one-shot heuristic) | 'SERIES_JSON' (read back from series.json); null = set before
+  // sources were recorded. ADMIN is never replaced; FILE and METRON replace a Print nobody chose
+  // (null, GUESS, SERIES_JSON). src/lib/book-type.ts, omnibus-engine/src/book_type.rs.
+  bookTypeSource  String?
 
   // --- Smart Matcher ComicInfo defaults (#199, concept by CapitanoNemo78): series-wide values the
   // engine embeds into every issue's ComicInfo.xml. The first block MIRRORS an Issue column of the

@@ -14,6 +14,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { safeRelocateFolder } from '@/lib/utils/safe-fs';
 import { comicInfoDefaultsUpdateFragment } from '@/lib/utils/comicinfo-fields';
 import { seriesFolderSegments } from '@/lib/utils/naming';
+import { BOOK_TYPES } from '@/lib/book-type';
 
 export async function POST(request: Request) {
   try {
@@ -43,9 +44,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, unlocked: true });
     }
 
-    // Mylar booktype values — anything else is ignored rather than stored
-    const VALID_BOOK_TYPES = ['Print', 'OneShot', 'TPB', 'GN'];
-    const parsedBookType = VALID_BOOK_TYPES.includes(bookType) ? bookType : null;
+    // The admin's book type (src/lib/book-type.ts): a Mylar value is their choice, null hands it back
+    // to the files and Metron, and anything else - including no bookType at all - leaves it alone.
+    const bookTypeGiven = bookType === null || (BOOK_TYPES as readonly string[]).includes(bookType);
+    const parsedBookType: string | null = bookTypeGiven ? bookType : null;
 
     const parsedIsManga = isManga === true || isManga === 'true' || isManga === 'on' || isManga === 1;
     const parsedMonitored = monitored === true || monitored === 'true' || monitored === 'on' || monitored === 1;
@@ -116,6 +118,11 @@ export async function POST(request: Request) {
     let narrativeChanged = false;
     let identityChanged = false;
     let anyChange = true; // series-create path below always counts as a change
+    // Choosing the type that is already there counts too, when something else put it there: it is
+    // the admin's from now on, and no file or Metron replaces it.
+    const bookTypeChanged = bookTypeGiven && !!existingRecord && (
+        (parsedBookType ?? null) !== (existingRecord.bookType ?? null) ||
+        (parsedBookType !== null && existingRecord.bookTypeSource !== 'ADMIN'));
 
     if (existingRecord) {
         narrativeChanged =
@@ -133,7 +140,7 @@ export async function POST(request: Request) {
             parsedMonitored !== !!existingRecord.monitored ||
             parsedIsManga !== existingRecord.isManga ||
             (status ? status !== existingRecord.status : false) ||
-            (parsedBookType ? parsedBookType !== existingRecord.bookType : false) ||
+            bookTypeChanged ||
             (parsedCvId !== null && parsedCvId.toString() !== existingRecord.metadataId) ||
             targetLib.id !== existingRecord.libraryId;
         const pathChanged = currentPath.replace(/\\/g, '/').toLowerCase() !== activePath.toLowerCase();
@@ -167,7 +174,7 @@ export async function POST(request: Request) {
                 metadataSource: existingRecord.metadataSource || 'COMICVINE',
                 libraryId: targetLib.id,
                 status: status || existingRecord.status,
-                bookType: parsedBookType || existingRecord.bookType,
+                ...(bookTypeChanged ? { bookType: parsedBookType, bookTypeSource: parsedBookType ? 'ADMIN' : null } : {}),
                 ...(seriesGroup !== undefined ? { seriesGroup: seriesGroup || null } : {}),
                 ...(description !== undefined ? { description: description || null } : {}),
                 ...(universe !== undefined ? { universe: universe || null } : {}),
@@ -217,7 +224,7 @@ export async function POST(request: Request) {
                 name: cleanName, year: parsedYear, publisher: publisher || null,
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
                 status: status || undefined,
-                bookType: parsedBookType || undefined,
+                ...(parsedBookType ? { bookType: parsedBookType, bookTypeSource: 'ADMIN' } : {}),
                 // imprint rides in comicInfoFrag (trimmed; blank clears it).
                 ...comicInfoFrag
             },
@@ -226,6 +233,7 @@ export async function POST(request: Request) {
                 folderPath: activePath, monitored: parsedMonitored, isManga: parsedIsManga, libraryId: targetLib.id,
                 status: status || 'Ongoing',
                 bookType: parsedBookType,
+                bookTypeSource: parsedBookType ? 'ADMIN' : null,
                 ...comicInfoFrag
             }
         });

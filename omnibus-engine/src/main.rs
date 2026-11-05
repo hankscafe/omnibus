@@ -1,4 +1,5 @@
 mod api_usage;
+mod book_type;
 mod converter;
 mod db;
 mod scanner;

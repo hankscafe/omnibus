@@ -217,7 +217,8 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
             year: identity.year ?? series.year,
             publisher: identity.publisher ?? series.publisher,
             status: identity.status ?? series.status,
-            bookType: identity.bookType ?? series.bookType,
+            // No bookType: this editor doesn't change it, and sending the stored one back would
+            // record it as the admin's choice (book-type.ts).
             monitored: identity.monitored ?? series.monitored,
             isManga: identity.isManga ?? series.isManga,
             // Edited metadata.

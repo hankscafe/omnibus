@@ -181,3 +181,59 @@ describe('POST /api/library/update — no-op saves are inert (issue #194 (f), se
         expect(res.status).toBe(403);
     });
 });
+
+// The Print follow-up: the Edit Info dialog sent 'Print' on every save and the route wrote it, so a
+// save made for anything else classified an unclassified series as Print - for good, since nothing
+// automatic replaced it. A bookType sent is now the admin's choice; none sent leaves it alone.
+describe('POST /api/library/update — the book type is the admin\'s choice (Print follow-up)', () => {
+    const { bookType: _omitted, ...withoutBookType } = editorBody();
+    const saved = () => mocks.seriesUpdate.mock.calls[0][0].data;
+
+    it('a save for something else leaves a detected Print alone', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ ...record(), bookType: 'Print', bookTypeSource: null });
+        const res = await POST(req({ ...withoutBookType, year: 2021 }));
+
+        expect((await res.json()).changed).toBe(true);
+        expect('bookType' in saved()).toBe(false);
+        expect('bookTypeSource' in saved()).toBe(false);
+    });
+
+    it('a chosen type is written and recorded as the admin\'s', async () => {
+        const res = await POST(req(editorBody({ bookType: 'TPB' })));
+
+        expect((await res.json()).changed).toBe(true);
+        expect(saved()).toMatchObject({ bookType: 'TPB', bookTypeSource: 'ADMIN' });
+    });
+
+    it('choosing the Print something else put there makes it the admin\'s', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ ...record(), bookType: 'Print', bookTypeSource: 'SERIES_JSON' });
+        const res = await POST(req(editorBody({ bookType: 'Print' })));
+
+        expect((await res.json()).changed).toBe(true);
+        expect(saved()).toMatchObject({ bookType: 'Print', bookTypeSource: 'ADMIN' });
+    });
+
+    it('sending back the admin\'s own type is a no-op', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ ...record(), bookType: 'TPB', bookTypeSource: 'ADMIN' });
+        const res = await POST(req(editorBody({ bookType: 'TPB' })));
+
+        expect((await res.json()).changed).toBe(false);
+        expect(mocks.seriesUpdate).not.toHaveBeenCalled();
+    });
+
+    it('null (the dialog\'s Automatic) hands the type back to the files and Metron', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ ...record(), bookType: 'TPB', bookTypeSource: 'ADMIN' });
+        const res = await POST(req(editorBody({ bookType: null })));
+
+        expect((await res.json()).changed).toBe(true);
+        expect(saved()).toMatchObject({ bookType: null, bookTypeSource: null });
+    });
+
+    it('a value that is no book type is ignored', async () => {
+        mocks.seriesFindFirst.mockResolvedValue({ ...record(), bookType: 'Print', bookTypeSource: null });
+        const res = await POST(req(editorBody({ bookType: 'Standard', year: 2021 })));
+
+        expect((await res.json()).changed).toBe(true);
+        expect('bookType' in saved()).toBe(false);
+    });
+});

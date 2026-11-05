@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     getIssueDetails: vi.fn(),
     getSeriesIssues: vi.fn(async (): Promise<Record<string, unknown>[]> => []),
     queueAdd: vi.fn(),
+    // Metron's series_type, as mapSeriesType hands it over.
+    metronBookType: undefined as string | undefined,
 }));
 
 vi.mock('@/lib/db', () => ({
@@ -26,7 +28,7 @@ vi.mock('@/lib/db', () => ({
 }));
 vi.mock('@/lib/metadata/providers/metron', () => ({
     MetronProvider: class {
-        getSeriesDetails = async () => ({ name: 'Saga', publisher: 'Image', year: 2012, status: 'Ongoing', coverUrl: null, description: null });
+        getSeriesDetails = async () => ({ name: 'Saga', publisher: 'Image', year: 2012, status: 'Ongoing', coverUrl: null, description: null, bookType: mocks.metronBookType });
         getSeriesIssues = mocks.getSeriesIssues;
         getIssueDetails = mocks.getIssueDetails;
     },
@@ -50,6 +52,7 @@ describe('Metron request-path detail pass (metadata-fetcher)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.settings.clear();
+        mocks.metronBookType = undefined;
         originalSetTimeout = global.setTimeout;
         vi.stubGlobal('setTimeout', (cb: (...args: unknown[]) => void) => originalSetTimeout(cb, 0));
         mocks.seriesFindFirst.mockResolvedValue({ id: 's1', name: 'Saga', metadataId: '4000', metadataSource: 'METRON', folderPath: '', year: 2012, coverUrl: null });
@@ -57,6 +60,26 @@ describe('Metron request-path detail pass (metadata-fetcher)', () => {
         mocks.getIssueDetails.mockResolvedValue({ writers: ['Brian K. Vaughan'], artists: ['Fiona Staples'], storyTitle: 'Chapter One' });
     });
     afterEach(() => vi.unstubAllGlobals());
+
+    // Print follow-up (book-type.ts): Metron's series_type is evidence - it replaces a Print nobody
+    // chose, and never the admin's choice.
+    it("Metron's series type replaces a detected Print, and never the admin's", async () => {
+        mocks.metronBookType = 'TPB';
+        const seriesWrite = () => mocks.seriesUpdate.mock.calls.map(c => c[0].data).find(d => 'name' in d);
+        const stored = (bookTypeSource: string | null) => mocks.seriesFindFirst.mockResolvedValue({
+            id: 's1', name: 'Saga', metadataId: '4000', metadataSource: 'METRON', folderPath: '', year: 2012, coverUrl: null,
+            bookType: 'Print', bookTypeSource,
+        });
+
+        stored(null);
+        await syncSeriesMetadata('4000', '', 'METRON');
+        expect(seriesWrite()).toMatchObject({ bookType: 'TPB', bookTypeSource: 'METRON' });
+
+        mocks.seriesUpdate.mockClear();
+        stored('ADMIN');
+        await syncSeriesMetadata('4000', '', 'METRON');
+        expect('bookType' in seriesWrite()).toBe(false);
+    });
 
     it('fetches no per-issue details while the setting is off', async () => {
         await syncSeriesMetadata('4000', '', 'METRON');

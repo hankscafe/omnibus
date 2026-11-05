@@ -648,6 +648,65 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
     Ok(())
 }
 
+/// The ComicVine series UPDATE. `locked` (curated, or file priority): the cover plus blank-fills only;
+/// otherwise the volume's fields land. The one-shot guess only fills a blank (book_type.rs).
+/// Locked binds: cover, remote cover, guess, its source, genres, description, status, id.
+/// Open binds: name, publisher, year, description, cover, status, remote cover, guess, its source, genres, id.
+fn cv_series_update_sql(locked: bool) -> String {
+    use crate::book_type::{set_clauses, BLANK};
+    if locked {
+        format!(
+            r#"UPDATE "Series" SET "coverUrl"=$1,
+               "remoteCoverUrl"=COALESCE($2, "remoteCoverUrl"),
+               {book_type},
+               genres=COALESCE(genres, $5),
+               description=COALESCE(description, $6),
+               status=COALESCE(status, $7)
+               WHERE id=$8"#,
+            book_type = set_clauses(BLANK, 3, 4)
+        )
+    } else {
+        format!(
+            r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6,
+               "remoteCoverUrl"=COALESCE($7, "remoteCoverUrl"),
+               {book_type},
+               genres=COALESCE($10, genres)
+               WHERE id=$11"#,
+            book_type = set_clauses(BLANK, 8, 9)
+        )
+    }
+}
+
+/// The Metron series UPDATE, shaped like cv_series_update_sql, with universe. series_type is evidence:
+/// it also replaces a Print nobody chose (book_type.rs).
+/// Locked binds: cover, universe, remote cover, book type, its source, genres, description, status, id.
+/// Open binds: name, publisher, year, description, cover, status, universe, remote cover, book type,
+/// its source, genres, id.
+fn metron_series_update_sql(locked: bool) -> String {
+    use crate::book_type::{set_clauses, EVIDENCE_MAY_REPLACE};
+    if locked {
+        format!(
+            r#"UPDATE "Series" SET "coverUrl"=$1, universe=COALESCE($2, universe),
+               "remoteCoverUrl"=COALESCE($3, "remoteCoverUrl"),
+               {book_type},
+               genres=COALESCE(genres, $6),
+               description=COALESCE(description, $7),
+               status=COALESCE(status, $8)
+               WHERE id=$9"#,
+            book_type = set_clauses(EVIDENCE_MAY_REPLACE, 4, 5)
+        )
+    } else {
+        format!(
+            r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6, universe=COALESCE($7, universe),
+               "remoteCoverUrl"=COALESCE($8, "remoteCoverUrl"),
+               {book_type},
+               genres=COALESCE($11, genres)
+               WHERE id=$12"#,
+            book_type = set_clauses(EVIDENCE_MAY_REPLACE, 9, 10)
+        )
+    }
+}
+
 /// True when a series was manually curated in the metadata editor — auto-sync must then leave its
 /// narrative fields (name/publisher/year/description/status/universe) alone and only refresh the
 /// cover + fill blank bookType/remoteCoverUrl.
@@ -748,21 +807,17 @@ async fn fetch_comicvine(
     // coverUrl becomes a local path. The bookType heuristic only fills a blank (never clobbers
     // a manual categorization). Parity with metadata-fetcher.ts (beta.032-034).
     // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
+    // The guess only fills a blank and records that it is one (book_type.rs), so a file's <Format> or
+    // Metron may still replace it.
+    let guess_source = crate::book_type::source_for(guessed_book_type, "GUESS");
     let update_res = if series_is_locked(db, series_id).await || file_priority {
         // Locked OR file-priority: narrative fields stay as the files/admin set them; the cover and
         // blank-fills (incl. description/status, which the files may not have carried) still apply.
-        sqlx::query(
-            r#"UPDATE "Series" SET "coverUrl"=$1,
-               "remoteCoverUrl"=COALESCE($2, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $3),
-               genres=COALESCE(genres, $4),
-               description=COALESCE(description, $5),
-               status=COALESCE(status, $6)
-               WHERE id=$7"#,
-        )
+        sqlx::query(&cv_series_update_sql(true))
         .bind(&final_cover)
         .bind(&image_url)
         .bind(guessed_book_type)
+        .bind(guess_source)
         .bind(&vol_genres_json)
         .bind(&description)
         .bind(status)
@@ -770,13 +825,7 @@ async fn fetch_comicvine(
         .execute(&db.pool)
         .await
     } else {
-        sqlx::query(
-            r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6,
-               "remoteCoverUrl"=COALESCE($7, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $8),
-               genres=COALESCE($9, genres)
-               WHERE id=$10"#,
-        )
+        sqlx::query(&cv_series_update_sql(false))
         .bind(&name)
         .bind(&publisher)
         .bind(year)
@@ -785,6 +834,7 @@ async fn fetch_comicvine(
         .bind(status)
         .bind(&image_url)
         .bind(guessed_book_type)
+        .bind(guess_source)
         .bind(&vol_genres_json)
         .bind(series_id)
         .execute(&db.pool)
@@ -1304,36 +1354,24 @@ async fn fetch_metron(
     // yields None, so the COALESCE writes below leave the existing column untouched.
     let series_genres_json = names_json(&series_data, "genres");
 
-    // Metron's series_type is authoritative for the Mylar booktype, but never clobber a manual one.
+    // Metron's series_type is evidence for the Mylar booktype: it fills a blank and replaces a Print
+    // nobody chose, never the admin's choice (book_type.rs).
     let book_type = map_series_type(&series_data["series_type"]);
+    let book_type_source = crate::book_type::source_for(book_type, "METRON");
 
     if !series_unchanged {
     let final_cover = resolve_cover(client, cover_remote.as_deref(), folder_path, current_cover, has_custom_cover, cover_source).await;
 
     // A manually curated series keeps its narrative fields; only the cover + blank-fills update.
     let update_res = if series_is_locked(db, series_id).await || file_priority {
-        sqlx::query(
-            r#"UPDATE "Series" SET "coverUrl"=$1, universe=COALESCE($2, universe),
-               "remoteCoverUrl"=COALESCE($3, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $4),
-               genres=COALESCE(genres, $5),
-               description=COALESCE(description, $6),
-               status=COALESCE(status, $7)
-               WHERE id=$8"#,
-        )
-        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(&series_genres_json)
+        sqlx::query(&metron_series_update_sql(true))
+        .bind(&final_cover).bind(&universe).bind(&cover_remote).bind(book_type).bind(book_type_source).bind(&series_genres_json)
         .bind(&description).bind(status_str).bind(series_id)
         .execute(&db.pool).await
     } else {
-        sqlx::query(
-            r#"UPDATE "Series" SET name=$1, publisher=$2, year=$3, description=$4, "coverUrl"=$5, status=$6, universe=COALESCE($7, universe),
-               "remoteCoverUrl"=COALESCE($8, "remoteCoverUrl"),
-               "bookType"=COALESCE("bookType", $9),
-               genres=COALESCE($10, genres)
-               WHERE id=$11"#,
-        )
+        sqlx::query(&metron_series_update_sql(false))
         .bind(&name).bind(&publisher).bind(year).bind(&description).bind(&final_cover).bind(status_str).bind(&universe)
-        .bind(&cover_remote).bind(book_type).bind(&series_genres_json).bind(series_id)
+        .bind(&cover_remote).bind(book_type).bind(book_type_source).bind(&series_genres_json).bind(series_id)
         .execute(&db.pool).await
     };
     if let Err(e) = update_res {
@@ -3255,5 +3293,72 @@ mod tests {
         let snapshot: Vec<(String, String, Option<String>)> = vec![("run_2".into(), "2".into(), None)];
         assert!(matches!(resolve_pair_target("9100001", "1", &snapshot, None, &std::collections::HashSet::new()), PairTarget::Insert));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // The series UPDATEs carry two book-type placeholders in the middle of their lists (book_type.rs).
+    // Each column gets its own value here, so a misnumbered placeholder lands in the wrong column.
+    async fn series_update_table() -> sqlx::AnyPool {
+        sqlx::any::install_default_drivers();
+        let pool = sqlx::any::AnyPoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER, description TEXT,
+            "coverUrl" TEXT, status TEXT, universe TEXT, "remoteCoverUrl" TEXT, genres TEXT, "bookType" TEXT, "bookTypeSource" TEXT)"#)
+            .execute(&pool).await.unwrap();
+        // blank: nothing set. legacy: a Print nobody chose. admin: the admin's Print.
+        sqlx::query(r#"INSERT INTO "Series" (id, "bookType", "bookTypeSource") VALUES ('blank', NULL, NULL), ('legacy', 'Print', NULL), ('admin', 'Print', 'ADMIN')"#)
+            .execute(&pool).await.unwrap();
+        pool
+    }
+
+    type SeriesRow = (Option<String>, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>,
+                      Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
+
+    async fn series_row(pool: &sqlx::AnyPool, id: &str) -> SeriesRow {
+        sqlx::query_as(r#"SELECT name, publisher, year, description, "coverUrl", status, universe, "remoteCoverUrl", genres,
+            "bookType", "bookTypeSource" FROM "Series" WHERE id = $1"#).bind(id).fetch_one(pool).await.unwrap()
+    }
+
+    fn s(v: &str) -> Option<String> { Some(v.to_string()) }
+
+    #[tokio::test]
+    async fn cv_series_updates_land_each_value_in_its_column_and_the_guess_only_fills_a_blank() {
+        let pool = series_update_table().await;
+        for id in ["blank", "legacy"] {
+            sqlx::query(&cv_series_update_sql(true))
+                .bind("cover").bind("remote").bind(Some("OneShot")).bind(Some("GUESS")).bind("[\"g\"]").bind("desc").bind("Ended").bind(id)
+                .execute(&pool).await.unwrap();
+        }
+        assert_eq!(series_row(&pool, "blank").await,
+            (None, None, None, s("desc"), s("cover"), s("Ended"), None, s("remote"), s("[\"g\"]"), s("OneShot"), s("GUESS")));
+        assert_eq!(series_row(&pool, "legacy").await.9, s("Print"), "a guess never replaces a stored type");
+
+        let pool = series_update_table().await;
+        sqlx::query(&cv_series_update_sql(false))
+            .bind("Name").bind("Pub").bind(2001).bind("desc").bind("cover").bind("Ended").bind("remote")
+            .bind(Some("OneShot")).bind(Some("GUESS")).bind("[\"g\"]").bind("blank")
+            .execute(&pool).await.unwrap();
+        assert_eq!(series_row(&pool, "blank").await,
+            (s("Name"), s("Pub"), Some(2001), s("desc"), s("cover"), s("Ended"), None, s("remote"), s("[\"g\"]"), s("OneShot"), s("GUESS")));
+    }
+
+    #[tokio::test]
+    async fn metron_series_updates_land_each_value_in_its_column_and_replace_a_print_nobody_chose() {
+        let pool = series_update_table().await;
+        for id in ["legacy", "admin"] {
+            sqlx::query(&metron_series_update_sql(true))
+                .bind("cover").bind("uni").bind("remote").bind(Some("TPB")).bind(Some("METRON")).bind("[\"g\"]").bind("desc").bind("Ended").bind(id)
+                .execute(&pool).await.unwrap();
+        }
+        assert_eq!(series_row(&pool, "legacy").await,
+            (None, None, None, s("desc"), s("cover"), s("Ended"), s("uni"), s("remote"), s("[\"g\"]"), s("TPB"), s("METRON")));
+        let admin = series_row(&pool, "admin").await;
+        assert_eq!((admin.9, admin.10), (s("Print"), s("ADMIN")), "Metron never replaces the admin's choice");
+
+        let pool = series_update_table().await;
+        sqlx::query(&metron_series_update_sql(false))
+            .bind("Name").bind("Pub").bind(2001).bind("desc").bind("cover").bind("Ended").bind("uni").bind("remote")
+            .bind(Some("TPB")).bind(Some("METRON")).bind("[\"g\"]").bind("legacy")
+            .execute(&pool).await.unwrap();
+        assert_eq!(series_row(&pool, "legacy").await,
+            (s("Name"), s("Pub"), Some(2001), s("desc"), s("cover"), s("Ended"), s("uni"), s("remote"), s("[\"g\"]"), s("TPB"), s("METRON")));
     }
 }

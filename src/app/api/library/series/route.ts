@@ -543,6 +543,7 @@ export async function GET(request: Request) {
       year: seriesRecord?.year || null,
       status: seriesRecord?.status || null,
       bookType: seriesRecord?.bookType || null,
+      bookTypeSource: seriesRecord?.bookTypeSource || null,
       monitored: seriesRecord?.monitored || false,
       isManga: seriesRecord?.isManga || false,
       // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored

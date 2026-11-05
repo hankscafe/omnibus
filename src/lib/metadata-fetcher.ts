@@ -18,6 +18,7 @@ import { findLocalCoverBasename, providerCoverBlocked } from '@/lib/utils/cover-
 import { CV_VOLUME_CREDIT_FIELDS, parseVolumeCredits, persistSeriesCredits } from '@/lib/utils/volume-credits';
 import { syncedReleaseDate } from '@/lib/utils/synced-release-date';
 import { comicInfoWritesEnabled } from '@/lib/comicinfo-writes';
+import { bookTypeFromEvidence, bookTypeFromGuess } from '@/lib/book-type';
 
 // ComicVine signals its velocity/burst block with HTTP 420 (not 429) -- a separate throttle from
 // the documented 200/hr quota that can trip even well under it. Engine parity: metadata.rs
@@ -160,8 +161,9 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                     coverUrl: series.hasCustomCover ? series.coverUrl : metronFinalCover,
                     // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
                     ...(details.coverUrl ? { remoteCoverUrl: details.coverUrl } : {}),
-                    // Metron's series_type is authoritative, but never clobber a manual categorization
-                    ...(details.bookType && !series.bookType ? { bookType: details.bookType } : {}),
+                    // Metron's series_type is evidence: it fills a blank and replaces a Print nobody
+                    // chose, never the admin's choice (book-type.ts).
+                    ...bookTypeFromEvidence(series, details.bookType, 'METRON'),
                     status: details.status
                 }
             });
@@ -435,7 +437,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             // Keep the remote URL for external consumers (series.json) — coverUrl is a local path
             ...(imageUrl ? { remoteCoverUrl: imageUrl } : {}),
             // Heuristic only fills a blank — never clobber a manual categorization
-            ...(guessedBookType && !series.bookType ? { bookType: guessedBookType } : {}),
+            ...bookTypeFromGuess(series, guessedBookType),
             // Genre noise an earlier sync stored stays forever otherwise; removing it only takes
             // junk out, so it applies to a locked series too (engine parity).
             ...(stripGenreNoise(series.genres) !== (series.genres ?? null) ? { genres: stripGenreNoise(series.genres) } : {}),

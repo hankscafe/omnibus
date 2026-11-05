@@ -95,6 +95,26 @@ describe('MetadataEditorModal series mode — ComicInfo defaults (#199)', () => 
 
         expect(captured.imprint).toBe(''); // the route stores '' as null = cleared
     });
+
+    // Print follow-up (book-type.ts): the route records any book type it is sent as the admin's choice,
+    // and this editor doesn't edit it - so it mustn't send the stored one back.
+    it('never sends the book type back', async () => {
+        vi.mocked(fetch).mockImplementation(((url: string, init?: RequestInit) => {
+            if (String(url).startsWith('/api/library/series')) return ok({ ...seriesPayload, bookType: 'Print', bookTypeSource: null });
+            if (String(url).startsWith('/api/library/update')) {
+                captured = JSON.parse(String(init?.body));
+                return ok({ success: true, newPath: '/comics/Caravan', changed: true });
+            }
+            return ok({ settings: [] });
+        }) as unknown as typeof fetch);
+        render(<MetadataEditorModal {...baseProps} />);
+        await waitFor(() => expect((screen.getByLabelText('Publisher Imprint') as HTMLInputElement).value).toBe('Sergio Bonelli Editore'));
+
+        fireEvent.click(screen.getByRole('button', { name: /save metadata/i }));
+        await waitFor(() => expect(captured).not.toBeNull());
+
+        expect('bookType' in captured).toBe(false);
+    });
 });
 
 // #199 Call-3 Beta C: issue mode wears the same four tabs, rendered from the SAME shared bodies

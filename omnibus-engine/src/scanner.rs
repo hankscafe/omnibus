@@ -582,15 +582,19 @@ fn scanned_issue_match_state(fm: &IssueFileMeta) -> &'static str {
 /// Fill-only UPDATE re-flowing series.json fields into an EXISTING Series row (scan 5F): each
 /// column takes the file's value only when the column is blank (publisher's scan-default 'Other'
 /// counts as blank); the trailing self-reference keeps a column untouched when the file has
-/// nothing either. $1..$5 = description, status, booktype, publisher, year; $6 = series id.
-fn series_json_fill_blanks_sql() -> &'static str {
-    r#"UPDATE "Series" SET
+/// nothing either. $1..$6 = description, status, booktype, its source (SERIES_JSON when there is
+/// a booktype - book_type.rs), publisher, year; $7 = series id.
+fn series_json_fill_blanks_sql() -> String {
+    format!(
+        r#"UPDATE "Series" SET
            description = COALESCE(NULLIF(description, ''), $1, description),
            status      = COALESCE(NULLIF(status, ''), $2, status),
-           "bookType"  = COALESCE(NULLIF("bookType", ''), $3, "bookType"),
-           publisher   = COALESCE(NULLIF(NULLIF(publisher, ''), 'Other'), $4, publisher),
-           year        = COALESCE(NULLIF(year, 0), $5, year)
-       WHERE id = $6"#
+           {book_type},
+           publisher   = COALESCE(NULLIF(NULLIF(publisher, ''), 'Other'), $5, publisher),
+           year        = COALESCE(NULLIF(year, 0), $6, year)
+       WHERE id = $7"#,
+        book_type = crate::book_type::set_clauses(crate::book_type::BLANK, 3, 4)
+    )
 }
 
 /// #199 read-side (5H): the series-default values a single file's ComicInfo carries, converted to
@@ -708,8 +712,10 @@ fn comicinfo_series_defaults(info: &ScanComicInfo) -> ComicInfoSeriesDefaults {
 /// #199 read-side (5H): series with at least one file-backed issue and ANY blank ComicInfo-default
 /// column — candidates for the fill. $1 = libraryId. Most libraries match broadly (few files carry
 /// every tag), so the fill reads ONE small archive entry per candidate series, bounded-parallel.
-fn comicinfo_defaults_candidates_sql() -> &'static str {
-    r#"SELECT s.id AS sid,
+/// A Print nobody chose counts as blank for bookType (book_type.rs): a file's <Format> may replace it,
+/// which is how a library classified before sources were recorded corrects itself on the next scan.
+fn comicinfo_defaults_candidates_sql() -> String {
+    format!(r#"SELECT s.id AS sid,
               (SELECT i."filePath" FROM "Issue" i
                 WHERE i."seriesId" = s.id AND i."filePath" IS NOT NULL AND i."filePath" <> ''
                   AND i."attachedVolumeId" IS NULL AND i."isAnnual" = false
@@ -719,7 +725,7 @@ fn comicinfo_defaults_candidates_sql() -> &'static str {
              s.imprint IS NULL OR s.imprint = ''
           OR s.tags IS NULL OR s.tags = '' OR s.tags = '[]'
           OR s.format IS NULL OR s.format = ''
-          OR s."bookType" IS NULL OR s."bookType" = ''
+          OR {book_type}
           OR s."languageISO" IS NULL OR s."languageISO" = ''
           OR s."ageRating" IS NULL OR s."ageRating" = ''
           OR s."communityRating" IS NULL
@@ -735,11 +741,14 @@ fn comicinfo_defaults_candidates_sql() -> &'static str {
           OR s."storyArcNumber" IS NULL OR s."storyArcNumber" = ''
           OR s.inker IS NULL OR s.inker = '' OR s.inker = '[]'
           OR s.editor IS NULL OR s.editor = '' OR s.editor = '[]'
-          OR s.translator IS NULL OR s.translator = '' OR s.translator = '[]')"#
+          OR s.translator IS NULL OR s.translator = '' OR s.translator = '[]')"#,
+        book_type = crate::book_type::EVIDENCE_MAY_REPLACE)
 }
 
 /// Fill-only UPDATE for the 5H defaults: each column takes the file's value only when blank, the
 /// trailing self-reference keeps it untouched when the file offers nothing either (the 5F pattern).
+/// bookType is the exception: the file's <Format> is evidence, which also replaces a Print nobody
+/// chose ($19 value, $20 its source FILE - book_type.rs).
 /// blackAndWhite is interpolated as a literal (true/false/NULL, engine-derived — never user text):
 /// Postgres types the column boolean and the Any driver has no portable bool bind (see db.rs).
 fn comicinfo_defaults_fill_sql(bw_literal: &str) -> String {
@@ -763,9 +772,10 @@ fn comicinfo_defaults_fill_sql(bw_literal: &str) -> String {
            inker = COALESCE(NULLIF(NULLIF(inker, ''), '[]'), $16, inker),
            editor = COALESCE(NULLIF(NULLIF(editor, ''), '[]'), $17, editor),
            translator = COALESCE(NULLIF(NULLIF(translator, ''), '[]'), $18, translator),
-           "bookType" = COALESCE(NULLIF("bookType", ''), $19, "bookType"),
+           {book_type},
            "blackAndWhite" = COALESCE("blackAndWhite", {bw})
-       WHERE id = $20"#,
+       WHERE id = $21"#,
+        book_type = crate::book_type::set_clauses(crate::book_type::EVIDENCE_MAY_REPLACE, 19, 20),
         bw = bw_literal
     )
 }
@@ -2233,8 +2243,8 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
 
         let insert_res = sqlx::query(&format!(
             r#"INSERT INTO "Series"
-               (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", description, status, "bookType", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, {now}, {now})
+               (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "cvId", "metronId", "isManga", "seriesGroup", "libraryId", description, status, "bookType", "bookTypeSource", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, {now}, {now})
                ON CONFLICT DO NOTHING"#,
             now = db.now_expr()
         ))
@@ -2254,6 +2264,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         .bind(&sj_description)
         .bind(&sj_status)
         .bind(&sj_booktype)
+        .bind(crate::book_type::source_for(sj_booktype.as_deref(), "SERIES_JSON"))
         .execute(&mut *tx)
         .await;
 
@@ -2824,10 +2835,11 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                 // Per-column blank guards live in the UPDATE itself (same reasoning as 5E), so a
                 // concurrent provider sync writing a real value between our SELECT and now can't be
                 // clobbered.
-                match sqlx::query(series_json_fill_blanks_sql())
+                match sqlx::query(&series_json_fill_blanks_sql())
                 .bind(&sj.description)
                 .bind(&sj.status)
                 .bind(&sj.booktype)
+                .bind(crate::book_type::source_for(sj.booktype.as_deref(), "SERIES_JSON"))
                 .bind(&sj.publisher)
                 .bind(sj.year)
                 .bind(sid)
@@ -2985,7 +2997,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     // fields are series-wide by definition, so ONE file speaks for the series: read one file-backed
     // issue's ComicInfo per candidate series (bounded-parallel, one small archive entry each) and
     // fill BLANK columns only — a provider, manual, or earlier value always wins.
-    let ci_candidates = sqlx::query(comicinfo_defaults_candidates_sql())
+    let ci_candidates = sqlx::query(&comicinfo_defaults_candidates_sql())
         .bind(&library_id)
         .fetch_all(&db.pool)
         .await
@@ -3042,6 +3054,7 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
                     .bind(&d.editor_json)
                     .bind(&d.translator_json)
                     .bind(d.book_type)
+                    .bind(crate::book_type::source_for(d.book_type, "FILE"))
                     .bind(sid)
                     .execute(&mut *tx)
                     .await
@@ -3432,16 +3445,16 @@ mod tests {
         let pool = sqlx::any::AnyPoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:").await.unwrap();
-        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, description TEXT, status TEXT, "bookType" TEXT, publisher TEXT, year INTEGER)"#)
+        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, description TEXT, status TEXT, "bookType" TEXT, publisher TEXT, year INTEGER, "bookTypeSource" TEXT)"#)
             .execute(&pool).await.unwrap();
         // s1: everything blank (publisher at the scan default 'Other', year 0) → all fill.
         // s2: everything already set → NOTHING moves, even though the file offers values.
-        sqlx::query(r#"INSERT INTO "Series" VALUES ('s1', NULL, '', NULL, 'Other', 0), ('s2', 'kept', 'Ongoing', 'TPB', 'Marvel', 1999)"#)
+        sqlx::query(r#"INSERT INTO "Series" VALUES ('s1', NULL, '', NULL, 'Other', 0, NULL), ('s2', 'kept', 'Ongoing', 'TPB', 'Marvel', 1999, NULL)"#)
             .execute(&pool).await.unwrap();
 
         for sid in ["s1", "s2"] {
-            sqlx::query(series_json_fill_blanks_sql())
-                .bind(Some("The Dark Knight.")).bind(Some("Ended")).bind(Some("Print"))
+            sqlx::query(&series_json_fill_blanks_sql())
+                .bind(Some("The Dark Knight.")).bind(Some("Ended")).bind(Some("Print")).bind(Some("SERIES_JSON"))
                 .bind(Some("DC Comics")).bind(Some(2011))
                 .bind(sid)
                 .execute(&pool).await.unwrap();
@@ -3451,21 +3464,24 @@ mod tests {
         assert_eq!(s1.get::<String, _>("description"), "The Dark Knight.");
         assert_eq!(s1.get::<String, _>("status"), "Ended");
         assert_eq!(s1.get::<String, _>("bookType"), "Print");
+        // Recorded as a series.json read-back, so a file's <Format> or Metron may still replace it.
+        assert_eq!(s1.get::<String, _>("bookTypeSource"), "SERIES_JSON");
         assert_eq!(s1.get::<String, _>("publisher"), "DC Comics");
         assert_eq!(s1.get::<i64, _>("year"), 2011);
         let s2 = &rows[1];
         assert_eq!(s2.get::<String, _>("description"), "kept");
         assert_eq!(s2.get::<String, _>("status"), "Ongoing");
         assert_eq!(s2.get::<String, _>("bookType"), "TPB");
+        assert_eq!(s2.get::<Option<String>, _>("bookTypeSource"), None);
         assert_eq!(s2.get::<String, _>("publisher"), "Marvel");
         assert_eq!(s2.get::<i64, _>("year"), 1999);
 
         // A series.json missing every field (all-None binds) leaves a blank row blank — the
         // trailing self-reference in each COALESCE keeps NULL instead of erroring or fabricating.
-        sqlx::query(r#"INSERT INTO "Series" VALUES ('s3', NULL, NULL, NULL, '', NULL)"#)
+        sqlx::query(r#"INSERT INTO "Series" VALUES ('s3', NULL, NULL, NULL, '', NULL, NULL)"#)
             .execute(&pool).await.unwrap();
-        sqlx::query(series_json_fill_blanks_sql())
-            .bind(None::<String>).bind(None::<String>).bind(None::<String>)
+        sqlx::query(&series_json_fill_blanks_sql())
+            .bind(None::<String>).bind(None::<String>).bind(None::<String>).bind(None::<String>)
             .bind(None::<String>).bind(None::<i32>)
             .bind("s3")
             .execute(&pool).await.unwrap();
@@ -3474,6 +3490,20 @@ mod tests {
         assert_eq!(s3.get::<Option<String>, _>("description"), None);
         // The self-reference preserves the ORIGINAL blank ('' stays '', not NULL).
         assert_eq!(s3.get::<Option<String>, _>("publisher"), Some(String::new()));
+
+        // A series.json value only fills a blank (book_type.rs): even a Print nobody chose stays,
+        // for a file's <Format> or Metron to replace.
+        sqlx::query(r#"INSERT INTO "Series" VALUES ('s4', 'kept', 'Ongoing', 'Print', 'DC', 2011, NULL)"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query(&series_json_fill_blanks_sql())
+            .bind(None::<String>).bind(None::<String>).bind(Some("TPB")).bind(Some("SERIES_JSON"))
+            .bind(None::<String>).bind(None::<i32>)
+            .bind("s4")
+            .execute(&pool).await.unwrap();
+        let s4 = sqlx::query(r#"SELECT "bookType", "bookTypeSource" FROM "Series" WHERE id = 's4'"#)
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(s4.get::<Option<String>, _>("bookType").as_deref(), Some("Print"));
+        assert_eq!(s4.get::<Option<String>, _>("bookTypeSource"), None);
     }
 
     /// Review of #233: through the REAL 5H SQL (candidates query + fill UPDATE), not just the pure
@@ -3506,7 +3536,8 @@ mod tests {
                format TEXT, "bookType" TEXT, "languageISO" TEXT, "ageRating" TEXT, "communityRating" REAL,
                "blackAndWhite" INTEGER, gtin TEXT, notes TEXT, "scanInformation" TEXT, review TEXT,
                "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
-               "alternateCount" INTEGER, "storyArcNumber" TEXT, inker TEXT, editor TEXT, translator TEXT)"#,
+               "alternateCount" INTEGER, "storyArcNumber" TEXT, inker TEXT, editor TEXT, translator TEXT,
+               "bookTypeSource" TEXT)"#,
         ).execute(&pool).await.unwrap();
         sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
                "attachedVolumeId" TEXT, "isAnnual" INTEGER NOT NULL DEFAULT 0)"#)
@@ -3524,7 +3555,7 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         // The real candidate query: a blank bookType (among other blanks) makes this series a hit.
-        let candidates = sqlx::query(comicinfo_defaults_candidates_sql()).bind("lib1").fetch_all(&pool).await.unwrap();
+        let candidates = sqlx::query(&comicinfo_defaults_candidates_sql()).bind("lib1").fetch_all(&pool).await.unwrap();
         assert_eq!(candidates.len(), 1);
         let fp: String = candidates[0].get("fp");
         assert_eq!(fp, cbz_str);
@@ -3539,14 +3570,77 @@ mod tests {
             .bind(d.community_rating).bind(&d.gtin).bind(&d.notes).bind(&d.scan_information).bind(&d.review)
             .bind(&d.main_character_or_team).bind(&d.alternate_series).bind(&d.alternate_number)
             .bind(d.alternate_count).bind(&d.story_arc_number).bind(&d.inker_json).bind(&d.editor_json)
-            .bind(&d.translator_json).bind(d.book_type).bind("s233")
+            .bind(&d.translator_json).bind(d.book_type).bind(crate::book_type::source_for(d.book_type, "FILE")).bind("s233")
             .execute(&pool).await.unwrap();
 
-        let row = sqlx::query(r#"SELECT "bookType", format FROM "Series" WHERE id = 's233'"#).fetch_one(&pool).await.unwrap();
+        let row = sqlx::query(r#"SELECT "bookType", "bookTypeSource", format FROM "Series" WHERE id = 's233'"#).fetch_one(&pool).await.unwrap();
         assert_eq!(row.get::<Option<String>, _>("bookType"), Some("OneShot".to_string()));
+        assert_eq!(row.get::<Option<String>, _>("bookTypeSource"), Some("FILE".to_string()));
         assert_eq!(row.get::<Option<String>, _>("format"), Some("One-Shot".to_string()));
 
+        // Print follow-up (book_type.rs): the same file evidence replaces a Print nobody chose, and
+        // leaves the admin's Print alone.
+        sqlx::query(r#"INSERT INTO "Series" (id, "libraryId", "bookType", "bookTypeSource") VALUES ('s_legacy', 'lib1', 'Print', NULL), ('s_admin', 'lib1', 'Print', 'ADMIN')"#)
+            .execute(&pool).await.unwrap();
+        for sid in ["s_legacy", "s_admin"] {
+            sqlx::query(&comicinfo_defaults_fill_sql(bw))
+                .bind(&d.imprint).bind(&d.tags_json).bind(&d.format).bind(&d.language_iso).bind(&d.age_rating)
+                .bind(d.community_rating).bind(&d.gtin).bind(&d.notes).bind(&d.scan_information).bind(&d.review)
+                .bind(&d.main_character_or_team).bind(&d.alternate_series).bind(&d.alternate_number)
+                .bind(d.alternate_count).bind(&d.story_arc_number).bind(&d.inker_json).bind(&d.editor_json)
+                .bind(&d.translator_json).bind(d.book_type).bind(crate::book_type::source_for(d.book_type, "FILE")).bind(sid)
+                .execute(&pool).await.unwrap();
+        }
+        let types: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            r#"SELECT id, "bookType", "bookTypeSource" FROM "Series" WHERE id IN ('s_legacy', 's_admin') ORDER BY id"#,
+        ).fetch_all(&pool).await.unwrap();
+        assert_eq!(types, vec![
+            ("s_admin".to_string(), Some("Print".to_string()), Some("ADMIN".to_string())),
+            ("s_legacy".to_string(), Some("OneShot".to_string()), Some("FILE".to_string())),
+        ]);
+
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Print follow-up (book_type.rs): a series stuck on a Print nobody chose is a 5H candidate even
+    /// with every other default filled, so its files' <Format> reclassifies it on the next scan. The
+    /// admin's own Print is not: nothing on disk may replace it.
+    #[tokio::test]
+    async fn comicinfo_candidates_include_a_print_nobody_chose_but_not_the_admins() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "libraryId" TEXT, imprint TEXT, tags TEXT,
+               format TEXT, "bookType" TEXT, "bookTypeSource" TEXT, "languageISO" TEXT, "ageRating" TEXT,
+               "communityRating" REAL, "blackAndWhite" INTEGER, gtin TEXT, notes TEXT, "scanInformation" TEXT,
+               review TEXT, "mainCharacterOrTeam" TEXT, "alternateSeries" TEXT, "alternateNumber" TEXT,
+               "alternateCount" INTEGER, "storyArcNumber" TEXT, inker TEXT, editor TEXT, translator TEXT)"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "filePath" TEXT, number TEXT,
+               "attachedVolumeId" TEXT, "isAnnual" INTEGER NOT NULL DEFAULT 0)"#)
+            .execute(&pool).await.unwrap();
+        // Every other default filled, so only bookType can make a series a candidate.
+        for (id, book_type, source) in [
+            ("s_legacy", Some("Print"), None), ("s_guess", Some("Print"), Some("GUESS")),
+            ("s_admin", Some("Print"), Some("ADMIN")), ("s_metron", Some("Print"), Some("METRON")), ("s_tpb", Some("TPB"), None),
+        ] {
+            sqlx::query(
+                r#"INSERT INTO "Series" (id, "libraryId", imprint, tags, format, "bookType", "bookTypeSource", "languageISO",
+                   "ageRating", "communityRating", "blackAndWhite", gtin, notes, "scanInformation", review,
+                   "mainCharacterOrTeam", "alternateSeries", "alternateNumber", "alternateCount", "storyArcNumber",
+                   inker, editor, translator)
+                   VALUES ($1, 'lib1', 'x', '["x"]', 'x', $2, $3, 'en', 'Teen', 4.0, 0, 'x', 'x', 'x', 'x', 'x', 'x', 'x', 1, 'x',
+                   '["x"]', '["x"]', '["x"]')"#,
+            ).bind(id).bind(book_type).bind(source).execute(&pool).await.unwrap();
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number) VALUES ($1, $2, $3, '1')"#)
+                .bind(format!("i_{id}")).bind(id).bind(format!("/lib/{id}.cbz")).execute(&pool).await.unwrap();
+        }
+
+        let mut ids: Vec<String> = sqlx::query(&comicinfo_defaults_candidates_sql()).bind("lib1").fetch_all(&pool).await.unwrap()
+            .iter().map(|r| r.get::<String, _>("sid")).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["s_guess", "s_legacy"]);
     }
 
     // ==== Discussion #177: trust embedded file metadata (Mylar-migrated libraries). ====
@@ -4349,7 +4443,7 @@ mod tests {
         r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "folderPath" TEXT, name TEXT, year INTEGER, publisher TEXT,
             "metadataId" TEXT, "metadataSource" TEXT, "matchState" TEXT, "cvId" INTEGER, "metronId" INTEGER,
             "isManga" INTEGER DEFAULT 0, "seriesGroup" TEXT, "libraryId" TEXT, description TEXT, status TEXT,
-            "bookType" TEXT, genres TEXT, universe TEXT, monitored INTEGER DEFAULT 0, "coverUrl" TEXT,
+            "bookType" TEXT, "bookTypeSource" TEXT, genres TEXT, universe TEXT, monitored INTEGER DEFAULT 0, "coverUrl" TEXT,
             "remoteCoverUrl" TEXT, "hasCustomCover" INTEGER DEFAULT 0, "seriesJsonWritten" INTEGER DEFAULT 0,
             writers TEXT, artists TEXT, "coverArtists" TEXT, colorists TEXT, letterers TEXT, characters TEXT,
             teams TEXT, locations TEXT, "storyArcs" TEXT, inker TEXT, editor TEXT, translator TEXT,

@@ -457,6 +457,31 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
             { type: 'EXPORT_SERIES_JSON', seriesId: 'series_1' }, expect.objectContaining({ delay: 300000 }));
     });
 
+    // Print follow-up (book-type.ts): the guess fills a blank and records that it is one, so a file's
+    // <Format> or Metron may replace it later; it never replaces a type that is already there.
+    it("the ComicVine book-type guess fills a blank, says it is a guess, and replaces nothing", async () => {
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) {
+                return { data: { results: { name: 'Batman: The Killing Joke', count_of_issues: 1, start_year: '1988', publisher: { name: 'DC Comics' }, image: null } } };
+            }
+            if (url.includes('/issues/')) return { data: { number_of_total_results: 0, results: [] } };
+        });
+        mocks.existsSync.mockReturnValue(true);
+        const seriesWrite = () => mocks.seriesUpdate.mock.calls.map(c => c[0].data).find(d => 'name' in d);
+
+        await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(seriesWrite()).toMatchObject({ bookType: 'OneShot', bookTypeSource: 'GUESS' });
+
+        mocks.seriesUpdate.mockClear();
+        mocks.seriesFindFirst.mockResolvedValue({
+            id: 'series_1', metadataId: '4050-123', folderPath: '/comics/Batman', metadataSource: 'COMICVINE', year: 1988,
+            bookType: 'Print', bookTypeSource: null,
+        });
+        await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect('bookType' in seriesWrite()).toBe(false);
+        expect('bookTypeSource' in seriesWrite()).toBe(false);
+    });
+
     it('isCvRateLimited treats ComicVine\'s 420 velocity block the same as a 429', () => {
         expect(isCvRateLimited(429)).toBe(true);
         expect(isCvRateLimited(420)).toBe(true);

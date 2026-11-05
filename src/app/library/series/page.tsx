@@ -38,6 +38,7 @@ import { CollectedReadButton, CollectedProgressBadge } from "@/components/collec
 import { CoveredIssuesSection } from "@/components/covered-issues-section"
 import { requestNameFor } from "@/lib/utils/request-name"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
+import { dialogBookTypePayload, dialogChoice } from "@/lib/book-type"
 import { RefreshMetadataButton } from "@/components/refresh-metadata-button"
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
@@ -49,6 +50,9 @@ const coverImgError = (fallback: string | null) => (e: SyntheticEvent<HTMLImageE
     img.dataset.fb = '1';
     if (fallback) img.src = fallback; else img.style.visibility = 'hidden';
 };
+
+// The Edit Info dialog's "Automatic" choice names what was detected (src/lib/book-type.ts).
+const BOOK_TYPE_LABELS: Record<string, string> = { Print: 'Print', OneShot: 'One-Shot', TPB: 'Trade Paperback', GN: 'Graphic Novel' };
 
 function SeriesDetailSkeleton() {
   return (
@@ -97,7 +101,7 @@ function SeriesContent() {
   // not on disk; each carries `coveredBy` naming the book.
   const [coveredIssues, setCoveredIssues] = useState<any[]>([]);
 
-  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, isFollowing: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
+  const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, isFollowing: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, bookTypeSource?: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
     name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, isFollowing: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false, genres: []
   });
 
@@ -129,7 +133,7 @@ function SeriesContent() {
   const [isSearchingMore, setIsSearchingMore] = useState(false);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "Print" });
+  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "AUTO" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [metaModalOpen, setMetaModalOpen] = useState(false);
   const [metaMode, setMetaMode] = useState<'series' | 'issue'>('series');
@@ -339,6 +343,7 @@ function SeriesContent() {
                 description: data.description || null,
                 status: data.status || null,
                 bookType: data.bookType || null,
+                bookTypeSource: data.bookTypeSource || null,
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
                 universe: data.universe || null,
@@ -355,7 +360,7 @@ function SeriesContent() {
                 monitored: data.monitored || false,
                 isManga: data.isManga || false,
                 status: data.status || 'Ongoing',
-                bookType: data.bookType || 'Print'
+                bookType: dialogChoice({ bookType: data.bookType || null, bookTypeSource: data.bookTypeSource || null })
             });
 
             // --- FIX: Intelligently fallback to the first missing issue if nothing is downloaded yet ---
@@ -931,7 +936,7 @@ function SeriesContent() {
                   monitored: editForm.monitored,
                   isManga: editForm.isManga,
                   status: editForm.status,
-                  bookType: editForm.bookType
+                  ...dialogBookTypePayload(editForm.bookType, seriesInfo)
               })
           });
           if (!res.ok) throw new Error("Failed to save info.");
@@ -2475,10 +2480,15 @@ function SeriesContent() {
                       <div className="grid gap-2">
                           <Label>Book Type</Label>
                           <Select value={editForm.bookType} onValueChange={(v) => setEditForm({...editForm, bookType: v})}>
-                              <SelectTrigger className="bg-background border-border h-12 sm:h-10">
-                                  <SelectValue placeholder="Print" />
+                              <SelectTrigger aria-label="Book Type" className="bg-background border-border h-12 sm:h-10">
+                                  <SelectValue placeholder="Automatic" />
                               </SelectTrigger>
                               <SelectContent className="bg-popover border-border">
+                                  <SelectItem value="AUTO">
+                                      {seriesInfo.bookTypeSource === 'ADMIN'
+                                          ? 'Automatic (let the files and Metron decide)'
+                                          : `Automatic (${seriesInfo.bookType ? BOOK_TYPE_LABELS[seriesInfo.bookType] ?? seriesInfo.bookType : 'not detected'})`}
+                                  </SelectItem>
                                   <SelectItem value="Print">Print (Standard Series)</SelectItem>
                                   <SelectItem value="OneShot">One-Shot</SelectItem>
                                   <SelectItem value="TPB">Trade Paperback</SelectItem>

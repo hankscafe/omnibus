@@ -3036,7 +3036,7 @@ mod tests {
         let cbz = folder.join("Saga 001.cbz");
         {
             let mut zw = zip::ZipWriter::new(std::fs::File::create(&cbz).unwrap());
-            zw.start_file("01.jpg", zip::write::FileOptions::default()).unwrap();
+            zw.start_file("01.jpg", zip::write::SimpleFileOptions::default()).unwrap();
             zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             zw.finish().unwrap();
         }

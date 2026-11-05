@@ -891,7 +891,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::FileOptions = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             for i in 0..4u8 {
                 zw.start_file(format!("{:02}.jpg", i), opts).unwrap();
                 zw.write_all(&vec![i; 4096]).unwrap();

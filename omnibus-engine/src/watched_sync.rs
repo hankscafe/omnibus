@@ -741,7 +741,7 @@ fn extract_comicinfo(path: &Path) -> Option<ComicInfo> {
     
     for i in 0..archive.len() {
         if let Ok(mut file) = archive.by_index(i) {
-            if file.name().eq_ignore_ascii_case("comicinfo.xml") {
+            if file.name().is_ok_and(|n| n.eq_ignore_ascii_case("comicinfo.xml")) {
                 let mut xml_content = String::new();
                 if file.read_to_string(&mut xml_content).is_ok() {
                     // Sanitize bare ampersands so a "Cloak & Dagger"-style tag doesn't fail parse and

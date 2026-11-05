@@ -3,7 +3,7 @@
 # ---- Chef base: Rust toolchain + cargo-chef + the C/C++ build deps ----
 FROM rust:1.96-bookworm AS chef
 WORKDIR /app
-# System deps for the C/C++-backed crates: bzip2-sys, libwebp-sys (build via `cc`);
+# System deps for the C/C++-backed crates: libwebp-sys (build via `cc`);
 # clang/libclang-dev/pkg-config cover any bindgen use. (No libssl-dev: reqwest now uses rustls, not OpenSSL.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential clang libclang-dev pkg-config \

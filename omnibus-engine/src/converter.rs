@@ -11,7 +11,7 @@ use sqlx::Row;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use webp::Encoder;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 /// Represents a processed page ready to be zipped
@@ -282,7 +282,7 @@ pub fn convert_cbr_to_cbz(cbr_path: &Path) -> Result<PathBuf> {
     let built = (|| -> Result<()> {
         let mut zip = ZipWriter::new(File::create(&temp_cbz)?);
         // Use Deflated compression (standard ZIP)
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         // 3. Walk the temporary directory and stream files into the new ZIP
         for entry in jwalk::WalkDir::new(&temp_dir) {
@@ -493,7 +493,7 @@ pub fn process_archive(
     let built = (|| -> Result<()> {
         let file = File::create(&temp_output_path)?;
         let mut zip = ZipWriter::new(file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored); // WebP/JPEGs are already compressed
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored); // WebP/JPEGs are already compressed
 
         // 5. PARALLEL IMAGE PROCESSING 🚀
         let mut processed_pages: Vec<Result<ProcessedPage>> = images
@@ -619,7 +619,7 @@ fn extract_zip(source: &Path, dest: &Path) -> Result<()> {
             None => continue,
         };
 
-        if (*file.name()).ends_with('/') {
+        if file.name()?.ends_with('/') {
             fs::create_dir_all(&outpath)?;
         } else {
             if let Some(p) = outpath.parent() {
@@ -758,7 +758,7 @@ fn first_image_from_zip(archive_path: &Path) -> Result<Option<(Vec<u8>, String)>
     for i in 0..archive.len() {
         if let Ok(entry) = archive.by_index(i) {
             if entry.is_dir() { continue; }
-            let name = entry.name().to_string();
+            let Ok(name) = entry.name().map(String::from) else { continue };
             if name.to_lowercase().contains("__macosx") { continue; }
             let base = name.rsplit('/').next().unwrap_or(&name);
             if base.starts_with("._") { continue; }
@@ -792,7 +792,7 @@ fn resolve_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, entry_nam
     let target_base = entry_name.rsplit(['/', '\\']).next().unwrap_or(entry_name);
     for i in 0..archive.len() {
         if let Ok(e) = archive.by_index(i) {
-            let n = e.name().to_string();
+            let Ok(n) = e.name().map(String::from) else { continue };
             let base = n.rsplit(['/', '\\']).next().unwrap_or(&n);
             if base == target_base {
                 return Some(n);
@@ -851,7 +851,7 @@ fn sorted_image_entries<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Vec
     for i in 0..archive.len() {
         if let Ok(e) = archive.by_index(i) {
             if e.is_dir() { continue; }
-            let name = e.name().to_string();
+            let Ok(name) = e.name().map(String::from) else { continue };
             if name.to_lowercase().contains("__macosx") { continue; }
             if is_image_name(&name) { pages.push(name); }
         }
@@ -1164,10 +1164,10 @@ pub fn remove_pages_from_cbz(path: &Path, entry_names: &[String]) -> Result<usiz
     let result = (|| -> Result<()> {
         let tmp_file = File::create(&tmp_path).context("Failed to create temp archive")?;
         let mut writer = ZipWriter::new(tmp_file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         for i in 0..archive.len() {
-            let name = archive.by_index_raw(i).map(|f| f.name().to_string())?;
+            let name = archive.by_index_raw(i)?.name()?.to_string();
             if remove_set.contains(name.as_str()) {
                 continue;
             }
@@ -1266,14 +1266,14 @@ pub fn insert_cover_into_cbz(path: &Path, image: &[u8], ext: &str) -> Result<(St
     let result = (|| -> Result<()> {
         let tmp_file = File::create(&tmp_path).context("Failed to create temp archive")?;
         let mut writer = ZipWriter::new(tmp_file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         use std::io::Write;
         writer.start_file(entry_name.clone(), options)?;
         writer.write_all(image)?;
 
         for i in 0..archive.len() {
-            let name = archive.by_index_raw(i).map(|f| f.name().to_string())?;
+            let name = archive.by_index_raw(i)?.name()?.to_string();
             let base = name.rsplit('/').next().unwrap_or(&name).to_ascii_lowercase();
             if base == "comicinfo.xml" {
                 // Decompress + adjust + re-store: the page table inside indexes by position and
@@ -1535,7 +1535,7 @@ pub fn find_matching_pages_in_cbz(path: &Path, target_hash: &str, target_size: u
     let mut candidates: Vec<String> = Vec::new();
     for i in 0..archive.len() {
         let f = archive.by_index_raw(i)?;
-        let name = f.name().to_string();
+        let name = f.name()?.to_string();
         if f.size() == target_size && index_of.contains_key(name.as_str()) {
             candidates.push(name);
         }
@@ -1576,7 +1576,7 @@ fn repack_7z_without_pages(path: &Path, remove_set: &std::collections::HashSet<&
 
     let tmp_file = File::create(tmp_path).context("Failed to create temp archive")?;
     let mut writer = ZipWriter::new(tmp_file);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     for name in names {
         if remove_set.contains(name.as_str()) {
             continue;
@@ -1628,7 +1628,7 @@ fn repack_rar_without_pages(path: &Path, remove_set: &std::collections::HashSet<
 
         let tmp_file = File::create(tmp_path).context("Failed to create temp archive")?;
         let mut writer = ZipWriter::new(tmp_file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for entry in jwalk::WalkDir::new(&temp_dir) {
             let entry = entry?;
             let p = entry.path();
@@ -1750,8 +1750,9 @@ pub fn list_nested_archives(archive_path: &Path) -> Result<Vec<String>> {
     let mut found = Vec::new();
     for i in 0..archive.len() {
         if let Ok(e) = archive.by_index(i) {
-            if !e.is_dir() && is_comic_name(e.name()) {
-                found.push(e.name().to_string());
+            let Ok(name) = e.name() else { continue };
+            if !e.is_dir() && is_comic_name(&name) {
+                found.push(name.into_owned());
             }
         }
     }
@@ -1809,8 +1810,8 @@ pub fn extract_nested_archives(archive_path: &Path, dest_dir: &Path) -> Result<V
             Ok(e) => e,
             Err(_) => continue,
         };
-        if entry.is_dir() || !is_comic_name(entry.name()) { continue; }
-        let name = entry.name().to_string();
+        let Ok(name) = entry.name().map(String::from) else { continue };
+        if entry.is_dir() || !is_comic_name(&name) { continue; }
         let file_name = name.rsplit(['/', '\\']).next().unwrap_or(&name).to_string();
         let mut dest = dest_dir.join(&file_name);
         if dest.exists() {
@@ -1901,10 +1902,97 @@ fn collect_comic_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Test fixture: a stored (uncompressed) zip built byte by byte, so it can hold what zip's writer
+/// refuses since 2.x - two entries with the same name, as some archives from the wild do.
+#[cfg(test)]
+pub(crate) fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in data {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+    // Version 2.0, no flags, stored, dated 1980-01-01 00:00.
+    let common = |crc: u32, size: u32, name_len: u16| {
+        let mut h = Vec::new();
+        for v in [20u16, 0, 0, 0, 0x21] {
+            h.extend_from_slice(&v.to_le_bytes());
+        }
+        h.extend_from_slice(&crc.to_le_bytes());
+        h.extend_from_slice(&size.to_le_bytes());
+        h.extend_from_slice(&size.to_le_bytes());
+        h.extend_from_slice(&name_len.to_le_bytes());
+        h
+    };
+    let (mut out, mut central) = (Vec::new(), Vec::new());
+    for (name, data) in entries {
+        let offset = out.len() as u32;
+        let fields = common(crc32(data), data.len() as u32, name.len() as u16);
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&fields);
+        out.extend_from_slice(&0u16.to_le_bytes()); // extra length
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes()); // version made by
+        central.extend_from_slice(&fields);
+        central.extend_from_slice(&[0u8; 12]); // extra + comment length, disk, internal + external attributes
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let (cd_offset, cd_size, count) = (out.len() as u32, central.len() as u32, entries.len() as u16);
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0u8; 4]); // disk numbers
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&cd_size.to_le_bytes());
+    out.extend_from_slice(&cd_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // comment length
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    // zip 9 reads two entries of one name as one entry holding the last copy - the one by_name always
+    // returned. zip 0.6 listed both, so the reader showed that page twice.
+    #[test]
+    fn an_archive_with_a_repeated_entry_name_lists_the_page_once() {
+        use std::io::Read;
+        let bytes = stored_zip(&[("01.jpg", b"FIRST"), ("02.jpg", b"TWO"), ("01.jpg", b"SECOND")]);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+
+        assert_eq!(sorted_image_entries(&mut archive), vec!["01.jpg", "02.jpg"]);
+        let mut page = String::new();
+        archive.by_name("01.jpg").unwrap().read_to_string(&mut page).unwrap();
+        assert_eq!(page, "SECOND");
+    }
+
+    // zip's writer refuses a name it has already written, and page removal copies every entry, so
+    // this proves the copy sees each name once.
+    #[test]
+    fn remove_pages_rewrites_an_archive_with_a_repeated_entry_name() {
+        use std::io::Read;
+        let dir = scratch_dir();
+        let cbz = dir.join("repeated.cbz");
+        fs::write(&cbz, stored_zip(&[("01.jpg", b"FIRST"), ("02.jpg", b"TWO"), ("01.jpg", b"SECOND"), ("03.jpg", b"THREE")])).unwrap();
+
+        assert_eq!(remove_pages_from_cbz(&cbz, &["02.jpg".to_string()]).unwrap(), 2);
+
+        let mut archive = zip::ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
+        assert_eq!(sorted_image_entries(&mut archive), vec!["01.jpg", "03.jpg"]);
+        let mut page = String::new();
+        archive.by_name("01.jpg").unwrap().read_to_string(&mut page).unwrap();
+        assert_eq!(page, "SECOND");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     // ==== Issue #189: page removal (rewrite-minus-entries) ====
 
@@ -1915,7 +2003,7 @@ mod tests {
         let path = dir.join("pages_fixture.cbz");
         let f = File::create(&path).unwrap();
         let mut zw = ZipWriter::new(f);
-        let opts: FileOptions = FileOptions::default();
+        let opts: SimpleFileOptions = SimpleFileOptions::default();
         zw.start_file("ComicInfo.xml", opts).unwrap();
         zw.write_all(b"<?xml version=\"1.0\"?><ComicInfo><Series>Test</Series><PageCount>4</PageCount><Pages><Page Image=\"0\" Type=\"FrontCover\" /><Page Image=\"1\" /></Pages><Notes>keep me</Notes></ComicInfo>").unwrap();
         zw.start_file("notes.txt", opts).unwrap();
@@ -1962,7 +2050,7 @@ mod tests {
         assert_eq!(removed, 2, "returns the new page count");
 
         let mut archive = zip::ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
-        let names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+        let names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().unwrap().to_string()).collect();
         assert!(names.contains(&"page2.jpg".to_string()) && names.contains(&"page4.jpg".to_string()));
         assert!(!names.contains(&"page1.jpg".to_string()) && !names.contains(&"page3.jpg".to_string()));
         assert!(names.contains(&"notes.txt".to_string()), "non-page passengers survive");
@@ -2081,7 +2169,7 @@ mod tests {
         let path = dir.join(file_name);
         let f = File::create(&path).unwrap();
         let mut zw = ZipWriter::new(f);
-        let opts: FileOptions = FileOptions::default();
+        let opts: SimpleFileOptions = SimpleFileOptions::default();
         for (name, bytes) in entries {
             zw.start_file(*name, opts).unwrap();
             zw.write_all(bytes).unwrap();
@@ -2412,7 +2500,7 @@ mod tests {
         let mut zip_buf: Vec<u8> = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut zip_buf));
-            let opts: FileOptions = FileOptions::default();
+            let opts: SimpleFileOptions = SimpleFileOptions::default();
             let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2000, 100, image::Rgb([200, 10, 10])));
             let mut png: Vec<u8> = Vec::new();
             img.write_to(&mut Cursor::new(&mut png), image::ImageOutputFormat::Png).unwrap();
@@ -2453,7 +2541,7 @@ mod tests {
         let mut zip_buf: Vec<u8> = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut zip_buf));
-            let opts: FileOptions = FileOptions::default();
+            let opts: SimpleFileOptions = SimpleFileOptions::default();
             zw.start_file("page10.png", opts).unwrap();
             zw.write_all(&png2).unwrap();
             zw.start_file("ComicInfo.xml", opts).unwrap();
@@ -2491,7 +2579,7 @@ mod tests {
         let mut zip_buf: Vec<u8> = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut zip_buf));
-            let opts: FileOptions = FileOptions::default();
+            let opts: SimpleFileOptions = SimpleFileOptions::default();
             zw.start_file("page1.jpg", opts).unwrap();
             zw.write_all(b"a").unwrap();
             zw.start_file("sub/page2.PNG", opts).unwrap();
@@ -2545,7 +2633,7 @@ mod tests {
         let mut inner_zip: Vec<u8> = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut inner_zip));
-            let opts: FileOptions = FileOptions::default();
+            let opts: SimpleFileOptions = SimpleFileOptions::default();
             zw.start_file("page1.jpg", opts).unwrap();
             zw.write_all(b"fake image bytes").unwrap();
             zw.finish().unwrap();
@@ -2556,7 +2644,7 @@ mod tests {
         let mut pack: Vec<u8> = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut pack));
-            let opts: FileOptions = FileOptions::default();
+            let opts: SimpleFileOptions = SimpleFileOptions::default();
             zw.add_directory("scans/", opts).unwrap();
             zw.start_file("pack/Inner One.cbz", opts).unwrap();
             zw.write_all(&inner_zip).unwrap();
@@ -2791,7 +2879,7 @@ mod tests {
         {
             let f = File::create(&zip_path).unwrap();
             let mut zw = ZipWriter::new(f);
-            let opt = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let opt = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             // Intentionally out of natural order + a ComicInfo.xml that must be ignored.
             zw.start_file("page10.jpg", opt).unwrap(); zw.write_all(b"TEN").unwrap();
             zw.start_file("ComicInfo.xml", opt).unwrap(); zw.write_all(b"<x/>").unwrap();

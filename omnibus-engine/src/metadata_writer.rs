@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde::Deserialize;
 use tokio::task::JoinSet;
-use zip::{ZipArchive, ZipWriter, write::FileOptions};
+use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 #[derive(Deserialize, Debug)]
 pub struct EmbedRequest {
@@ -805,7 +805,7 @@ fn read_comicinfo_from_zip(path: &Path) -> anyhow::Result<Option<String>> {
     let mut archive = ZipArchive::new(file)?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        if entry.name().eq_ignore_ascii_case("comicinfo.xml") {
+        if entry.name()?.eq_ignore_ascii_case("comicinfo.xml") {
             let mut s = String::new();
             entry.read_to_string(&mut s)?;
             return Ok(Some(s));
@@ -989,15 +989,15 @@ fn inject_xml_into_zip(file_path: &str, generated_xml: &str) -> bool {
 
         for i in 0..archive.len() {
             let mut inner_file = archive.by_index(i)?;
-            if inner_file.name().eq_ignore_ascii_case("comicinfo.xml") { continue; }
+            if inner_file.name()?.eq_ignore_ascii_case("comicinfo.xml") { continue; }
 
             // Preserve the original entry's compression method instead of forcing Stored.
-            let options = FileOptions::default().compression_method(inner_file.compression());
-            zip_writer.start_file(inner_file.name(), options)?;
+            let options = SimpleFileOptions::default().compression_method(inner_file.compression());
+            zip_writer.start_file(inner_file.name()?, options)?;
             std::io::copy(&mut inner_file, &mut zip_writer)?;
         }
 
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         zip_writer.start_file("ComicInfo.xml", options)?;
         zip_writer.write_all(xml_content.as_bytes())?;
         zip_writer.finish()?;
@@ -1039,7 +1039,7 @@ mod tests {
             let mut buf = Vec::new();
             {
                 let mut zw = ZipWriter::new(Cursor::new(&mut buf));
-                let opts: FileOptions = FileOptions::default();
+                let opts: SimpleFileOptions = SimpleFileOptions::default();
                 zw.start_file("page1.jpg", opts).unwrap();
                 zw.write_all(b"not-a-real-image").unwrap();
                 zw.start_file("ComicInfo.xml", opts).unwrap();
@@ -1077,7 +1077,7 @@ mod tests {
         let cbz = dir.join("Batman 001.cbz");
         {
             let mut zw = ZipWriter::new(File::create(&cbz).unwrap());
-            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.start_file("01.jpg", SimpleFileOptions::default()).unwrap();
             zw.write_all(b"page").unwrap();
             zw.finish().unwrap();
         }
@@ -1096,6 +1096,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Some archives from the wild name two entries alike. zip's writer refuses to write a name twice
+    // (since 2.x) and the embed copies every entry, so this proves the copy sees each name once - the
+    // last copy, which by_name always served - and the embed still goes through.
+    #[test]
+    fn embed_rewrites_an_archive_with_a_repeated_entry_name() {
+        let dir = std::env::temp_dir().join(format!("omnibus_embed_dup_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cbz = dir.join("Batman 001.cbz");
+        std::fs::write(&cbz, crate::converter::stored_zip(&[("01.jpg", b"FIRST"), ("02.jpg", b"TWO"), ("01.jpg", b"SECOND")])).unwrap();
+
+        assert!(inject_xml_into_zip(cbz.to_str().unwrap(), "<ComicInfo>NEW</ComicInfo>"));
+
+        let mut za = ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
+        let names: Vec<String> = (0..za.len()).map(|i| za.by_index(i).unwrap().name().unwrap().to_string()).collect();
+        assert_eq!(names, vec!["01.jpg", "02.jpg", "ComicInfo.xml"]);
+        let mut page = String::new();
+        za.by_name("01.jpg").unwrap().read_to_string(&mut page).unwrap();
+        assert_eq!(page, "SECOND");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // zip dates a new entry 1980-01-01 unless its "time" feature is on (Cargo.toml).
+    #[test]
+    fn an_embedded_comicinfo_carries_the_date_it_was_written() {
+        let dir = std::env::temp_dir().join(format!("omnibus_embed_date_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cbz = dir.join("Batman 001.cbz");
+        std::fs::write(&cbz, crate::converter::stored_zip(&[("01.jpg", b"page")])).unwrap();
+
+        assert!(inject_xml_into_zip(cbz.to_str().unwrap(), "<ComicInfo>NEW</ComicInfo>"));
+
+        let mut za = ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
+        let written = za.by_name("ComicInfo.xml").unwrap().last_modified().expect("a timestamp");
+        assert!(written.year() >= 2026, "dated {written:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Some archives compress their pages with bzip2 (zip's "bzip2" feature, Cargo.toml). The embed
+    // keeps every page's compression method, so it has to read and write that one too.
+    #[test]
+    fn embed_keeps_a_bzip2_page_readable_and_bzip2() {
+        let dir = std::env::temp_dir().join(format!("omnibus_embed_bz2_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cbz = dir.join("Batman 001.cbz");
+        {
+            let mut zw = ZipWriter::new(File::create(&cbz).unwrap());
+            zw.start_file("01.jpg", SimpleFileOptions::default().compression_method(zip::CompressionMethod::Bzip2)).unwrap();
+            zw.write_all(b"a bzip2 page").unwrap();
+            zw.finish().unwrap();
+        }
+
+        assert!(inject_xml_into_zip(cbz.to_str().unwrap(), "<ComicInfo>NEW</ComicInfo>"));
+
+        let mut za = ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
+        let mut page = za.by_name("01.jpg").unwrap();
+        assert_eq!(page.compression(), zip::CompressionMethod::Bzip2);
+        let mut bytes = String::new();
+        page.read_to_string(&mut bytes).unwrap();
+        assert_eq!(bytes, "a bzip2 page");
+        drop(page);
+        assert_eq!(read_comicinfo_from_zip(&cbz).unwrap().as_deref(), Some("<ComicInfo>NEW</ComicInfo>"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // #199: the full ComicInfo default set — issue-wins pairing, series-only tags, and the B&W
     // tri-state — proven end-to-end through the real embed job against a file-backed SQLite +
     // real cbz (the round-trip test's fixture pattern).
@@ -1108,7 +1172,7 @@ mod tests {
         {
             let f = File::create(&cbz).unwrap();
             let mut zw = ZipWriter::new(f);
-            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.start_file("01.jpg", SimpleFileOptions::default()).unwrap();
             zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             zw.finish().unwrap();
         }
@@ -1250,9 +1314,9 @@ mod tests {
         let build_cbz = |path: &std::path::Path| {
             let f = File::create(path).unwrap();
             let mut zw = ZipWriter::new(f);
-            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.start_file("01.jpg", SimpleFileOptions::default()).unwrap();
             zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
-            zw.start_file("ComicInfo.xml", FileOptions::default()).unwrap();
+            zw.start_file("ComicInfo.xml", SimpleFileOptions::default()).unwrap();
             zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Series>Old Name</Series><Title>Old file title</Title><Summary>file summary</Summary><Count>6</Count><PageCount>17</PageCount><Pages><Page Image="0" Type="FrontCover" /><Page Image="1" /></Pages></ComicInfo>"#).unwrap();
             zw.finish().unwrap();
         };
@@ -1337,7 +1401,7 @@ mod tests {
             let p = folder.join(name);
             let f = File::create(&p).unwrap();
             let mut zw = ZipWriter::new(f);
-            zw.start_file("01.jpg", FileOptions::default()).unwrap();
+            zw.start_file("01.jpg", SimpleFileOptions::default()).unwrap();
             zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             zw.finish().unwrap();
             p

@@ -165,7 +165,7 @@ fn parse_comic_info(path: &Path) -> Option<ScanComicInfo> {
 
     for i in 0..archive.len() {
         if let Ok(mut entry) = archive.by_index(i) {
-            if entry.name().eq_ignore_ascii_case("comicinfo.xml") {
+            if entry.name().is_ok_and(|n| n.eq_ignore_ascii_case("comicinfo.xml")) {
                 let mut xml = String::new();
                 if entry.read_to_string(&mut xml).is_ok() {
                     // Sanitize bare ampersands without breaking real entities (parity with metadata-extractor.ts:34).
@@ -3193,10 +3193,10 @@ mod tests {
         let f = File::create(path).expect("create fixture cbz");
         let mut zw = zip::ZipWriter::new(f);
         if let Some(xml) = comic_info {
-            zw.start_file("ComicInfo.xml", zip::write::FileOptions::default()).unwrap();
+            zw.start_file("ComicInfo.xml", zip::write::SimpleFileOptions::default()).unwrap();
             zw.write_all(xml.as_bytes()).unwrap();
         }
-        zw.start_file("01.jpg", zip::write::FileOptions::default()).unwrap();
+        zw.start_file("01.jpg", zip::write::SimpleFileOptions::default()).unwrap();
         zw.write_all(page).unwrap();
         zw.finish().unwrap();
     }
@@ -3483,7 +3483,7 @@ mod tests {
     #[tokio::test]
     async fn comicinfo_defaults_fill_classifies_book_type_from_a_real_files_format_tag() {
         use std::io::Write as _;
-        use zip::{write::FileOptions, ZipWriter};
+        use zip::{write::SimpleFileOptions, ZipWriter};
 
         let dir = std::env::temp_dir().join(format!("omnibus_5h_booktype_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3492,7 +3492,7 @@ mod tests {
         {
             let f = std::fs::File::create(&cbz).unwrap();
             let mut zw = ZipWriter::new(f);
-            let opts: FileOptions = FileOptions::default();
+            let opts: SimpleFileOptions = SimpleFileOptions::default();
             zw.start_file("ComicInfo.xml", opts).unwrap();
             zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Series>Winter Soldier</Series><Format>One-Shot</Format></ComicInfo>"#).unwrap();
             zw.finish().unwrap();
@@ -4149,7 +4149,7 @@ mod tests {
             let f = File::create(&cbz).expect("create fixture cbz");
             let mut zw = zip::ZipWriter::new(f);
             for name in ["01.jpg", "02.jpg", "03.jpg"] {
-                zw.start_file(name, zip::write::FileOptions::default()).unwrap();
+                zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
                 zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             }
             zw.finish().unwrap();
@@ -4250,7 +4250,7 @@ mod tests {
         let f = File::open(&cbz).unwrap();
         let mut za = ZipArchive::new(f).unwrap();
         let has_comicinfo = (0..za.len()).any(|i| {
-            za.by_index(i).map(|e| e.name().eq_ignore_ascii_case("comicinfo.xml")).unwrap_or(false)
+            za.by_index(i).map(|e| e.name().is_ok_and(|n| n.eq_ignore_ascii_case("comicinfo.xml"))).unwrap_or(false)
         });
         assert!(has_comicinfo, "embed job wrote ComicInfo.xml into the fixture cbz");
     }
@@ -4274,9 +4274,9 @@ mod tests {
             use std::io::Write as _;
             let f = File::create(&annual_cbz).expect("create annual cbz");
             let mut zw = zip::ZipWriter::new(f);
-            zw.start_file("ComicInfo.xml", zip::write::FileOptions::default()).unwrap();
+            zw.start_file("ComicInfo.xml", zip::write::SimpleFileOptions::default()).unwrap();
             zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Title>First Annual</Title><Number>1</Number><Format>Annual</Format><Summary>The annual's own synopsis.</Summary><Writer>Scott Snyder</Writer><Year>2012</Year><Month>5</Month></ComicInfo>"#).unwrap();
-            zw.start_file("01.jpg", zip::write::FileOptions::default()).unwrap();
+            zw.start_file("01.jpg", zip::write::SimpleFileOptions::default()).unwrap();
             zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             zw.finish().unwrap();
         }
@@ -4286,7 +4286,7 @@ mod tests {
             use std::io::Write as _;
             let f = File::create(&filled_cbz).expect("create filled cbz");
             let mut zw = zip::ZipWriter::new(f);
-            zw.start_file("ComicInfo.xml", zip::write::FileOptions::default()).unwrap();
+            zw.start_file("ComicInfo.xml", zip::write::SimpleFileOptions::default()).unwrap();
             zw.write_all(br#"<?xml version="1.0"?><ComicInfo><Title>WRONG</Title><Summary>WRONG</Summary><Writer>WRONG</Writer></ComicInfo>"#).unwrap();
             zw.finish().unwrap();
         }
@@ -4403,7 +4403,7 @@ mod tests {
             let f = File::create(&cbz).expect("create fixture cbz");
             let mut zw = zip::ZipWriter::new(f);
             for name in ["01.jpg", "02.jpg", "03.jpg"] {
-                zw.start_file(name, zip::write::FileOptions::default()).unwrap();
+                zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
                 zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             }
             zw.finish().unwrap();

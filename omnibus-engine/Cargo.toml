@@ -24,9 +24,11 @@ webp = "0.3"
 
 # Archive handling (replaces adm-zip). RAR/7z extraction uses the native `unrar`/`unar` CLIs
 # (parity with Node beta.028-030: the library decoders corrupt vintage RAR 2.0 archives).
-# Default features off: they add zstd and AES-encrypted entries, which comic archives don't use, and
-# the zstd crates carry advisories. "time" stays, so a rewritten entry keeps a real timestamp.
-zip = { version = "0.6", default-features = false, features = ["deflate", "bzip2", "time"] }
+# Default features off: they add zstd, LZMA, PPMd and AES-encrypted entries, which comic archives don't
+# use. Deflate goes through flate2 on zlib-rs (pure Rust; the "deflate" feature would also pull in
+# zopfli, which only serves compression levels above 9). "time" stays, so a rewritten entry keeps a
+# real timestamp. 9.0.5 is the first release clear of the advisories 0.6.6 carries.
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs", "bzip2", "time"] }
 
 # Error handling and Logging
 anyhow = "1.0"

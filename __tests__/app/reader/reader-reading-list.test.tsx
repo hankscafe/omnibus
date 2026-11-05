@@ -67,7 +67,7 @@ describe('Reader: next issue from a Reading List (#270)', () => {
         toastMock.mockReset();
         stubFetchRouter([
             ['/api/reader/pages', () => ok({ pages: ['p1.jpg', 'p2.jpg', 'p3.jpg'] })],
-            ['/api/progress/bookmark', () => ok({ bookmarks: [] })],
+            ['/api/progress/bookmarks', () => ok({ bookmarks: [] })],
             ['/api/progress', (_u, init) => {
                 if (init?.method === 'POST') { events.push(`progress:${JSON.parse(init.body).currentPage}`); return ok({ success: true }); }
                 return ok(progressGet);
@@ -143,7 +143,7 @@ describe('Reader: closing saves the page you are on (#270)', () => {
         nav.back.mockReset().mockImplementation(() => { events.push('back'); });
         stubFetchRouter([
             ['/api/reader/pages', () => ok({ pages: Array.from({ length: pageCount }, (_, i) => `p${i + 1}.jpg`) })],
-            ['/api/progress/bookmark', () => ok({ bookmarks: [] })],
+            ['/api/progress/bookmarks', () => ok({ bookmarks: [] })],
             ['/api/progress', (_u, init) => {
                 if (init?.method === 'POST') { events.push(`progress:${JSON.parse(init.body).currentPage}`); return ok({ success: true }); }
                 return ok(progressGet);

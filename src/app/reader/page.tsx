@@ -288,7 +288,7 @@ function ReaderContent() {
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
       fetch(`/api/progress?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.json()),
-      fetch(`/api/progress/bookmark?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.ok ? res.json() : { bookmarks: [] }),
+      fetch(`/api/progress/bookmarks?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.ok ? res.json() : { bookmarks: [] }),
       seriesPath ? fetch(`/api/library/series?path=${encodeURIComponent(seriesPath)}`, { headers: getAuthHeaders() }).then(res => res.json()) : Promise.resolve(null),
       // #270: the Reading List it was opened from - its items in reading order, only what this user
       // may see. A list that is gone or no longer visible just means the series decides "next".
@@ -483,25 +483,30 @@ function ReaderContent() {
       toast({ title: "Available Offline", description: "Issue has been fully downloaded to your device." });
   };
 
+  // The route is /api/progress/bookmarks; from v1.0.7-beta.004 until beta.011 the reader called
+  // /api/progress/bookmark, which doesn't exist, and a refused save showed nothing at all.
   const toggleBookmark = async () => {
     const isBookmarked = bookmarks.includes(currentIndex);
     const method = isBookmarked ? 'DELETE' : 'POST';
-    
+
     try {
-        const res = await fetch('/api/progress/bookmark', {
+        const res = await fetch('/api/progress/bookmarks', {
             method,
             headers: getAuthHeaders(),
             body: JSON.stringify({ filePath, pageIndex: currentIndex })
         });
-        
+
         if (res.ok) {
             if (isBookmarked) {
                 setBookmarks(prev => prev.filter(i => i !== currentIndex));
                 toast({ title: "Bookmark Removed" });
             } else {
                 setBookmarks(prev => [...prev, currentIndex]);
-                toast({ title: "Bookmark Added", description: `Saved page ${currentIndex + 1} to your profile.` });
+                toast({ title: "Bookmark Added", description: `Page ${currentIndex + 1} is marked on the page slider.` });
             }
+        } else {
+            const data = await res.json().catch(() => ({}));
+            toast({ title: "Couldn't save the bookmark", description: data.error || `The server answered ${res.status}.`, variant: "destructive" });
         }
     } catch (e) {
         toast({ title: "Error", description: "Failed to update bookmark", variant: "destructive" });

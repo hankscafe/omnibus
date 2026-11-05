@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { readerHref, nextInList } from "@/lib/reading-list-nav"
 
 function ReaderContent() {
   if (typeof document !== 'undefined') {
@@ -29,6 +30,9 @@ function ReaderContent() {
   const filePath = searchParams.get('path');
   const seriesPath = searchParams.get('series');
   const pageParam = searchParams.get('page'); // Support linking directly to a bookmarked page
+  // #270: opened from a Reading List - the list and the entry, so "next" follows the list.
+  const listId = searchParams.get('list');
+  const listItemId = searchParams.get('item');
   const { toast } = useToast();
 
   const [pages, setPages] = useState<string[]>([]);
@@ -188,7 +192,13 @@ function ReaderContent() {
       cropMargins: false
   });
 
-  const [nextIssue, setNextIssue] = useState<{ path: string, name: string } | null>(null);
+  // Where "next" goes: the series' next issue, or (#270) the list's next entry - `list` names the list
+  // for the button and the toast, `skipped` the entries passed over that aren't in the library.
+  const [nextIssue, setNextIssue] = useState<{ href: string, name: string, list?: { name: string, skipped: number } } | null>(null);
+
+  // #270: the page last written to /api/progress (or the one the issue opened at), so Close can write
+  // a page turn the 1.5 s debounce hadn't sent yet - and only that.
+  const syncedPageRef = useRef<number | null>(null);
 
   // Per-series reader preferences: seriesId identifies the series; prefsLoaded gates saving until the
   // saved prefs have been fetched + merged, so we never overwrite them with defaults on first load.
@@ -214,19 +224,35 @@ function ReaderContent() {
     });
   };
 
+  // #270: the debounced progress sync is cancelled when the reader unmounts, so a page turned just
+  // before Close used to be lost - and a Reading List's Continue point came back one issue behind.
+  // Writes the page on screen if it isn't the one last written (or opened at); nothing otherwise, so
+  // opening a finished issue and closing it again leaves it finished.
+  const flushProgress = useCallback(async () => {
+    if (!isReadyToSync || !filePath || pages.length === 0 || syncedPageRef.current === currentIndex) return;
+    syncedPageRef.current = currentIndex;
+    await fetch('/api/progress', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ filePath, currentPage: currentIndex, totalPages: pages.length })
+    }).catch(() => {});
+  }, [isReadyToSync, filePath, pages.length, currentIndex, getAuthHeaders]);
+
   // Close intercept: pending tags save silently first (#199 round 2 — additive and non-destructive,
-  // so no review step needed; a failed save toasts but never traps the user in the reader). Flagged
-  // pages then go through the Page Manager for explicit confirm; the exit continues when the manager
-  // closes. No flags → plain exit. useCallback so the Escape handler always calls the current version.
+  // so no review step needed; a failed save toasts but never traps the user in the reader), then the
+  // page you're on (#270). Flagged pages then go through the Page Manager for explicit confirm; the
+  // exit continues when the manager closes. No flags → plain exit. useCallback so the Escape handler
+  // always calls the current version.
   const handleReaderClose = useCallback(async () => {
     await savePendingTagsIfAny();
+    await flushProgress();
     if (isAdmin && issueId && filePath && flaggedPages.size > 0) {
       exitAfterManagerRef.current = true;
       setPageManagerOpen(true);
       return;
     }
     router.back();
-  }, [savePendingTagsIfAny, isAdmin, issueId, filePath, flaggedPages, router]);
+  }, [savePendingTagsIfAny, flushProgress, isAdmin, issueId, filePath, flaggedPages, router]);
 
   const handleManagerOpenChange = (open: boolean) => {
     setPageManagerOpen(open);
@@ -257,30 +283,49 @@ function ReaderContent() {
     setFlaggedPages(new Set());
     setPendingTags(emptyPendingTags());
     setIssueId(null);
-    
+    syncedPageRef.current = null;
+
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
       fetch(`/api/progress?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.json()),
       fetch(`/api/progress/bookmark?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.ok ? res.json() : { bookmarks: [] }),
-      seriesPath ? fetch(`/api/library/series?path=${encodeURIComponent(seriesPath)}`, { headers: getAuthHeaders() }).then(res => res.json()) : Promise.resolve(null)
+      seriesPath ? fetch(`/api/library/series?path=${encodeURIComponent(seriesPath)}`, { headers: getAuthHeaders() }).then(res => res.json()) : Promise.resolve(null),
+      // #270: the Reading List it was opened from - its items in reading order, only what this user
+      // may see. A list that is gone or no longer visible just means the series decides "next".
+      listId ? fetch(`/api/reading-lists?id=${encodeURIComponent(listId)}`).then(res => res.ok ? res.json() : null).catch(() => null) : Promise.resolve(null)
     ])
-      .then(([pageData, progressData, bookmarkData, seriesData]) => {
+      .then(([pageData, progressData, bookmarkData, seriesData, listData]) => {
         if (pageData.error) throw new Error(pageData.error);
         setPages(pageData.pages);
-        
+
         if (bookmarkData.bookmarks) {
             setBookmarks(bookmarkData.bookmarks.map((b: any) => b.pageIndex));
         }
 
-        if (seriesData && seriesData.downloadedIssues) {
-            if (seriesData.isManga) setSettings(s => ({ ...s, readingMode: 'rtl' }));
+        if (seriesData && seriesData.downloadedIssues && seriesData.isManga) setSettings(s => ({ ...s, readingMode: 'rtl' }));
+
+        // #270: opened from a list that still holds this file → the list decides what's next, from any
+        // series, and its last entry you have a file for is the end even when the series goes on.
+        type ListEntry = { id: string, issue: { filePath: string | null, number: string, series: { name: string, folderPath: string | null } | null } | null };
+        const inList = listId && listData && Array.isArray(listData.items)
+            ? nextInList(listData.items as ListEntry[], { itemId: listItemId, filePath })
+            : null;
+        if (listId && inList?.found) {
+            const next = inList.next;
+            setNextIssue(next?.issue?.filePath ? {
+                href: readerHref(next.issue.filePath, next.issue.series?.folderPath, { listId, itemId: next.id }),
+                name: `${next.issue.series?.name ?? 'Issue'} #${next.issue.number}`,
+                list: { name: String(listData.name || 'the list'), skipped: inList.skipped },
+            } : null);
+        } else if (seriesPath && seriesData && seriesData.downloadedIssues) {
             // #203: annuals read AFTER the main run — same order as the series page and OPDS, so
             // "next issue" from the run's finale is Annual #1, not a mid-run jump.
             const sortedIssues = [...seriesData.downloadedIssues].sort((a, b) =>
                 (((a as any).isAnnual ? 1 : 0) - ((b as any).isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0)));
             const currentIdx = sortedIssues.findIndex((issue: any) => issue.fullPath === filePath);
             if (currentIdx > -1 && currentIdx < sortedIssues.length - 1) {
-                setNextIssue({ path: sortedIssues[currentIdx + 1].fullPath, name: sortedIssues[currentIdx + 1].name });
+                const next = sortedIssues[currentIdx + 1];
+                setNextIssue({ href: readerHref(next.fullPath, seriesPath), name: next.name });
             } else {
                 setNextIssue(null); // Ensure we clear it if it's the last issue
             }
@@ -303,29 +348,29 @@ function ReaderContent() {
         }
 
         // Apply progress or URL query param for the specific issue
+        let startPage = 0; // Explicitly start at 0 if no progress exists
         if (pageParam && !isNaN(parseInt(pageParam))) {
-            const requestedPage = Math.min(parseInt(pageParam), pageData.pages.length - 1);
-            setCurrentIndex(requestedPage);
+            startPage = Math.min(parseInt(pageParam), pageData.pages.length - 1);
         } else if (progressData && progressData.currentPage > 0 && !progressData.isCompleted) {
-            const safePage = Math.min(progressData.currentPage, pageData.pages.length - 1);
-            setCurrentIndex(safePage);
-        } else {
-            setCurrentIndex(0); // Explicitly start at 0 if no progress exists
+            startPage = Math.min(progressData.currentPage, pageData.pages.length - 1);
         }
-        
+        setCurrentIndex(startPage);
+        syncedPageRef.current = startPage; // #270: closing on this page has nothing new to write
+
         setIsMarkedRead(progressData?.isCompleted || false);
         setIssueId(progressData?.issueId || null);
         setTimeout(() => setIsReadyToSync(true), 500);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, [filePath, seriesPath, pageParam, getAuthHeaders]);
+  }, [filePath, seriesPath, pageParam, listId, listItemId, getAuthHeaders]);
 
   // Sync Progress
   useEffect(() => {
     if (loading || !isReadyToSync || pages.length === 0) return;
-    
+
     const timer = setTimeout(() => {
+        syncedPageRef.current = currentIndex;
         fetch('/api/progress', {
             method: 'POST',
             headers: getAuthHeaders(),
@@ -502,22 +547,26 @@ function ReaderContent() {
     } else if (currentIndex < pages.length - 1) {
         setCurrentIndex(pages.length - 1);
         if (!showUI) triggerPageToast();
-    } else if (nextIssue && seriesPath) {
+    } else if (nextIssue) {
         // Force sync the current issue as 100% complete before moving on
         fetch('/api/progress', {
             method: 'POST',
             headers: getAuthHeaders(),
-            body: JSON.stringify({ 
-                filePath, 
-                currentPage: pages.length, 
-                totalPages: pages.length 
+            body: JSON.stringify({
+                filePath,
+                currentPage: pages.length,
+                totalPages: pages.length
             })
         }).catch(() => {});
 
-        toast({ title: "Loading Next Issue...", description: nextIssue.name });
-        router.replace(`/reader?path=${encodeURIComponent(nextIssue.path)}&series=${encodeURIComponent(seriesPath)}`);
+        const skipped = nextIssue.list?.skipped ?? 0;
+        toast(nextIssue.list
+            ? { title: `Next in ${nextIssue.list.name}`, description: `${nextIssue.name}${skipped > 0 ? ` (skipped ${skipped} not in your library)` : ''}` }
+            : { title: "Loading Next Issue...", description: nextIssue.name });
+        // replace, not push: Close still goes Back to wherever the reading started (a series page, or the list).
+        router.replace(nextIssue.href);
     }
-  }, [currentIndex, pages.length, nextIssue, seriesPath, router, toast, getStep, showUI, triggerPageToast, filePath, getAuthHeaders]);
+  }, [currentIndex, pages.length, nextIssue, router, toast, getStep, showUI, triggerPageToast, filePath, getAuthHeaders]);
 
   const prevPage = useCallback(() => {
     if (currentIndex > 0) {
@@ -541,6 +590,7 @@ function ReaderContent() {
   const toggleReadStatus = async () => {
       const newStatus = !isMarkedRead;
       setIsMarkedRead(newStatus);
+      syncedPageRef.current = currentIndex; // #270: Close mustn't overwrite the mark with the page on screen
       await fetch('/api/progress', {
           method: 'POST',
           headers: getAuthHeaders(),
@@ -950,7 +1000,7 @@ function ReaderContent() {
                 </div>
 
                 {currentIndex >= pages.length - 1 && nextIssue ? (
-                    <Button variant="default" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-lg shrink-0 gap-2 text-xs sm:text-sm border-0" onClick={nextPage}>Next Issue <BookOpen className="w-4 h-4 hidden sm:block" /></Button>
+                    <Button variant="default" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-lg shrink-0 gap-2 text-xs sm:text-sm border-0" onClick={nextPage} title={`Next: ${nextIssue.name}`}>{nextIssue.list ? 'Next in List' : 'Next Issue'} <BookOpen className="w-4 h-4 hidden sm:block" /></Button>
                 ) : (
                     <>
                         <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 shrink-0" onClick={nextPage} disabled={currentIndex >= pages.length - 1}>

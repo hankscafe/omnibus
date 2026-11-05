@@ -1,7 +1,7 @@
 // src/app/reading-lists/page.tsx
 "use client"
 
-import { useState, useEffect, Suspense, useMemo } from "react"
+import { useState, useEffect, useRef, Suspense, useMemo } from "react"
 import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
@@ -26,8 +26,9 @@ import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { readerHref, markReturnToList, takeReturnToList, READING_LIST_VIEW_KEY } from "@/lib/reading-list-nav"
 
-// #253: "Hide read" is a per-viewer convenience, remembered in this browser only.
+// #253: "Hide read" is a per-viewer convenience, remembered in this browser only (#270: so is Grouped/Flat).
 const HIDE_READ_KEY = 'omnibus-reading-lists-hide-read'
 
 // #252: what GET /api/reading-lists?id= returns - only the fields this page uses.
@@ -46,7 +47,8 @@ type OwnedItem = ListItem & { issue: ListIssue }
 
 // An entry you can open: a linked issue with a file (a linked WANTED placeholder has nothing to read yet).
 const isOwned = (item: ListItem): item is OwnedItem => !!item.issue?.filePath
-const readerHref = (issue: ListIssue) => `/reader?path=${encodeURIComponent(issue.filePath ?? '')}&series=${encodeURIComponent(issue.series.folderPath ?? '')}`
+// #270: the reader is told the list and the entry, so its "next" is the list's next entry.
+const entryHref = (listId: string, item: OwnedItem) => readerHref(item.issue.filePath ?? '', item.issue.series.folderPath, { listId, itemId: item.id })
 
 /** #253: the series page's reading badges - a check once finished, a percentage while reading. */
 function ReadingState({ progress }: { progress: ListProgress | null }) {
@@ -209,9 +211,13 @@ function ReadingListsContent() {
       });
   };
 
+  // #270: the list on screen, as the ?id= effect below needs it without re-running on it.
+  const activeListIdRef = useRef<string | null>(null)
+
   useEffect(() => {
     setIsMounted(true)
-    fetchLists(paramId)
+    // #270: an ?id= this page wrote itself, for the list already open, needs no reload.
+    if (!paramId || paramId !== activeListIdRef.current) fetchLists(paramId)
 
     const savedRequests = localStorage.getItem('omnibus_requested_issues');
     if (savedRequests) {
@@ -219,14 +225,51 @@ function ReadingListsContent() {
     }
   }, [paramId])
 
+  // #270: the open list goes in the address (replacing, not adding, a history entry), so Back from
+  // the reader - or a reload - opens this list again instead of the first one.
+  useEffect(() => {
+    activeListIdRef.current = activeListId
+    if (!activeListId || new URLSearchParams(window.location.search).get('id') === activeListId) return
+    window.history.replaceState(null, '', `?id=${encodeURIComponent(activeListId)}`)
+  }, [activeListId])
+
   useEffect(() => {
     try { setHideRead(localStorage.getItem(HIDE_READ_KEY) === 'true') } catch { /* storage blocked: default off */ }
+    try {
+      const view = localStorage.getItem(READING_LIST_VIEW_KEY)
+      if (view === 'grouped' || view === 'flat') setViewMode(view)
+    } catch { /* storage blocked: Grouped */ }
   }, [])
 
   const toggleHideRead = (on: boolean) => {
     setHideRead(on)
     try { localStorage.setItem(HIDE_READ_KEY, String(on)) } catch { /* storage blocked: this visit only */ }
   }
+
+  const chooseViewMode = (mode: 'grouped' | 'flat') => {
+    setViewMode(mode)
+    try { localStorage.setItem(READING_LIST_VIEW_KEY, mode) } catch { /* storage blocked: this visit only */ }
+  }
+
+  // #270: back from the reader (the entry left a note as it opened) → your place in the list: the
+  // Continue entry, its group opened in the grouped view, scrolled to once its row is on screen.
+  const [scrollToItemId, setScrollToItemId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!activeListDetail || activeListDetail.id !== activeListId || !takeReturnToList(activeListDetail.id)) return
+    const target = activeListDetail.items.find(i => isOwned(i) && !i.progress?.isRead)
+    if (!target) return
+    const chunk = groupedItems.find(c => c.entries.some(e => e.item.id === target.id))
+    if (chunk) setExpandedChunks(prev => new Set(prev).add(chunk.id))
+    setScrollToItemId(target.id)
+  }, [activeListDetail, activeListId, groupedItems])
+
+  useEffect(() => {
+    if (!scrollToItemId) return
+    const row = Array.from(document.querySelectorAll<HTMLElement>('[data-item-id]')).find(el => el.dataset.itemId === scrollToItemId)
+    if (!row) return // not rendered yet: this runs again as the page, its view or its groups change
+    row.scrollIntoView({ block: 'center' })
+    setScrollToItemId(null)
+  }, [scrollToItemId, expandedChunks, viewMode, loading])
 
   // #252: the open list's items (with the caller's progress) have their own request. A reload of the
   // same list bumps `detailReload`; an answer for a list the user has already left is dropped.
@@ -861,10 +904,10 @@ function ReadingListsContent() {
                                   )}
                                   {/* --- VIEW MODE TOGGLE --- */}
                                   <div className="flex items-center gap-1 bg-muted p-1 rounded-md border border-border shadow-inner">
-                                      <Button variant={viewMode === 'grouped' ? 'default' : 'ghost'} size="sm" onClick={() => setViewMode('grouped')} className={`h-8 px-3 text-xs ${viewMode === 'grouped' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`}>
+                                      <Button variant={viewMode === 'grouped' ? 'default' : 'ghost'} size="sm" onClick={() => chooseViewMode('grouped')} className={`h-8 px-3 text-xs ${viewMode === 'grouped' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`}>
                                           <LayoutList className="w-3.5 h-3.5 mr-1.5" /> Grouped
                                       </Button>
-                                      <Button variant={viewMode === 'flat' ? 'default' : 'ghost'} size="sm" onClick={() => setViewMode('flat')} className={`h-8 px-3 text-xs ${viewMode === 'flat' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`}>
+                                      <Button variant={viewMode === 'flat' ? 'default' : 'ghost'} size="sm" onClick={() => chooseViewMode('flat')} className={`h-8 px-3 text-xs ${viewMode === 'flat' ? 'shadow-sm bg-background text-foreground' : 'text-muted-foreground'}`}>
                                           <List className="w-3.5 h-3.5 mr-1.5" /> Flat (Reorder)
                                       </Button>
                                   </div>
@@ -927,7 +970,7 @@ function ReadingListsContent() {
                                   <span className="text-muted-foreground">{ownedCount} in your library</span>
                                   {continueItem && (
                                       <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
-                                          <Link href={readerHref(continueItem.issue)} title={`Continue with ${continueItem.issue.series?.name} #${continueItem.issue.number}`}>
+                                          <Link href={entryHref(activeList.id, continueItem)} onClick={() => markReturnToList(activeList.id)} title={`Continue with ${continueItem.issue.series?.name} #${continueItem.issue.number}`}>
                                               <BookOpen className="w-3.5 h-3.5 mr-2" /> Continue
                                           </Link>
                                       </Button>
@@ -984,7 +1027,7 @@ function ReadingListsContent() {
                                                     const coverUrl = activeList.coverUrl || issue?.coverUrl || (series?.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '/api/library/cover?path=missing');
 
                                                 return (
-                                                    <div key={item.id} data-testid="reading-list-row" className="flex items-center gap-4 p-3 bg-background border border-border rounded-xl shadow-sm hover:border-primary/50 transition-all">
+                                                    <div key={item.id} data-testid="reading-list-row" data-item-id={item.id} className="flex items-center gap-4 p-3 bg-background border border-border rounded-xl shadow-sm hover:border-primary/50 transition-all">
                                                         <span className="w-8 text-center font-mono text-xs font-bold text-muted-foreground">{index + 1}</span>
                                                         <div className="w-10 h-14 shrink-0 rounded overflow-hidden bg-muted border border-border">
                                                             <img src={coverUrl} className={`w-full h-full object-cover ${item.progress?.isRead ? 'opacity-60' : ''}`} alt="" />
@@ -1014,7 +1057,7 @@ function ReadingListsContent() {
                                                         )}
                                                         {isOwned(item) && (
                                                             <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
-                                                                <Link href={readerHref(item.issue)}>
+                                                                <Link href={entryHref(activeList.id, item)} onClick={() => markReturnToList(activeList.id)}>
                                                                     <BookOpen className="w-3.5 h-3.5 sm:mr-2" /> <span className="hidden sm:inline">Read</span>
                                                                 </Link>
                                                             </Button>
@@ -1051,9 +1094,10 @@ function ReadingListsContent() {
                                               return (
                                                   <Draggable key={item.id} draggableId={item.id} index={index}>
                                                       {(provided, snapshot) => (
-                                                          <div 
-                                                              ref={provided.innerRef} 
-                                                              {...provided.draggableProps} 
+                                                          <div
+                                                              ref={provided.innerRef}
+                                                              {...provided.draggableProps}
+                                                              data-item-id={item.id}
                                                               className={`flex items-center gap-4 p-3 bg-muted/50 border border-dashed rounded-xl opacity-80 transition-all ${snapshot.isDragging ? 'shadow-xl scale-[1.02] border-primary z-50 bg-background' : 'border-border'}`}
                                                           >
                                                               <div {...provided.dragHandleProps} className="px-2 py-4 text-muted-foreground hover:text-primary cursor-grab active:cursor-grabbing">
@@ -1095,9 +1139,10 @@ function ReadingListsContent() {
                                           return (
                                               <Draggable key={item.id} draggableId={item.id} index={index}>
                                                   {(provided, snapshot) => (
-                                                      <div 
-                                                          ref={provided.innerRef} 
-                                                          {...provided.draggableProps} 
+                                                      <div
+                                                          ref={provided.innerRef}
+                                                          {...provided.draggableProps}
+                                                          data-item-id={item.id}
                                                           className={`flex items-center gap-4 p-3 bg-background border border-border rounded-xl shadow-sm transition-all ${snapshot.isDragging ? 'shadow-xl scale-[1.02] border-primary z-50 ring-2 ring-primary/20' : 'hover:border-primary/50'}`}
                                                       >
                                                           <div {...provided.dragHandleProps} className="px-2 py-4 text-muted-foreground hover:text-primary cursor-grab active:cursor-grabbing">
@@ -1129,7 +1174,7 @@ function ReadingListsContent() {
                                                               )}
                                                               {isOwned(item) && (
                                                                   <Button size="sm" asChild className="h-8 shadow-sm font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
-                                                                      <Link href={readerHref(issue)}>
+                                                                      <Link href={entryHref(activeList.id, item)} onClick={() => markReturnToList(activeList.id)}>
                                                                           <BookOpen className="w-3.5 h-3.5 sm:mr-2" /> <span className="hidden sm:inline">Read</span>
                                                                       </Link>
                                                                   </Button>

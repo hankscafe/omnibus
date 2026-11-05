@@ -17,6 +17,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 import { requestedIssueRow } from '@/lib/utils/attachment-name';
+import { requestedIssueRows } from '@/lib/requested-release';
 import { issueNumberOf, settleDuplicateOnLink } from '@/lib/request-dedupe';
 import { processPageSweepChunk } from '@/lib/pages/page-sweep';
 import { SCHEDULE_SEED_KEY, newScheduleSeed, scheduleOffsetMs } from '@/lib/schedule-jitter';
@@ -1060,43 +1061,21 @@ export function initWorker() {
                         }
                     }
 
-                    // Phase 3 -- UNRELEASED upgrade sweep. Load only the UNRELEASED requests and only the
-                    // series they reference (each issue projected to number + releaseDate) instead of the
-                    // entire library nested under every series — the old `series.findMany({ include: issues })`
-                    // hydrated the whole Issue table into memory every tick. Queried AFTER the candidate loop
-                    // so this-tick creations/upgrades are reflected.
+                    // Phase 3 -- UNRELEASED upgrade sweep: a request moves on once its issue's release
+                    // date has passed (requested-release.ts finds the issue - the date Request Management
+                    // shows). Queried AFTER the candidate loop so this-tick creations/upgrades are reflected.
                     const unreleasedRequests = await prisma.request.findMany({
                         where: { status: 'UNRELEASED' },
                         select: { id: true, volumeId: true, activeDownloadName: true }
                     });
-                    const unreleasedVolumeIds = [...new Set(unreleasedRequests.map(r => r.volumeId).filter(Boolean))] as string[];
-                    const localSeriesList = unreleasedVolumeIds.length
-                        ? await prisma.series.findMany({
-                            where: { OR: [{ metadataId: { in: unreleasedVolumeIds } }, { id: { in: unreleasedVolumeIds } }] },
-                            select: {
-                                id: true, metadataId: true, name: true, publisher: true, isManga: true,
-                                issues: { select: { number: true, releaseDate: true, attachedVolumeId: true, attachedVolume: { select: { name: true, kind: true } } } }
-                            }
-                        })
-                        : [];
+                    const waitingRows = await requestedIssueRows(unreleasedRequests);
                     for (const req of unreleasedRequests) {
-                        // Unified utility (negative-number aware) replaces the old inline extractor.
-                        const reqNumString = extractIssueNumber(req.activeDownloadName || "");
-                        const reqNum = parseFloat(reqNumString);
-
-                        if (!isNaN(reqNum)) {
-                            const matchedSeries = localSeriesList.find(s => s.metadataId === req.volumeId || s.id === req.volumeId);
-                            if (matchedSeries) {
-                                // #255: the Special's own row when the request names one (search worker twin).
-                                const skeleton = requestedIssueRow(matchedSeries.issues, reqNumString, req.activeDownloadName || '', matchedSeries.name || '');
-                                if (skeleton && skeleton.releaseDate) {
-                                    if (isReleasedYet(skeleton.releaseDate, skeleton.releaseDate)) {
-                                        await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING' } });
-                                        searchAndDownload(req.id, req.activeDownloadName || "", skeleton.releaseDate.split('-')[0], matchedSeries.publisher || "Unknown", matchedSeries.isManga, false, JOB_PRIORITY.BACKGROUND).catch(() => {});
-                                        unreleasedUpgraded++;
-                                    }
-                                }
-                            }
+                        const waiting = waitingRows.get(req.id);
+                        const releaseDate = waiting?.row.releaseDate;
+                        if (waiting && releaseDate && isReleasedYet(releaseDate, releaseDate)) {
+                            await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING' } });
+                            searchAndDownload(req.id, req.activeDownloadName || "", releaseDate.split('-')[0], waiting.series.publisher || "Unknown", waiting.series.isManga, false, JOB_PRIORITY.BACKGROUND).catch(() => {});
+                            unreleasedUpgraded++;
                         }
                     }
 

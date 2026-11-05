@@ -29,8 +29,15 @@ const SORT_COLUMNS = [
   { key: 'seriesName', label: 'Series' },
   { key: 'userName', label: 'User' },
   { key: 'status', label: 'Status' },
+  { key: 'releaseDate', label: 'Release Date' },
   { key: 'updatedAt', label: 'Completed' },
 ]
+
+// An UNRELEASED request's release date is a calendar day ('YYYY-MM-DD'): shown as that day wherever the
+// admin is, not as UTC midnight moved into their time zone. Anything else is shown as it came.
+const releaseDay = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date)
+  ? new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: 'UTC' })
+  : date
 
 export function AdminRequestManagement() {
   const [requests, setRequests] = useState<any[]>([])
@@ -75,6 +82,7 @@ export function AdminRequestManagement() {
     userName: 120,
     status: 140,
     createdAt: 100,
+    releaseDate: 110,
     updatedAt: 100,
     actions: 170
   })
@@ -115,6 +123,8 @@ export function AdminRequestManagement() {
 
   const sortedRequests = useMemo(() => {
     return [...filteredRequests].sort((a, b) => {
+      // Only UNRELEASED requests have a release date; the rest go last whichever way it's sorted.
+      if (sortConfig.key === 'releaseDate' && !a.releaseDate !== !b.releaseDate) return a.releaseDate ? -1 : 1;
       let aValue = a[sortConfig.key];
       let bValue = b[sortConfig.key];
       
@@ -401,6 +411,10 @@ export function AdminRequestManagement() {
                   <div className="flex items-center">Requested <SortIcon columnKey="createdAt" /></div>
                   <ResizeHandle colKey="createdAt" />
                 </th>
+                <th style={{ width: colWidths.releaseDate }} className="relative group/th px-4 py-3 cursor-pointer hover:bg-muted" onClick={() => handleSort('releaseDate')}>
+                  <div className="flex items-center">Release Date <SortIcon columnKey="releaseDate" /></div>
+                  <ResizeHandle colKey="releaseDate" />
+                </th>
                 <th style={{ width: colWidths.updatedAt }} className="relative group/th px-4 py-3 cursor-pointer hover:bg-muted" onClick={() => handleSort('updatedAt')}>
                   <div className="flex items-center">Completed <SortIcon columnKey="updatedAt" /></div>
                   <ResizeHandle colKey="updatedAt" />
@@ -412,9 +426,9 @@ export function AdminRequestManagement() {
             </thead>
             <tbody className="divide-y divide-border">
               {loading ? (
-                <tr><td colSpan={7} className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
+                <tr><td colSpan={8} className="text-center py-10"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
               ) : paginatedRequests.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-10 text-muted-foreground italic">No requests found matching criteria.</td></tr>
+                <tr><td colSpan={8} className="text-center py-10 text-muted-foreground italic">No requests found matching criteria.</td></tr>
               ) : (
                 paginatedRequests.map((req) => {
                   const isExhausted = ['STALLED', 'FAILED', 'ERROR'].includes(req.status) && (req.retryCount >= 3);
@@ -452,6 +466,9 @@ export function AdminRequestManagement() {
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs truncate">
                       {new Date(req.createdAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs truncate">
+                      {req.releaseDate ? releaseDay(req.releaseDate) : '-'}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs truncate">
                       {['IMPORTED', 'COMPLETED'].includes(req.status) && req.updatedAt ? new Date(req.updatedAt).toLocaleDateString() : '-'}
@@ -571,6 +588,12 @@ export function AdminRequestManagement() {
                       <span className="font-bold uppercase tracking-wider text-[9px] opacity-70">Requested</span>
                       <span className="flex items-center gap-1"><Calendar className="w-3 h-3"/> {new Date(req.createdAt).toLocaleDateString()}</span>
                     </div>
+                    {req.releaseDate && (
+                      <div className="flex flex-col gap-0.5 items-end">
+                        <span className="font-bold uppercase tracking-wider text-[9px] opacity-70">Release Date</span>
+                        <span className="flex items-center gap-1"><Calendar className="w-3 h-3"/> {releaseDay(req.releaseDate)}</span>
+                      </div>
+                    )}
                     {['IMPORTED', 'COMPLETED'].includes(req.status) && req.updatedAt && (
                       <div className="flex flex-col gap-0.5 items-end">
                         <span className="font-bold uppercase tracking-wider text-[9px] opacity-70">Completed</span>

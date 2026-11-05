@@ -9,6 +9,7 @@ import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { markRequestsCompleted } from '@/lib/request-fulfilment';
+import { requestedIssueRows } from '@/lib/requested-release';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +38,8 @@ export async function GET(request: Request) {
         select: { metadataId: true, metadataSource: true, name: true, year: true, folderPath: true }
     });
     const seriesMap = new Map(seriesList.map(s => [`${s.metadataSource}:${s.metadataId}`, s]));
+    // The release date an UNRELEASED request waits for: the one the Series Monitor moves it on by.
+    const waitingRows = await requestedIssueRows(requests.filter(r => r.status === 'UNRELEASED'));
 
     const formattedRequests = requests.map(req => {
       const series = seriesMap.get(`${req.metadataSource || 'COMICVINE'}:${req.volumeId}`);
@@ -57,6 +60,7 @@ export async function GET(request: Request) {
         userName: req.user?.username || 'System',
         createdAt: req.createdAt,
         updatedAt: req.updatedAt,
+        releaseDate: waitingRows.get(req.id)?.row.releaseDate ?? null,
         status: req.status,
         // WHY it is in that state (beta.008): admins only - My Requests' route doesn't pass it on.
         statusNote: req.statusNote ?? null,

@@ -35,11 +35,64 @@ vi.mock('@/lib/request-fulfilment', () => ({ markRequestsCompleted: mocks.markRe
 vi.mock('@/lib/queue', () => ({ omnibusQueue: { getJob: mocks.getJob } }));
 
 import { GET, PATCH } from '@/app/api/admin/requests/route';
+import { prisma } from '@/lib/db';
 
 describe('GET /api/admin/requests', () => {
     it("includes each request's note", async () => {
         const rows = await (await GET(new Request('http://localhost/api/admin/requests'))).json();
         expect(rows[0]).toMatchObject({ id: 'r1', status: 'NOT_FOUND', statusNote: 'GetComics: nothing found · Prowlarr: 12 results, none matched' });
+    });
+
+    // Request Management's Release Date column: the date an UNRELEASED request waits for, read from its
+    // issue's row in the series - the date the Series Monitor moves it on by (requested-release.ts).
+    it("gives an UNRELEASED request its issue's release date, and every other request none", async () => {
+        const request = (id: string, status: string, volumeId: string, activeDownloadName: string) => ({
+            id, userId: 'u1', volumeId, metadataSource: 'COMICVINE', activeDownloadName, status, statusNote: null,
+            progress: 0, downloadLink: null, imageUrl: null, retryCount: 0, user: { username: 'reader' },
+            createdAt: new Date('2026-10-20T12:00:00Z'), updatedAt: new Date('2026-10-20T12:00:00Z'),
+        });
+        vi.mocked(prisma.request.findMany).mockResolvedValueOnce([
+            request('r_waits', 'UNRELEASED', 'v70', 'Saga #70'),
+            request('r_unknown', 'UNRELEASED', 'v70', 'Saga #99'),
+            request('r_other', 'NOT_FOUND', 'v70', 'Saga #69'),
+            request('r_elsewhere', 'PENDING', 'v9', 'X-Men #5'),
+        ] as never);
+        vi.mocked(prisma.series.findMany)
+            .mockResolvedValueOnce([]) // the requests' names
+            .mockResolvedValueOnce([{ id: 's1', metadataId: 'v70', name: 'Saga', publisher: 'Image', isManga: false, issues: [
+                { number: '69', releaseDate: '2026-11-04', attachedVolumeId: null, attachedVolume: null },
+                { number: '70', releaseDate: '2026-12-02', attachedVolumeId: null, attachedVolume: null },
+            ] }] as never);
+
+        const rows: { id: string; releaseDate: string | null }[] = await (await GET(new Request('http://localhost/api/admin/requests'))).json();
+        const releaseDate = (id: string) => rows.find(r => r.id === id)?.releaseDate;
+
+        expect(releaseDate('r_waits')).toBe('2026-12-02');
+        expect(releaseDate('r_unknown')).toBeNull();
+        expect(releaseDate('r_other')).toBeNull();
+        expect(releaseDate('r_elsewhere')).toBeNull();
+        // Only the UNRELEASED requests' series are read for it.
+        expect(vi.mocked(prisma.series.findMany).mock.calls[1][0]).toMatchObject({
+            where: { OR: [{ metadataId: { in: ['v70'] } }, { id: { in: ['v70'] } }] },
+        });
+    });
+
+    // A series with no provider id is requested under its own id; the Series Monitor finds it by that.
+    it("finds the date of a series requested under the series' own id", async () => {
+        vi.mocked(prisma.request.findMany).mockResolvedValueOnce([{
+            id: 'r_local', userId: 'u1', volumeId: 's_local', metadataSource: 'COMICVINE', activeDownloadName: 'Local Hero #2',
+            status: 'UNRELEASED', statusNote: null, progress: 0, downloadLink: null, imageUrl: null, retryCount: 0,
+            user: { username: 'reader' }, createdAt: new Date('2026-10-20T12:00:00Z'), updatedAt: new Date('2026-10-20T12:00:00Z'),
+        }] as never);
+        vi.mocked(prisma.series.findMany)
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ id: 's_local', metadataId: null, name: 'Local Hero', publisher: null, isManga: false, issues: [
+                { number: '2', releaseDate: '2027-01-06', attachedVolumeId: null, attachedVolume: null },
+            ] }] as never);
+
+        const rows: { id: string; releaseDate: string | null }[] = await (await GET(new Request('http://localhost/api/admin/requests'))).json();
+
+        expect(rows[0].releaseDate).toBe('2027-01-06');
     });
 });
 

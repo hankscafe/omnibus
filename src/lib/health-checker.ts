@@ -13,7 +13,7 @@ import { WAITING_STATUSES } from '@/lib/request-status';
 import { describeMetronHealth, metronCalls24h, type MetronSnapshot } from '@/lib/metron/health';
 import { metronCredentialKind } from '@/lib/metron/credentials';
 import { IMPORTING_STALE_MS } from '@/lib/import-handoff';
-import { unmatchedReachableFromWatched } from '@/lib/utils/ingest-folders';
+import { createdOnFirstSweep, unmatchedReachableFromWatched } from '@/lib/utils/ingest-folders';
 
 export interface HealthCheckResult {
     id: string;
@@ -389,7 +389,12 @@ export async function runSystemHealthCheck() {
     ];
     for (const check of ingestDirChecks) {
         if (!fs.existsSync(check.dir)) {
-            results.push({ id: check.id, name: check.name, status: 'warning', message: check.missingMsg });
+            // A new install (#269): the engine's first watched-folder sweep creates both folders.
+            if (await createdOnFirstSweep(check.dir)) {
+                results.push({ id: check.id, name: check.name, status: 'ok', message: `${check.dir} doesn't exist yet. The engine creates it on its first watched-folder sweep.` });
+            } else {
+                results.push({ id: check.id, name: check.name, status: 'warning', message: check.missingMsg });
+            }
         } else {
             try {
                 await fs.promises.access(check.dir, fs.constants.W_OK | fs.constants.R_OK);

@@ -451,6 +451,49 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(run(db_url, cfg.db_connections))
 }
 
+const DB_CONNECT_ATTEMPTS: u32 = 30;
+const DB_RETRY_SECS: u64 = 3;
+
+/// The SQLite file DATABASE_URL names, while it doesn't exist yet. The web app creates it on its
+/// first start (`prisma db push` in its entrypoint), and the engine usually gets there first (#269).
+fn sqlite_file_pending(db_url: &str) -> Option<PathBuf> {
+    let (url, _) = db::Db::normalize_url(db_url);
+    let file = url.strip_prefix("sqlite:")?.split('?').next().unwrap_or_default();
+    if file.is_empty() || file == ":memory:" {
+        return None;
+    }
+    let path = PathBuf::from(file);
+    (!path.exists()).then_some(path)
+}
+
+/// The line logged after a failed connection attempt. Waiting for the web app to create a new SQLite
+/// file is a normal first start, not a fault (#269); only running out of attempts makes it an error.
+fn db_retry_log(db_url: &str, err: &anyhow::Error, attempt: u32) -> (log::Level, String) {
+    let pending = sqlite_file_pending(db_url);
+    if attempt >= DB_CONNECT_ATTEMPTS {
+        let secs = DB_CONNECT_ATTEMPTS as u64 * DB_RETRY_SECS;
+        let line = match pending {
+            Some(path) => format!(
+                "The database at {} still doesn't exist after ~{}s. The web app creates it on its first start: \
+                 check that the omnibus container is running and that both containers mount the same config folder. Giving up.",
+                path.display(), secs
+            ),
+            None => format!("Database unreachable after {} attempts (~{}s). Giving up.", DB_CONNECT_ATTEMPTS, secs),
+        };
+        return (log::Level::Error, line);
+    }
+    match pending {
+        Some(path) => (log::Level::Info, format!(
+            "Waiting for the web app to create the database at {} (it does that on its first start); checking again in {}s (attempt {}/{}).",
+            path.display(), DB_RETRY_SECS, attempt, DB_CONNECT_ATTEMPTS
+        )),
+        None => (log::Level::Warn, format!(
+            "Database not reachable yet ({}); retrying in {}s (attempt {}/{}).",
+            err, DB_RETRY_SECS, attempt, DB_CONNECT_ATTEMPTS
+        )),
+    }
+}
+
 /// Connects to the database (Postgres or SQLite, selected by DATABASE_URL — src/db.rs), retrying
 /// with backoff for up to ~90s before giving up. The engine and DB often share a Docker bridge
 /// whose ports take time to start forwarding (e.g. STP forward-delay on a QNAP virtual switch adds
@@ -458,26 +501,87 @@ fn main() -> anyhow::Result<()> {
 /// be starting. Without this, the process would exit on the first failure and `restart: always`
 /// would reset the bridge port — a loop that can never outlast the window.
 async fn connect_with_retry(db_url: &str, max_connections: u32) -> anyhow::Result<db::Db> {
-    const MAX_ATTEMPTS: u32 = 30;
-    const DELAY_SECS: u64 = 3;
     let mut attempt = 1;
     loop {
-        log::info!("Connecting to the database (attempt {}/{})...", attempt, MAX_ATTEMPTS);
+        log::info!("Connecting to the database (attempt {}/{})...", attempt, DB_CONNECT_ATTEMPTS);
         match db::Db::connect(db_url, max_connections).await {
             Ok(pool) => return Ok(pool),
-            Err(e) if attempt < MAX_ATTEMPTS => {
-                log::warn!(
-                    "Database not reachable yet ({}); retrying in {}s (attempt {}/{}).",
-                    e, DELAY_SECS, attempt, MAX_ATTEMPTS
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(DELAY_SECS)).await;
+            Err(e) => {
+                let (level, line) = db_retry_log(db_url, &e, attempt);
+                log::log!(level, "{}", line);
+                // db_retry_log turns to Error on the last attempt.
+                if level == log::Level::Error {
+                    return Err(e);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(DB_RETRY_SECS)).await;
                 attempt += 1;
             }
-            Err(e) => {
-                log::error!("Database unreachable after {} attempts (~{}s). Giving up.", MAX_ATTEMPTS, MAX_ATTEMPTS as u64 * DELAY_SECS);
-                return Err(e);
-            }
         }
+    }
+}
+
+#[cfg(test)]
+mod db_wait_tests {
+    use super::{db_retry_log, sqlite_file_pending, DB_CONNECT_ATTEMPTS};
+    use std::path::PathBuf;
+
+    fn temp_db(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("omnibus-db-wait-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn a_sqlite_file_the_web_app_has_not_created_yet_is_pending() {
+        let path = temp_db("missing.db");
+        assert_eq!(sqlite_file_pending(&format!("file:{}", path.display())), Some(path.clone()));
+        assert_eq!(sqlite_file_pending(&format!("file:{}?mode=rwc", path.display())), Some(path.clone()));
+        assert_eq!(sqlite_file_pending(&format!("sqlite:{}", path.display())), Some(path));
+    }
+
+    #[test]
+    fn an_existing_file_postgres_and_memory_are_not_pending() {
+        let path = temp_db("present.db");
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(sqlite_file_pending(&format!("file:{}", path.display())), None);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(sqlite_file_pending("postgresql://omnibus:pw@db:5432/omnibus?schema=public"), None);
+        assert_eq!(sqlite_file_pending("sqlite::memory:"), None);
+        assert_eq!(sqlite_file_pending("file:"), None);
+    }
+
+    #[test]
+    fn waiting_for_a_new_sqlite_file_is_info_until_the_last_attempt() {
+        let path = temp_db("first-start.db");
+        let url = format!("file:{}", path.display());
+        let err = anyhow::anyhow!("unable to open database file");
+
+        let (level, line) = db_retry_log(&url, &err, 1);
+        assert_eq!(level, log::Level::Info);
+        assert!(line.starts_with(&format!("Waiting for the web app to create the database at {} ", path.display())), "{line}");
+        assert!(line.ends_with(&format!("(attempt 1/{DB_CONNECT_ATTEMPTS}).")), "{line}");
+
+        let (level, line) = db_retry_log(&url, &err, DB_CONNECT_ATTEMPTS - 1);
+        assert_eq!(level, log::Level::Info, "{line}");
+
+        let (level, line) = db_retry_log(&url, &err, DB_CONNECT_ATTEMPTS);
+        assert_eq!(level, log::Level::Error);
+        assert!(line.starts_with(&format!("The database at {} still doesn't exist after ~90s.", path.display())), "{line}");
+        assert!(line.contains("both containers mount the same config folder"), "{line}");
+    }
+
+    #[test]
+    fn any_other_failure_still_warns_then_errors() {
+        let url = "postgresql://omnibus:pw@db:5432/omnibus?schema=public";
+        let err = anyhow::anyhow!("connection refused");
+
+        let (level, line) = db_retry_log(url, &err, 2);
+        assert_eq!(level, log::Level::Warn);
+        assert_eq!(line, format!("Database not reachable yet (connection refused); retrying in 3s (attempt 2/{DB_CONNECT_ATTEMPTS})."));
+
+        let (level, line) = db_retry_log(url, &err, DB_CONNECT_ATTEMPTS);
+        assert_eq!(level, log::Level::Error);
+        assert_eq!(line, "Database unreachable after 30 attempts (~90s). Giving up.");
     }
 }
 

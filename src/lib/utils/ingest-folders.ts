@@ -25,6 +25,24 @@ export async function unmatchedReachableFromWatched(watchedDir: string, unmatche
     }
 }
 
+// #269: on a new install the watched and unmatched folders don't exist until the engine's first
+// watched-folder sweep creates them (watched_sync.rs `sweep_folders`). That's only a problem when no
+// volume is mounted for them, so they'd land in the container's own filesystem: then the nearest
+// folder that does exist is on the same device as `/`. On a mounted volume we can write to, the sweep
+// creates them where they belong.
+export async function createdOnFirstSweep(dir: string): Promise<boolean> {
+    let parent = path.dirname(dir);
+    while (!fs.existsSync(parent) && path.dirname(parent) !== parent) parent = path.dirname(parent);
+    try {
+        const [here, root] = await Promise.all([fs.promises.stat(parent), fs.promises.stat('/')]);
+        if (here.dev === root.dev) return false;
+        await fs.promises.access(parent, fs.constants.W_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 async function holds(dir: string, name: string): Promise<boolean> {
     let entries: fs.Dirent[];
     try {

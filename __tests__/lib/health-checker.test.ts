@@ -14,11 +14,13 @@ const mocks = vi.hoisted(() => ({
     log: vi.fn(),
     sendAlert: vi.fn().mockResolvedValue(true),
     fetch: vi.fn(),
-    unmatchedReachable: vi.fn().mockResolvedValue(false)
+    unmatchedReachable: vi.fn().mockResolvedValue(false),
+    createdOnFirstSweep: vi.fn().mockResolvedValue(false)
 }));
 
 vi.mock('@/lib/utils/ingest-folders', () => ({
-    unmatchedReachableFromWatched: mocks.unmatchedReachable
+    unmatchedReachableFromWatched: mocks.unmatchedReachable,
+    createdOnFirstSweep: mocks.createdOnFirstSweep
 }));
 
 // 2. Mock Dependencies
@@ -163,6 +165,55 @@ describe('System Health & Diagnostics', () => {
             const check = result.checks.find(c => c.id === 'unmatched_dir');
             expect(check?.status).toBe('ok');
             expect(result.checks.filter(c => c.id === 'unmatched_dir')).toHaveLength(1);
+        });
+    });
+
+    // #269: on a new install the watched and unmatched folders don't exist until the engine's first
+    // watched-folder sweep creates them. That's normal on a mounted volume, but System Health called
+    // it a missing volume mount.
+    describe('Watched and unmatched folders on a new install (#269)', () => {
+        beforeEach(() => {
+            vi.mocked(fs.promises.statfs).mockResolvedValue({ bsize: 1024, bavail: 15 * 1024 * 1024 * 1024 / 1024 } as never);
+            vi.mocked(fs.promises.access).mockResolvedValue(undefined);
+            vi.mocked(fs.existsSync).mockImplementation(p => p !== WATCHED_DIR && p !== UNMATCHED_DIR);
+            mocks.createdOnFirstSweep.mockReset();
+        });
+
+        afterEach(() => {
+            vi.mocked(fs.existsSync).mockImplementation(() => true);
+        });
+
+        it('reads as ok while they wait on a mounted volume for the first sweep', async () => {
+            mocks.createdOnFirstSweep.mockResolvedValue(true);
+
+            const result = await runSystemHealthCheck();
+
+            expect(mocks.createdOnFirstSweep).toHaveBeenCalledWith(WATCHED_DIR);
+            expect(mocks.createdOnFirstSweep).toHaveBeenCalledWith(UNMATCHED_DIR);
+            for (const id of ['watched_dir', 'unmatched_dir']) {
+                const check = result.checks.find(c => c.id === id);
+                expect(check?.status).toBe('ok');
+                expect(check?.message).toContain("doesn't exist yet. The engine creates it on its first watched-folder sweep.");
+            }
+            expect(result.status).toBe('HEALTHY');
+        });
+
+        it('still warns when they would land inside the container, with no volume mounted', async () => {
+            mocks.createdOnFirstSweep.mockResolvedValue(false);
+
+            const result = await runSystemHealthCheck();
+
+            expect(result.checks.find(c => c.id === 'watched_dir')).toMatchObject({ status: 'warning', message: expect.stringContaining('Verify the volume mount or OMNIBUS_WATCHED_DIR') });
+            expect(result.checks.find(c => c.id === 'unmatched_dir')).toMatchObject({ status: 'warning', message: expect.stringContaining('Verify the volume mount or OMNIBUS_AWAITING_MATCH_DIR') });
+        });
+
+        it('only asks about a folder that is missing', async () => {
+            vi.mocked(fs.existsSync).mockImplementation(() => true);
+
+            const result = await runSystemHealthCheck();
+
+            expect(mocks.createdOnFirstSweep).not.toHaveBeenCalled();
+            expect(result.checks.find(c => c.id === 'watched_dir')?.status).toBe('ok');
         });
     });
 

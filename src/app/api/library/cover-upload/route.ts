@@ -13,6 +13,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { UNMATCHED_DIR, isPathWithinRoots } from '@/lib/utils/paths';
+import { saveCustomSeriesCover } from '@/lib/series-cover';
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -51,17 +52,8 @@ export async function POST(req: NextRequest) {
     if (buffer.length === 0) return NextResponse.json({ error: 'Invalid image data' }, { status: 400 });
     if (buffer.length > MAX_BYTES) return NextResponse.json({ error: 'Image too large (max 15MB)' }, { status: 413 });
 
-    // The custom cover always lives at cover.jpg; remove other cover.* variants (e.g. an extracted
-    // cover.webp) so the chosen image is unambiguous to the cover route + external tools.
-    const coverPath = path.join(currentPath, 'cover.jpg');
-    for (const variant of ['cover.jpeg', 'cover.png', 'cover.webp', 'Cover.jpg', 'Cover.png', 'folder.jpg', 'folder.png']) {
-      const vp = path.join(currentPath, variant);
-      if (await fs.pathExists(vp)) { try { await fs.remove(vp); } catch { /* best effort */ } }
-    }
-    await fs.writeFile(coverPath, buffer);
-
-    const coverUrl = `/api/library/cover?path=${encodeURIComponent(coverPath)}&v=${Date.now()}`;
-    await prisma.series.update({ where: { id: series.id }, data: { coverUrl, hasCustomCover: true } });
+    // The custom cover always lives at cover.jpg, other cover.* variants removed, locked (series-cover.ts).
+    const coverUrl = await saveCustomSeriesCover(series.id, currentPath, buffer);
 
     await AuditLogger.log('UPLOAD_SERIES_COVER', { seriesName: series.name, path: currentPath }, (token.id || token.sub) as string);
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');

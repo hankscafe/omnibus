@@ -45,6 +45,28 @@ async function engineNestedArchives(archivePath: string, destDir?: string): Prom
     }
 }
 
+// #240 follow-up: the one comic inside a wrapper (GetComics serves single issues as a .zip holding
+// one .cbz), unpacked into `destDir` - engine first (RAR too, collision naming and magic fix
+// included), then AdmZip for a ZIP. Returns the unpacked file, or null when it can't be had: the
+// caller then hands the wrapper to the watched folder as before.
+async function unwrapSingleComic(archivePath: string, destDir: string, isRar: boolean): Promise<string | null> {
+    await fs.remove(destDir).catch(() => {}); // a retry starts from an empty folder
+    await fs.ensureDir(destDir);
+    const viaEngine = await engineNestedArchives(archivePath, destDir);
+    if (viaEngine?.files?.length === 1) return viaEngine.files[0];
+    if (isRar) return null; // no local RAR reader
+    try {
+        const comics = new AdmZip(archivePath).getEntries().filter(e => !e.isDirectory && COMIC_EXT_REGEX.test(e.entryName));
+        if (comics.length !== 1) return null;
+        const dest = path.join(destDir, path.basename(comics[0].entryName));
+        fs.writeFileSync(dest, comics[0].getData());
+        return fixMagicNumberSync(dest);
+    } catch (e) {
+        Logger.log(`[Importer] Couldn't read the one comic out of ${path.basename(archivePath)}: ${e instanceof Error ? e.message : String(e)}`, 'debug');
+        return null;
+    }
+}
+
 // Give a freshly imported series a real on-disk cover the instant the import lands, so the library
 // and Discover ("Recently Added") grids don't show the OMNIBUS placeholder during the ~10-minute wait
 // for the (delayed) METADATA_SYNC job whose resolve_cover is otherwise the only thing that writes a
@@ -90,7 +112,19 @@ async function noteImportBlocked(requestId: string, note: string): Promise<void>
 
 export const Importer = {
   async importRequest(requestId: string, opts?: { sourcePathOverride?: string }) {
-    const req = await prisma.request.findUnique({ 
+    // #240 follow-up: the comic out of a one-comic wrapper is unpacked into a scratch folder of our
+    // own, which goes however the import ends - imported, refused, failed or thrown.
+    const scratch: string[] = [];
+    try {
+      return await runImport(requestId, opts, scratch);
+    } finally {
+      for (const dir of scratch) await fs.remove(dir).catch(() => {});
+    }
+  }
+};
+
+async function runImport(requestId: string, opts: { sourcePathOverride?: string } | undefined, scratch: string[]) {
+    const req = await prisma.request.findUnique({
         where: { id: requestId },
         include: { user: true } 
     });
@@ -348,6 +382,30 @@ export const Importer = {
         if (!isFromClient && !trackingHash) await fs.remove(sourcePath).catch(() => {});
         await requeueWithNextRelease(req as any, { title: req.activeDownloadName });
         return false;
+    }
+
+    // --- ONE COMIC IN A WRAPPER (#240 follow-up, conduit4731) ---
+    // GetComics often serves a single issue as a .zip holding one .cbz. That is one comic, not a pack:
+    // it is unpacked and imported straight into the request's own series, as a download folder holding
+    // one archive already is (above). Handed to the watched folder it was matched by the file's own
+    // name and year instead - "Action Comics #38 (2015)" against "Action Comics (2011)" landed in
+    // /unmatched although the request knew its exact series. If it can't be unpacked, the watched
+    // folder still takes it, as before.
+    let unwrappedFrom: string | null = null;
+    if (isBatchArchive && nestedArchiveCount === 1) {
+        // One level, so nothing is left behind in the download folder once it is removed.
+        const unwrapDir = path.join(downloadRoot, `.omnibus-unwrap-${requestId}`);
+        scratch.push(unwrapDir);
+        const unwrapped = await unwrapSingleComic(actualSourceFile, unwrapDir, isRarContainer);
+        if (unwrapped) {
+            Logger.log(`[Importer] "${path.basename(actualSourceFile)}" holds one comic - importing ${path.basename(unwrapped)} into the request's series.`, 'info');
+            unwrappedFrom = actualSourceFile;
+            actualSourceFile = unwrapped;
+            inMemoryTrueExt = path.extname(unwrapped).toLowerCase();
+            isBatchArchive = false;
+        } else {
+            Logger.log(`[Importer] Couldn't unpack the one comic in "${path.basename(actualSourceFile)}" - handing it to the watched folder instead.`, 'warn');
+        }
     }
 
     // --- BATCH ROUTING EXECUTION ---
@@ -904,6 +962,13 @@ export const Importer = {
 
       if (!moveSuccess) throw new Error("Failed to move file after multiple attempts due to network locks.");
 
+      // #240 follow-up: the comic came out of a wrapper and is in the library now. Our own direct
+      // download's wrapper goes with it (a plain download is moved, so it goes too); a download
+      // client's stays where it is - a torrent may be seeding it.
+      if (unwrappedFrom && !isFromClient && !trackingHash) {
+          await fs.remove(unwrappedFrom).catch(() => {});
+      }
+
       // Issue #198: verify the copy NOW, while finalPath still mirrors the source byte-for-byte
       // (conversion replaces it with a different-sized .cbz later). The actual delete waits until
       // the very end of the import — if any later step throws, the retry cycle still has its source.
@@ -1225,5 +1290,4 @@ export const Importer = {
       }
       return false;
     }
-  }
-};
+}

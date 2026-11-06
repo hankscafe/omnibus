@@ -636,26 +636,28 @@ describe('File System: Importer Engine', () => {
             id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Big Pack.cbz'
         });
 
-        // Engine unreachable (default fetch rejection) → the ZIP's index finds the nested comic
-        // (#240: without loading the pack into memory), then the local AdmZip extraction runs.
-        mocks.readZipEntryNames.mockResolvedValueOnce(['nested/a.cbz', 'readme.txt']);
+        // Engine unreachable (default fetch rejection) → the ZIP's index finds the nested comics
+        // (#240: without loading the pack into memory), then the local AdmZip extraction runs. Two of
+        // them: a ZIP holding just one comic is a wrapper, unpacked and imported as one issue (below).
+        mocks.readZipEntryNames.mockResolvedValueOnce(['nested/a.cbz', 'nested/b.cbz', 'readme.txt']);
         mocks.zipGetEntries.mockReturnValue([
             { entryName: 'nested/a.cbz', isDirectory: false, getData: () => Buffer.from('a') },
+            { entryName: 'nested/b.cbz', isDirectory: false, getData: () => Buffer.from('b') },
             { entryName: 'readme.txt', isDirectory: false, getData: () => Buffer.from('junk') },
         ]);
 
         const result = await Importer.importRequest('req_1');
 
         expect(result).toBe(true);
-        // Only the nested comic was written to the watched folder.
-        expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledTimes(1);
+        // Only the nested comics were written to the watched folder.
+        expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledTimes(2);
         expect(mocks.updateManyRequest).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.objectContaining({ status: 'IMPORTING' })
         }));
         // The destination keeps a collision prefix when the watched folder already holds that name,
         // and the handoff key follows the file it actually wrote. #240 review: it is written per file,
         // BEFORE the extraction writes it.
-        expect(mocks.recordPendingHandoff).toHaveBeenCalledTimes(1);
+        expect(mocks.recordPendingHandoff).toHaveBeenCalledTimes(2);
         expect(mocks.recordPendingHandoff).toHaveBeenCalledWith(expect.objectContaining({
             batchId: 'batch_test',
             requestIds: ['req_1'],
@@ -665,6 +667,151 @@ describe('File System: Importer Engine', () => {
         expect(mocks.recordPendingHandoff.mock.invocationCallOrder[0])
             .toBeLessThan(vi.mocked(fs.writeFileSync).mock.invocationCallOrder[0]);
         expect(notifierSendAlert).not.toHaveBeenCalled();
+    });
+
+    // ==== #240 follow-up (conduit4731): one comic in a wrapper is one download, not a pack. ====
+    // GetComics served "Action Comics #38" as "Action Comics #38 (2015).zip" holding one .cbz. As a
+    // "batch" it went to the watched folder, where the sweep matches by the file's own name and year -
+    // 2015 against "Action Comics (2011)" - and it landed in /unmatched though the request knew its
+    // exact series. It is unpacked into a scratch folder of our own and imported like a plain .cbz.
+    describe('one comic in a wrapper (#240 follow-up)', () => {
+        const WRAPPER = 'Action Comics #38 (2015).zip';
+        const INNER = 'Action Comics 038 (2015).cbz';
+        const scratchFile = `/downloads/.omnibus-unwrap-req_1/${INNER}`;
+        const isScratch = (p: unknown) => /[\\/]\.omnibus-unwrap-req_1$/.test(String(p));
+        // The scratch folder is emptied before unpacking too, so "removed at all" proves nothing: the
+        // clean-up is the removal that comes after the comic has landed.
+        const lastScratchRemoval = () => Math.max(-1, ...vi.mocked(fs.remove).mock.calls
+            .map(([p], i) => (isScratch(p) ? vi.mocked(fs.remove).mock.invocationCallOrder[i] : -1)));
+
+        const actionComicsRequest = (downloadLink = 'https://getcomics.org/dls/action-38') => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: WRAPPER, volumeId: 'cv_7', metadataSource: 'COMICVINE',
+                downloadLink, createdAt: new Date()
+            });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Action Comics', publisher: 'DC Comics', year: 2011, libraryId: 'lib_1', isManga: false
+            });
+        };
+        // A GetComics download: only the copy under GetComics/ exists, so it is ours (moved, then gone).
+        const onlyTheGetComicsCopy = () => vi.mocked(fs.existsSync).mockImplementation((p) => {
+            const s = String(p).replace(/\\/g, '/');
+            return !(s.endsWith(`/downloads/${WRAPPER}`));
+        });
+        const engineSaysOneComic = (extracted: { count: number; files?: string[] } = { count: 1, files: [scratchFile] }) => mocks.fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ count: 1, entries: [INNER] }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => extracted });
+
+        afterEach(() => {
+            vi.mocked(fs.existsSync).mockReset();
+            vi.mocked(fs.existsSync).mockReturnValue(true);
+            // clearMocks empties the call history but not queued *Once answers: one left unused here
+            // would answer a later test's engine call. The outer beforeEach puts the defaults back.
+            mocks.fetch.mockReset();
+            mocks.readZipEntryNames.mockReset();
+            mocks.readZipEntryNames.mockResolvedValue(['01.jpg']);
+        });
+
+        it("imports the one comic straight into the request's series - never through the watched folder", async () => {
+            actionComicsRequest();
+            onlyTheGetComicsCopy();
+            engineSaysOneComic();
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            // Unpacked into the scratch folder, not the watched folder - emptied first, so a retry
+            // never finds an earlier attempt's file there.
+            const extractBody = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+            expect(extractBody.path).toMatch(/GetComics[\\/]Action Comics #38 \(2015\)\.zip$/);
+            expect(isScratch(extractBody.dest_dir)).toBe(true);
+            const emptied = vi.mocked(fs.remove).mock.calls.findIndex(([p]) => isScratch(p));
+            expect(emptied).toBeGreaterThan(-1);
+            expect(vi.mocked(fs.remove).mock.invocationCallOrder[emptied]).toBeLessThan(mocks.fetch.mock.invocationCallOrder[1]);
+            // Imported into Action Comics (2011) as #38, by the request's own series - no year match needed.
+            expect(fs.move).toHaveBeenCalledWith(
+                scratchFile,
+                expect.stringMatching(/DC Comics[\\/]Action Comics \(2011\)[\\/](?:\d+_)?Action Comics #038\.cbz$/),
+                expect.any(Object)
+            );
+            expect(mocks.createIssue).toHaveBeenCalled();
+            expect(notifierSendAlert).toHaveBeenCalledWith('comic_available', expect.any(Object));
+            // No batch: no handoff rows, no IMPORTING wait, no sweep queued.
+            expect(mocks.recordHandoff).not.toHaveBeenCalled();
+            expect(mocks.recordPendingHandoff).not.toHaveBeenCalled();
+            expect(mocks.updateManyRequest).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'IMPORTING' }) }));
+            expect(omnibusQueue.add).not.toHaveBeenCalledWith('WATCHED_FOLDER_SYNC', expect.anything(), expect.anything());
+        });
+
+        it('deletes our own GetComics wrapper once its comic is in the library, and the scratch folder always', async () => {
+            actionComicsRequest();
+            onlyTheGetComicsCopy();
+            engineSaysOneComic();
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            expect(fs.remove).toHaveBeenCalledWith(expect.stringMatching(/GetComics[\\/]Action Comics #38 \(2015\)\.zip$/));
+            expect(lastScratchRemoval()).toBeGreaterThan(vi.mocked(fs.move).mock.invocationCallOrder[0]);
+        });
+
+        it("a download client's wrapper stays where it is (a torrent may be seeding it): the comic is copied", async () => {
+            actionComicsRequest('abc123hash');
+            engineSaysOneComic();
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            expect(fs.copy).toHaveBeenCalledWith(scratchFile, expect.stringMatching(/Action Comics #038\.cbz$/), expect.any(Object));
+            expect(vi.mocked(fs.remove).mock.calls.some(([p]) => String(p).endsWith(WRAPPER))).toBe(false);
+            // The copy is ours to clean up, once it has been copied.
+            expect(lastScratchRemoval()).toBeGreaterThan(vi.mocked(fs.copy).mock.invocationCallOrder[0]);
+        });
+
+        it("a RAR comic in a ZIP wrapper is taken as a RAR, not as the wrapper's ZIP", async () => {
+            actionComicsRequest();
+            onlyTheGetComicsCopy();
+            const innerRar = '/downloads/.omnibus-unwrap-req_1/Action Comics 038 (2015).cbr';
+            engineSaysOneComic({ count: 1, files: [innerRar] });
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            // No ComicInfo read as if it were a ZIP: the RAR goes to the converter instead.
+            expect(mocks.parseComicInfo).not.toHaveBeenCalledWith(innerRar);
+            expect(fs.move).toHaveBeenCalledWith(innerRar, expect.stringMatching(/Action Comics #038\.cbr$/), expect.any(Object));
+        });
+
+        it('unpacks a ZIP itself when the engine is down', async () => {
+            actionComicsRequest();
+            onlyTheGetComicsCopy();
+            mocks.readZipEntryNames.mockResolvedValueOnce([INNER, 'info.txt']);
+            mocks.zipGetEntries.mockReturnValue([
+                { entryName: INNER, isDirectory: false, getData: () => Buffer.from('comic') },
+                { entryName: 'info.txt', isDirectory: false, getData: () => Buffer.from('junk') },
+            ]);
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledWith(expect.stringMatching(/[\\/]\.omnibus-unwrap-req_1[\\/]Action Comics 038 \(2015\)\.cbz$/), expect.anything());
+            expect(mocks.createIssue).toHaveBeenCalled();
+            expect(mocks.recordPendingHandoff).not.toHaveBeenCalled();
+        });
+
+        it("hands the wrapper to the watched folder as before when its comic can't be unpacked", async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: WRAPPER, volumeId: 'cv_7', downloadLink: 'https://getcomics.org/dls/action-38'
+            });
+            onlyTheGetComicsCopy();
+            // Listed as one comic, but nothing comes out into the scratch folder (and AdmZip finds none
+            // either) - the watched-folder route still takes it, so nothing is worse than before.
+            engineSaysOneComic({ count: 1, files: [] });
+            mocks.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ count: 1, files: [`/watched/${INNER}`] }) });
+
+            expect(await Importer.importRequest('req_1')).toBe(true);
+
+            expect(mocks.recordHandoff).toHaveBeenCalledWith(expect.objectContaining({ relativePaths: [INNER] }));
+            expect(mocks.updateManyRequest).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'IMPORTING' }) }));
+            expect(mocks.createIssue).not.toHaveBeenCalled();
+            expect(loggerLog).toHaveBeenCalledWith(expect.stringContaining("Couldn't unpack"), 'warn');
+            expect(lastScratchRemoval()).toBeGreaterThan(mocks.recordHandoff.mock.invocationCallOrder[0]);
+        });
     });
 
     // ==== #240 review: the row must exist BEFORE the file it names does. ====

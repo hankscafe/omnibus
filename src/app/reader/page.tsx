@@ -200,6 +200,11 @@ function ReaderContent() {
   // a page turn the 1.5 s debounce hadn't sent yet - and only that.
   const syncedPageRef = useRef<number | null>(null);
 
+  // The issue was finished when it opened. It opens at page 1, and the progress API counts page 1 as
+  // not finished, so the sync below writes nothing until a page is turned (a re-read) - opening a
+  // finished issue just to look used to mark it unread about two seconds later.
+  const openedFinishedRef = useRef(false);
+
   // Per-series reader preferences: seriesId identifies the series; prefsLoaded gates saving until the
   // saved prefs have been fetched + merged, so we never overwrite them with defaults on first load.
   const [seriesId, setSeriesId] = useState<string | null>(null);
@@ -284,6 +289,7 @@ function ReaderContent() {
     setPendingTags(emptyPendingTags());
     setIssueId(null);
     syncedPageRef.current = null;
+    openedFinishedRef.current = false;
 
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
@@ -356,6 +362,7 @@ function ReaderContent() {
         }
         setCurrentIndex(startPage);
         syncedPageRef.current = startPage; // #270: closing on this page has nothing new to write
+        openedFinishedRef.current = !!progressData?.isCompleted;
 
         setIsMarkedRead(progressData?.isCompleted || false);
         setIssueId(progressData?.issueId || null);
@@ -368,6 +375,8 @@ function ReaderContent() {
   // Sync Progress
   useEffect(() => {
     if (loading || !isReadyToSync || pages.length === 0) return;
+    // A finished issue stays finished while it's still on the page it opened at (see openedFinishedRef).
+    if (openedFinishedRef.current && currentIndex === syncedPageRef.current) return;
 
     const timer = setTimeout(() => {
         syncedPageRef.current = currentIndex;

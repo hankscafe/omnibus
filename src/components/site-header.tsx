@@ -24,6 +24,8 @@ import { TierBadge } from "@/components/tier-badge"
 import { ImpersonationBanner, useStopImpersonating } from "@/components/impersonation-banner"
 import { cn } from "@/lib/utils"
 
+const NOTIFICATION_POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
+
 // --- INTERNAL NOTIFICATION COMPONENT ---
 function NotificationBell() {
   const [notifications, setNotifications] = useState<any[]>([])
@@ -42,8 +44,6 @@ function NotificationBell() {
       // Silently ignore background network drops to prevent console spam
     }
   }
-
-  const NOTIFICATION_POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
 
   useEffect(() => {
     fetchNotifications()

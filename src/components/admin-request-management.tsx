@@ -39,6 +39,8 @@ const releaseDay = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date)
   ? new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: 'UTC' })
   : date
 
+const REQUEST_POLL_INTERVAL_MS = 15 * 1000; // 15 seconds
+
 export function AdminRequestManagement() {
   const [requests, setRequests] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -100,8 +102,6 @@ export function AdminRequestManagement() {
       setLoading(false)
     }
   }
-
-  const REQUEST_POLL_INTERVAL_MS = 15 * 1000; // 15 seconds
 
   useEffect(() => {
     fetchRequests()

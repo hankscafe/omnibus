@@ -1,4 +1,4 @@
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
     self.skipWaiting();
 });
 
@@ -17,7 +17,7 @@ self.addEventListener('fetch', (event) => {
     }
 
     event.respondWith(
-        fetch(event.request).catch((err) => {
+        fetch(event.request).catch(() => {
             // CRITICAL PWA FIX: Only return the HTML fallback for actual page navigation
             if (event.request.mode === 'navigate') {
                 return new Response(

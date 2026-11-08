@@ -162,11 +162,17 @@ export function RequestSearch() {
       }
   }
 
+  // Keyed on what the details answer depends on - the id, issue or volume, and the provider (the same
+  // number on the other provider is another comic) - not on the whole selection, which this effect
+  // rewrites with what it fetches. (The route reads id, type and provider only: no volume id.)
+  const selectedItemId = selectedItem?.id;
+  const selectedItemIsVolume = selectedItem?.isVolume;
+  const selectedItemSource = selectedItem?.metadataSource || 'COMICVINE';
   useEffect(() => {
-    if (!selectedItem?.id) return;
-    const itemType = selectedItem.isVolume ? 'volume' : 'issue';
-    
-    fetch(`/api/issue-details?id=${selectedItem.id}&type=${itemType}&volId=${selectedItem.volumeId || ''}&provider=${selectedItem.metadataSource || 'COMICVINE'}&_t=${Date.now()}`)
+    if (!selectedItemId) return;
+    const itemType = selectedItemIsVolume ? 'volume' : 'issue';
+
+    fetch(`/api/issue-details?id=${selectedItemId}&type=${itemType}&provider=${selectedItemSource}&_t=${Date.now()}`)
       .then(res => res.json())
       .then(data => {
         if (data && !data.error) {
@@ -184,7 +190,7 @@ export function RequestSearch() {
           });
         }
       });
-  }, [selectedItem?.id, selectedItem?.isVolume]);
+  }, [selectedItemId, selectedItemIsVolume, selectedItemSource]);
 
   const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
     if (!canRequest) {

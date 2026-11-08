@@ -112,10 +112,14 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
       .finally(() => setLoading(false))
   }, [currentIndex, type, refreshSignal, limit, isInitialized, offsets])
 
+  // Keyed on the id AND the provider: the same number on the other provider is another comic. Not
+  // on the whole selection, which this effect rewrites with the details it fetches.
+  const selectedComicId = selectedComic?.id;
+  const selectedComicSource = (selectedComic as any)?.metadataSource || 'COMICVINE';
   useEffect(() => {
-    if (!selectedComic?.id) return;
-    
-    fetch(`/api/issue-details?id=${selectedComic.id}&type=issue&provider=${(selectedComic as any).metadataSource || 'COMICVINE'}&_t=${Date.now()}`)
+    if (!selectedComicId) return;
+
+    fetch(`/api/issue-details?id=${selectedComicId}&type=issue&provider=${selectedComicSource}&_t=${Date.now()}`)
       .then(res => res.json())
       .then(data => {
         if (data && !data.error) {
@@ -133,7 +137,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
           });
         }
       });
-  }, [selectedComic?.id]);
+  }, [selectedComicId, selectedComicSource]);
 
   useEffect(() => {
     if (!selectedComic?.volumeId || String(selectedComic.volumeId) === "0") { setRelatedIssues([]); return; }

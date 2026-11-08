@@ -269,8 +269,11 @@ export default function RequestsPage() {
 
   useEffect(() => {
     fetchRequests()
-    const interval = setInterval(fetchRequests, 15000) 
+    const interval = setInterval(fetchRequests, 15000)
     return () => clearInterval(interval)
+    // Restarts the poll whenever the session does. fetchRequests reads only the session (listed) plus
+    // state setters and toast (both never change), so the polled copy is never out of date.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
   const handleCancelRequest = async (id: string) => {

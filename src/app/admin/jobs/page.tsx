@@ -131,6 +131,8 @@ export default function ScheduledJobsPage() {
   useEffect(() => {
     document.title = "Omnibus - Scheduled Jobs"
     fetchConfig()
+    // Once, on mount. fetchConfig only calls state setters and toast (both never change).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchConfig = async () => {

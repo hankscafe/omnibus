@@ -59,6 +59,9 @@ export default function AnalyticsPage() {
     useEffect(() => {
         document.title = "Omnibus - Insights";
         fetchAnalytics();
+        // Once, on mount. fetchAnalytics only calls state setters and toast (both never change), so
+        // the first render's copy is as good as any; the Refresh button calls it again.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handlePurgeInactive = async () => {

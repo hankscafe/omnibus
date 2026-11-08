@@ -96,6 +96,8 @@ export default function AdminUsersPage() {
     }
   }
 
+  // Once, on mount. fetchUsers only calls state setters and toast (both never change).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchUsers() }, [])
 
   const handleUpdateUser = async (id: string, field: string, value: any) => {

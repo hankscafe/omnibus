@@ -40,6 +40,8 @@ export default function AdminReportsPage() {
 
   useEffect(() => {
     fetchReports()
+    // Once, on mount. fetchReports only calls state setters and toast (both never change).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleResolveSubmit = async () => {

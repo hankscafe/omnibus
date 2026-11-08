@@ -318,9 +318,14 @@ function LibraryContent() {
       return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  // The address's ?q= wins only when the ADDRESS changes. The search it compares against is read
+  // through a ref: with it as a dependency, every typed search would be put back to ?q= the moment
+  // its debounce landed (__tests__/app/library/library-page-url-search.test.tsx).
+  const debouncedSearchRef = useRef(debouncedSearch);
+  debouncedSearchRef.current = debouncedSearch;
   useEffect(() => {
       const qParam = searchParams.get('q') || "";
-      if (qParam !== debouncedSearch) {
+      if (qParam !== debouncedSearchRef.current) {
           setSearchQuery(qParam);
           setDebouncedSearch(qParam);
       }
@@ -641,6 +646,7 @@ function LibraryContent() {
   // crossings — if the sentinel is STILL in range after new rows land, no event would come and the
   // list would stall one page in).
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const hasSeries = series.length > 0;
   useEffect(() => {
       const el = loadMoreSentinelRef.current;
       if (!el) return;
@@ -650,7 +656,7 @@ function LibraryContent() {
       );
       obs.observe(el);
       return () => obs.disconnect();
-  }, [handleEndReached, loading, viewMode, series.length > 0]);
+  }, [handleEndReached, loading, viewMode, hasSeries]);
 
   useEffect(() => {
       const el = loadMoreSentinelRef.current;

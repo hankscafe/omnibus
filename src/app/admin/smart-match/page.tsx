@@ -318,7 +318,6 @@ export default function SmartMatchPage() {
     useEffect(() => {
         fetchSweepInfo();
         return () => { if (sweepPollRef.current) clearInterval(sweepPollRef.current); };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const runSweepNow = async () => {

@@ -17,7 +17,9 @@ const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
     // Preserve eslint-config-next's default ignores under flat config.
-    ignores: [".next/**", "out/**", "build/**", "next-env.d.ts"],
+    // `.claude/` holds local session notes, lab scripts and old backup copies of app files - not app
+    // code, never shipped (vitest.config.ts excludes it too), so its findings only bury the real ones.
+    ignores: [".next/**", "out/**", "build/**", "next-env.d.ts", ".claude/**"],
   },
   {
     // Pragmatic relaxation of stock next/typescript strictness. This codebase uses `any` pervasively

@@ -20,6 +20,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { readerHref, nextInList } from "@/lib/reading-list-nav"
 
+// In-reader tagging (#199 round 2, concept by CapitanoNemo78; admin-only): note characters,
+// teams, locations, and credits spotted while reading. Nothing saves per-tag — additions
+// accumulate and are written ONCE on close via the existing PATCH /api/library/issue (which
+// also queues the ComicInfo.xml embed), so a six-tag session costs one archive rewrite, not six.
+// Categories map 1:1 onto the route's ARRAY_FIELDS whitelist — all eleven ComicInfo credit and
+// appearance roles since inker/editor/translator gained per-issue columns (Call-3 Beta A).
+// Module-level: fixed data, so the hooks that use them don't list them as dependencies.
+const TAG_CATEGORY_LABELS = {
+  characters: 'Character', teams: 'Team', locations: 'Location',
+  writers: 'Writer', artists: 'Penciller', inker: 'Inker', coverArtists: 'Cover Artist',
+  colorists: 'Colorist', letterers: 'Letterer', editor: 'Editor', translator: 'Translator',
+} as const;
+type TagCategory = keyof typeof TAG_CATEGORY_LABELS;
+const emptyPendingTags = (): Record<TagCategory, string[]> => ({
+  characters: [], teams: [], locations: [], writers: [], artists: [], inker: [],
+  coverArtists: [], colorists: [], letterers: [], editor: [], translator: [],
+});
+
 function ReaderContent() {
   if (typeof document !== 'undefined') {
     document.title = "Omnibus - Reader";
@@ -57,22 +75,7 @@ function ReaderContent() {
   const exitAfterManagerRef = useRef(false);
   const managerAppliedRef = useRef(false);
 
-  // In-reader tagging (#199 round 2, concept by CapitanoNemo78; admin-only): note characters,
-  // teams, locations, and credits spotted while reading. Nothing saves per-tag — additions
-  // accumulate and are written ONCE on close via the existing PATCH /api/library/issue (which
-  // also queues the ComicInfo.xml embed), so a six-tag session costs one archive rewrite, not six.
-  // Categories map 1:1 onto the route's ARRAY_FIELDS whitelist — all eleven ComicInfo credit and
-  // appearance roles since inker/editor/translator gained per-issue columns (Call-3 Beta A).
-  const TAG_CATEGORY_LABELS = {
-    characters: 'Character', teams: 'Team', locations: 'Location',
-    writers: 'Writer', artists: 'Penciller', inker: 'Inker', coverArtists: 'Cover Artist',
-    colorists: 'Colorist', letterers: 'Letterer', editor: 'Editor', translator: 'Translator',
-  } as const;
-  type TagCategory = keyof typeof TAG_CATEGORY_LABELS;
-  const emptyPendingTags = (): Record<TagCategory, string[]> => ({
-    characters: [], teams: [], locations: [], writers: [], artists: [], inker: [],
-    coverArtists: [], colorists: [], letterers: [], editor: [], translator: [],
-  });
+  // In-reader tagging (#199 round 2): the categories and the empty set live above the component.
   const [pendingTags, setPendingTags] = useState<Record<TagCategory, string[]>>(emptyPendingTags());
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
   const [tagCategory, setTagCategory] = useState<TagCategory>('characters');
@@ -131,7 +134,8 @@ function ReaderContent() {
     } finally {
       setIsSavingTags(false);
     }
-    // TAG_CATEGORY_LABELS/emptyPendingTags are stable-shape locals, not reactive state.
+    // getAuthHeaders is a stable useCallback declared further down: listing it here would read it
+    // before its declaration (a render-time error), so the rule is told to leave it out.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, issueId, pendingTagCount, pendingTags, toast]);
 

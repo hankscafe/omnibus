@@ -583,8 +583,11 @@ export default function ProfilePage() {
     }
   }
 
-  useEffect(() => { 
-      if (session?.user?.id) fetchData() 
+  useEffect(() => {
+      if (session?.user?.id) fetchData()
+      // Reloads whenever the session does. fetchData reads only the session (listed) plus state
+      // setters and toast (both never change).
+      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
   const handleCancelRequest = async (id: string) => {

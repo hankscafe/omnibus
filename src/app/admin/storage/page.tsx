@@ -50,6 +50,9 @@ export default function StorageDeepDivePage() {
       })
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
+    // Loads when the admin check settles. handleTriggerScan only calls state setters and toast (both
+    // never change), so the copy this effect closed over is never out of date.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin])
 
   const handleTriggerScan = async () => {

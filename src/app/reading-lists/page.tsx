@@ -223,6 +223,10 @@ function ReadingListsContent() {
     if (savedRequests) {
         try { setRequestedIds(new Set(JSON.parse(savedRequests))); } catch (e) {}
     }
+    // Only when ?id= changes (#270). fetchLists also reads the open list (it picks the first list
+    // only when none is open), but it's a new function every render: listing it would reload the
+    // lists on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramId])
 
   // #270: the open list goes in the address (replacing, not adding, a history entry), so Back from

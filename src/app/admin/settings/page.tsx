@@ -32,7 +32,7 @@ import { AccessSecurityTab } from "./tabs/access-security-tab"
 import { SystemTab } from "./tabs/system-tab"
 
 import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, WebhookConfig, HosterAccountConfig } from "./tabs/shared"
-import { hasMetronCredentials } from "@/lib/metron/credentials"
+import { primarySourceFallback, sourceHasCredentials } from "./tabs/primary-source"
 
 // --- Constants & Global Mappings ---
 // RECOMMENDED_PUBLISHERS / RECOMMENDED_KEYWORDS now live in @/lib/filter-defaults (shared with the setup wizard).
@@ -200,25 +200,18 @@ export default function SettingsPage() {
       ? computeDirtyTabs(JSON.parse(currentStateString), JSON.parse(initialStateHash))
       : [];
 
-  const isSourceAvailable = (source: string) => {
-    if (source === "COMICVINE") {
-      return !!config.cv_api_key && config.cv_api_key.trim() !== "";
-    } else if (source === "METRON") {
-      // An API token alone is a complete Metron setup (Metron is retiring username/password sign-in).
-      return hasMetronCredentials(config);
-    }
-    return false;
-  };
+  const isSourceAvailable = (source: string) => sourceHasCredentials(config, source);
 
+  // The chosen primary source lost its credentials and the other provider has them: move to it.
+  // The effect keys on the answer, so it sees every config change without listing the config.
+  const primarySourceSwitch = isDataLoaded ? primarySourceFallback(config) : null;
   useEffect(() => {
-    if (isDataLoaded && !isSourceAvailable(config.primary_metadata_source)) {
-      if (config.primary_metadata_source === "METRON" && isSourceAvailable("COMICVINE")) {
-        setConfig({...config, primary_metadata_source: "COMICVINE"});
-      } else if (config.primary_metadata_source === "COMICVINE" && isSourceAvailable("METRON")) {
-        setConfig({...config, primary_metadata_source: "METRON", show_popular_issues: "false"});
-      }
+    if (primarySourceSwitch === "COMICVINE") {
+      setConfig((c: Record<string, string>) => ({ ...c, primary_metadata_source: "COMICVINE" }));
+    } else if (primarySourceSwitch === "METRON") {
+      setConfig((c: Record<string, string>) => ({ ...c, primary_metadata_source: "METRON", show_popular_issues: "false" }));
     }
-  }, [config.cv_api_key, config.metron_api_token, config.metron_user, config.metron_pass, isDataLoaded]);
+  }, [primarySourceSwitch]);
 
   useEffect(() => {
       if (isDataLoaded && initialStateHash === "") {

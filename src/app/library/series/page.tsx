@@ -221,7 +221,7 @@ function SeriesContent() {
       } else {
           setRenamePreviews([]);
       }
-  }, [renameModalOpen, folderPattern, filePattern, seriesInfo.id]);
+  }, [renameModalOpen, folderPattern, filePattern, seriesInfo.id, seriesInfo.isManga]);
 
   // Admin-only, like the Rename dialog these patterns pre-fill: the admin settings refuse a regular
   // user, and that refusal used to read as an expired session and sign them out.

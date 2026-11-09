@@ -438,7 +438,7 @@ export function AdminRequestManagement() {
                     <td className="px-4 py-3 text-center">
                       <Checkbox checked={selectedIds.has(req.id)} onCheckedChange={(c) => {
                         const newSet = new Set(selectedIds);
-                        c ? newSet.add(req.id) : newSet.delete(req.id);
+                        if (c) newSet.add(req.id); else newSet.delete(req.id);
                         setSelectedIds(newSet);
                       }} />
                     </td>
@@ -552,7 +552,7 @@ export function AdminRequestManagement() {
                         checked={isSelected} 
                         onCheckedChange={(c) => {
                           const newSet = new Set(selectedIds);
-                          c ? newSet.add(req.id) : newSet.delete(req.id);
+                          if (c) newSet.add(req.id); else newSet.delete(req.id);
                           setSelectedIds(newSet);
                         }} 
                       />

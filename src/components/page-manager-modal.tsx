@@ -189,7 +189,6 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
                       title={name}
                       className={`relative rounded-lg border-2 overflow-hidden text-left transition-all focus:outline-none focus:ring-2 focus:ring-primary ${isMarked ? 'border-red-500 ring-1 ring-red-500/50' : 'border-border hover:border-primary/60'}`}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={`/api/reader/image?path=${encodeURIComponent(target.filePath)}&page=${encodeURIComponent(name)}`}
                         alt={`Page ${i + 1}`}

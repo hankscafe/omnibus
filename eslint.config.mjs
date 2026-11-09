@@ -38,6 +38,13 @@ const eslintConfig = [
         ignoreRestSiblings: true,
       }],
       "react/no-unescaped-entities": "warn",
+      // Off on purpose (beta.018): next/image doesn't fit how Omnibus serves images. Its optimizer
+      // fetches each image on the server WITHOUT the viewer's cookies, so every library cover
+      // (/api/library/cover, a signed-in route) would come back 401; that route already makes its
+      // own resized WebP thumbnails (?w=, src/lib/utils/cover-url.ts), and reader pages shouldn't be
+      // re-encoded on the server. The rest are provider URLs (no `images` allow-list here) and
+      // data:/blob: previews. With `unoptimized` it renders the same <img> and only adds layout rules.
+      "@next/next/no-img-element": "off",
     },
   },
   {

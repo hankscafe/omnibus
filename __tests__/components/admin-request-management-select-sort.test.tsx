@@ -186,3 +186,39 @@ describe('Request Management: Select all covers the page on screen (#265)', () =
         expect(deleteButton()?.textContent).toMatch(/delete \(30\)/i);
     });
 });
+
+// A single request's own box, in the table row and on its card: ticking adds that one request,
+// ticking again takes it out, and both layouts show the same selection.
+describe('Request Management: ticking one request', () => {
+    const tableRowBox = (name: string) => {
+        const tr = within(screen.getByRole('table')).getAllByRole('row').find(r => r.querySelectorAll('td')[1]?.textContent === name);
+        return within(tr as HTMLElement).getByRole('checkbox');
+    };
+    // The card's box sits beside its heading: heading → its column → the card's top row.
+    const cardBox = (name: string) =>
+        screen.getByRole('heading', { level: 4, name }).parentElement!.parentElement!.querySelector('[role="checkbox"]') as HTMLElement;
+
+    it("a table row's box ticks that request, and unticks it again", async () => {
+        await renderList();
+
+        await click(tableRowBox('Saga #61'));
+        expect(deleteButton()?.textContent).toMatch(/delete \(1\)/i);
+        expect(cardBox('Saga #61').getAttribute('aria-checked')).toBe('true');
+        expect(cardBox('Batman #1').getAttribute('aria-checked')).toBe('false');
+
+        await click(tableRowBox('Saga #61'));
+        expect(deleteButton()).toBeNull();
+    });
+
+    it("a card's box ticks that request, and unticks it again", async () => {
+        await renderList();
+
+        await click(cardBox('X-Men #5'));
+        expect(deleteButton()?.textContent).toMatch(/delete \(1\)/i);
+        expect(tableRowBox('X-Men #5').getAttribute('aria-checked')).toBe('true');
+        expect(tableRowBox('Aquaman #2').getAttribute('aria-checked')).toBe('false');
+
+        await click(cardBox('X-Men #5'));
+        expect(deleteButton()).toBeNull();
+    });
+});

@@ -202,7 +202,6 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
 
           {source && (
             <div className="shrink-0 flex items-center gap-3 p-2 rounded-lg border border-border bg-muted/30">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/reader/image?path=${encodeURIComponent(source.filePath)}&page=${encodeURIComponent(source.entryName)}`}
                 alt="Source page" className="w-12 aspect-[2/3] object-cover rounded bg-muted"
@@ -256,7 +255,6 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
                         })}
                         className="accent-red-600 shrink-0"
                       />
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={`/api/reader/image?path=${encodeURIComponent(m.filePath)}&page=${encodeURIComponent(m.entryName)}`}
                         alt="" loading="lazy" className="w-9 aspect-[2/3] object-cover rounded bg-muted shrink-0"

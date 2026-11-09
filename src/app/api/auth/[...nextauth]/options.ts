@@ -42,14 +42,15 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
   let oidcClientSecret = "";
   
   // --- NEW SSO SETTINGS ---
-  let oidcForceSso = false;
+  // (Force SSO isn't read here: it's enforced by the login page's redirect, registration and password
+  // reset. Password sign-in stays registered for the ?local=true bypass.)
   let oidcAutoApprove = false;
   let oidcAdminGroup = "";
   let oidcUserGroup = "";
 
   try {
     const configs = await prisma.systemSetting.findMany({
-      where: { key: { in: ['oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_force_sso', 'oidc_auto_approve', 'oidc_admin_group', 'oidc_user_group'] } }
+      where: { key: { in: ['oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_auto_approve', 'oidc_admin_group', 'oidc_user_group'] } }
     });
     const configMap = Object.fromEntries(configs.map(c => [c.key, c.value]));
     
@@ -57,7 +58,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
     oidcIssuer = configMap.oidc_issuer || "";
     oidcClientId = configMap.oidc_client_id || "";
     oidcClientSecret = configMap.oidc_client_secret || "";
-    oidcForceSso = configMap.oidc_force_sso === 'true';
     oidcAutoApprove = configMap.oidc_auto_approve === 'true';
     oidcAdminGroup = configMap.oidc_admin_group || "";
     oidcUserGroup = configMap.oidc_user_group || "";

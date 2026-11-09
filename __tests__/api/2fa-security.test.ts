@@ -1,5 +1,5 @@
 // __tests__/api/user/2fa-security.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { POST } from '@/app/api/user/2fa/route'; 
 import { NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';

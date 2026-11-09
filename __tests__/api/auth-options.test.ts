@@ -1,6 +1,6 @@
 // beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
 vi.unmock('@/app/api/auth/[...nextauth]/options');
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // 1. Hoist our mocks AND set environment variables BEFORE imports evaluate
 const mocks = vi.hoisted(() => {

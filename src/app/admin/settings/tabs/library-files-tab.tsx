@@ -51,7 +51,7 @@ export function LibraryFilesTab({ s }: { s: SettingsBag }) {
                 <CardContent className="space-y-8">
                     
                     <div className="space-y-4">
-                        {configuredLibraries.map((lib, i) => (
+                        {configuredLibraries.map((lib) => (
                             <div key={lib.id} className={`grid gap-6 md:grid-cols-[1fr_2fr] p-4 rounded-lg border relative group transition-colors ${lib.isDefault ? 'border-primary/50 bg-primary/5 shadow-sm' : 'bg-muted/30 border-border'}`}>
                                 <div className="space-y-3">
                                     <div className="space-y-1.5">

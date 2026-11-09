@@ -75,7 +75,6 @@ describe('POST /api/library/issue/move', () => {
         mocks.seriesCreate.mockResolvedValue({ id: 'sNew', name: 'Brand New', folderPath: '/lib/Brand New' });
 
         const res = await POST(req({ issueIds: ['i1'], newSeriesName: 'Brand New' }));
-        const data = await res.json();
 
         expect(res.status).toBe(200);
         expect(mocks.seriesCreate).toHaveBeenCalledWith(expect.objectContaining({

@@ -1,6 +1,6 @@
 // beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
 vi.unmock('@/lib/discord');
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DiscordNotifier } from '@/lib/discord';
 import axios from 'axios';
 

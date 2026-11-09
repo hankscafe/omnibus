@@ -154,9 +154,7 @@ export async function POST(request: Request) {
 
         if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
-        // Ensure only admins can set the global flag
-        const isAdmin = (session.user as any).role === 'ADMIN';
-
+        // Only admins and users granted global lists can set the global flag
         const canMakeGlobal = (session.user as any).role === 'ADMIN' || (session.user as any).canCreateGlobalLists === true;
 
         const newList = await prisma.readingList.create({

@@ -8,7 +8,6 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
-import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';

@@ -10,7 +10,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { MetadataTab } from '@/app/admin/settings/tabs/metadata-tab';
 import { LibraryFilesTab } from '@/app/admin/settings/tabs/library-files-tab';

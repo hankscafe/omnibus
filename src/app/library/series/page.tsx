@@ -1,7 +1,7 @@
 // src/app/library/series/page.tsx
 "use client"
 
-import { useState, useEffect, useTransition, Suspense, useMemo, type SyntheticEvent } from "react"
+import { useState, useEffect, Suspense, useMemo, type SyntheticEvent } from "react"
 import { IssueSortControl } from "@/components/issue-sort-control"
 import { sortIssuesForDisplay, laneLabel, parseIssueSortMode, DEFAULT_ISSUE_SORT, ISSUE_SORT_STORAGE_KEY, type IssueSortMode } from "@/lib/utils/issue-sort"
 import { useSearchParams, useRouter } from "next/navigation"
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { 
   ChevronLeft, BookOpen, Layers, Loader2, Image as ImageIcon, 
-  Info, Calendar, PenTool, Paintbrush, Download, ExternalLink, 
+  PenTool, Paintbrush, Download, ExternalLink, 
   RefreshCw, Search, Edit, Copy, Check, CloudDownload, CloudOff, Heart, Trash2,
   CheckCircle2, DownloadCloud, Users, Sparkles, AlertTriangle,
   LayoutGrid, List, CheckSquare, Square, EyeOff, Tags, BookMarked, Star,
@@ -183,7 +183,6 @@ function SeriesContent() {
   
   // Calculate unmatched issues
   const unmatchedIssues = downloadedIssues.filter(i => i.matchState === 'UNMATCHED' || i.metadataId?.startsWith('unmatched'));
-  const matchedDownloadedIssues = downloadedIssues.filter(i => i.matchState !== 'UNMATCHED' && !i.metadataId?.startsWith('unmatched'));
 
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });

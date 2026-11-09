@@ -2,13 +2,11 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { parseComicVineCredits, isReleasedYet } from '@/lib/utils';
 import { ComicVineIssue } from '@/types'; 
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { logApiUsage } from '@/lib/utils/system-flags';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { lazyMetronAuth } from '@/lib/metron/client';

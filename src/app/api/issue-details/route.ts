@@ -1,13 +1,11 @@
 // src/app/api/issue-details/route.ts
 import { NextResponse } from 'next/server';
-import { apiClient as axios } from '@/lib/api-client';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
 import { parseComicVineCredits } from '@/lib/utils';
 import { sanitizeDescription, providerWikiBase } from '@/lib/utils/sanitize';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
-import { logApiUsage } from '@/lib/utils/system-flags';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 

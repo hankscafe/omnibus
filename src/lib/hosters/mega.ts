@@ -2,7 +2,7 @@
 import { File } from 'megajs';
 import { Logger } from '../logger';
 
-export async function resolveMega(url: string, account?: any) {
+export async function resolveMega(url: string, _account?: any) {
     try {
         Logger.log(`[Mega] Initializing decryption for: ${url}`, 'info');
         Logger.log(`[Mega Debug] Attempting to load Mega attributes...`, 'debug');

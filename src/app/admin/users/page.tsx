@@ -7,12 +7,11 @@ import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, Loader2, User as UserIcon, Trash2, Plus, Eye, Shield, DownloadCloud, Activity, ShieldOff, Mail, Globe, Send, Wand2, Library } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { copyText } from "@/lib/utils/clipboard"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
@@ -27,7 +26,6 @@ export default function AdminUsersPage() {
       document.title = "Omnibus - Users";
   }, []);
 
-  const [copied, setCopied] = useState(false);
   const { data: session } = useSession()
   const [users, setUsers] = useState<any[]>([])
   const [libraries, setLibraries] = useState<any[]>([])
@@ -60,16 +58,6 @@ export default function AdminUsersPage() {
   const [newUserTier, setNewUserTier] = useState<TierName>('Civilian')
   
   const { toast } = useToast()
-
-  const copyToClipboard = async (text: string) => {
-      if (await copyText(text)) {
-          setCopied(true);
-          toast({ title: "Copied!", description: "API Key copied to clipboard." });
-          setTimeout(() => setCopied(false), 2000);
-      } else {
-          toast({ title: "Copy failed", description: "Select the key text and copy it manually.", variant: "destructive" });
-      }
-  }
 
   const fetchUsers = async () => {
     try {

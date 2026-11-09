@@ -7,7 +7,7 @@ vi.unmock('@/app/api/auth/[...nextauth]/options');
 // open tab alive forever and the 2h admin inactivity window never elapsed. These tests pin the
 // fixed contract: ambient reads only CHECK expiry; only sign-in and the client activity ping
 // (trigger "update") slide the window — and a ping can never revive an already-expired session.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
     process.env.NEXTAUTH_SECRET = 'super_secure_test_secret_key_1234567890';

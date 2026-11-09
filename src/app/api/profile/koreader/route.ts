@@ -7,7 +7,7 @@ import { Logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+export async function GET(_request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id;

@@ -1,5 +1,5 @@
 // __tests__/api/api-keys.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { POST, DELETE } from '@/app/api/user/api-keys/route';
 import crypto from 'crypto';
 

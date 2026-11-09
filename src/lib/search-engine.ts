@@ -37,7 +37,7 @@ export function normalizeRequestName(name: string): string {
     return stripIssueSubtitle(stripFileExtension(name));
 }
 
-export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, isManga: boolean = false, prioritizePacks: boolean = false, usePacks: boolean = true): string[] {
+export function generateSearchQueries(name: string, year: string, acronyms: Record<string, string>, _isManga: boolean = false, prioritizePacks: boolean = false, usePacks: boolean = true): string[] {
     const searchName = normalizeRequestName(name);
 
     const primaryQueries = new Set<string>(); 
@@ -48,18 +48,13 @@ export function generateSearchQueries(name: string, year: string, acronyms: Reco
     const broadClean = noPossessive.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     
     let mainPart = searchName;
-    let subtitle = "";
     let hasSubtitle = false;
 
     if (searchName.includes(' - ')) {
-        const parts = searchName.split(' - ');
-        mainPart = parts[0].trim();
-        subtitle = parts.slice(1).join(' - ').trim();
+        mainPart = searchName.split(' - ')[0].trim();
         hasSubtitle = true;
     } else if (searchName.includes(': ')) {
-        const parts = searchName.split(': ');
-        mainPart = parts[0].trim();
-        subtitle = parts.slice(1).join(': ').trim();
+        mainPart = searchName.split(': ')[0].trim();
         hasSubtitle = true;
     }
 

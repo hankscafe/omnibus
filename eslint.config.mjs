@@ -34,6 +34,8 @@ const eslintConfig = [
         varsIgnorePattern: "^_",
         // Don't flag unused `catch (e)` bindings — `catch (e) {}` is idiomatic and not dead code.
         caughtErrors: "none",
+        // `const { password, ...safeUser } = user` names a field in order to leave it out.
+        ignoreRestSiblings: true,
       }],
       "react/no-unescaped-entities": "warn",
     },

@@ -15,7 +15,7 @@ const authenticator = otplib.authenticator || otplib.default?.authenticator || o
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const QRCode = require('qrcode');
 
-export async function GET(req: Request) {
+export async function GET(_req: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);

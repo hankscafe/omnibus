@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { resolveRemotePath } from '../../../src/lib/utils/path-resolver';
 import path from 'path';
 

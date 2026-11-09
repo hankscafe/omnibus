@@ -730,7 +730,7 @@ function ReaderContent() {
 
   const handleMouseUp = () => setIsDragging(false);
 
-  const handleClickCanvas = (e: React.MouseEvent) => {
+  const handleClickCanvas = () => {
       if (zoomLevel !== 100 && dragDistance > 5) return;
       setShowUI(!showUI);
   };

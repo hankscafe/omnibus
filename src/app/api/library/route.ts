@@ -5,11 +5,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { ciContains } from '@/lib/utils/db-search';
 import fs from 'fs-extra'; 
-import path from 'path';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
-import { detectManga } from '@/lib/manga-detector';
-import { parseComicInfo } from '@/lib/metadata-extractor';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
@@ -76,7 +73,6 @@ export async function GET(request: Request) {
     } catch (e) {}
     
     const pendingVolIdsList = pendingRequests.map(r => r.volumeId);
-    const pendingVolIds = new Set<string>(pendingVolIdsList);
 
     const where: any = { AND: [] };
 

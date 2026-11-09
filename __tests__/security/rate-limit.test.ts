@@ -1,10 +1,7 @@
 // __tests__/security/rate-limit.test.ts
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { loggerLog } from '../helpers/setup-global';
-
-// 1. Mock Logger
-const mocks = vi.hoisted(() => ({ log: vi.fn() }));
 
 describe('Security: Rate Limiter', () => {
     it('should completely block the 6th request, return a 429 response, and trace the debug log', () => {

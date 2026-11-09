@@ -7,7 +7,7 @@ import path from 'path';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 
-export async function GET(request: Request) {
+export async function GET(_request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);

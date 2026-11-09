@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -11,13 +11,12 @@ import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/components/ui/use-toast"
 import { restoreCompleteToast } from "@/lib/restore-warnings"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { 
     UserPlus, Database, HardDrive, Download, Search, Settings2, 
     CheckCircle2, Loader2, ArrowRight, ShieldCheck, Play, Plus, Trash2, RefreshCw,
-    Webhook, Bell, User, Zap, FolderOpen, UploadCloud, Send, AlertCircle, Mail, FileText,
+    Bell, User, Zap, FolderOpen, UploadCloud, Send, Mail, FileText,
     Server, Globe, Filter, Fingerprint,
     AlertTriangle
 } from "lucide-react"
@@ -902,7 +901,7 @@ export default function SetupWizard() {
                                                 <Label className="text-xs">Manga Destination</Label>
                                             </div>
                                             <div className="flex items-center gap-2">
-                                                <Switch checked={lib.isDefault} onCheckedChange={v => {
+                                                <Switch checked={lib.isDefault} onCheckedChange={() => {
                                                     const nl = libraries.map(l => {
                                                         if (l.isManga === lib.isManga) return { ...l, isDefault: l.id === lib.id };
                                                         return l;

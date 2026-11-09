@@ -22,7 +22,6 @@ export async function POST(request: Request) {
 
         const userId = (session.user as any).id;
         const { action, payload } = await request.json();
-        const startTime = Date.now();
 
         // --- RUST OFFLOADED SCAN: GHOST RECORDS ---
         if (action === 'scan-ghosts') {

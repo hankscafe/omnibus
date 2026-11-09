@@ -4,8 +4,6 @@ import { prisma } from '@/lib/db';
 import path from 'path';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
-import axios from 'axios';
-import fs from 'fs';
 import { SystemNotifier } from '@/lib/notifications';
 import { evaluateTrophies } from '@/lib/trophy-evaluator'; 
 import { detectManga } from '@/lib/manga-detector'; 
@@ -20,7 +18,6 @@ import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { lazyMetronAuth } from '@/lib/metron/client';
 import { normalizeFractionNumbers } from '@/lib/utils/issue-parser';
 import { ownedCoverageBySeries } from '@/lib/coverage-ownership';
-import { omnibusQueue } from '@/lib/queue';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { followSeries, followSeriesByCatalogId } from '@/lib/follows';
 import { seriesFolderSegments } from '@/lib/utils/naming';
@@ -292,7 +289,7 @@ export async function POST(request: NextRequest) {
           }
       });
 
-      syncSeriesMetadata(resolvedCvId.toString(), series.folderPath, metadataSource).catch(err => {});
+      syncSeriesMetadata(resolvedCvId.toString(), series.folderPath, metadataSource).catch(() => {});
 
       // Requesting is the strongest interest signal: auto-follow the series for the requester so it
       // feeds their Updates feed. Best-effort (never fails the request), idempotent, and covers the

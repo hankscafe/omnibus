@@ -102,7 +102,7 @@ vi.mock('bullmq', () => ({
         removeRepeatableByKey = vi.fn();
     },
     Worker: class WorkerMock {
-        constructor(name: string, cb: any, opts: any) {
+        constructor(name: string, cb: any) {
             mocks.workerCb.current = cb;
         }
         on = vi.fn();

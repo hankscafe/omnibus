@@ -1,7 +1,7 @@
 // Issue #183: the stuck-job auto-heal used to run as a WRITE inside the 3s-polled admin
 // job-logs GET, contending with the engine's scan-time write bursts for SQLite's single write
 // lock. It now runs from the 60s cron tick — and must be READ-ONLY when nothing is stuck.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { healStuckJobs, STUCK_JOB_CUTOFF_MS } from '@/lib/job-heal';
 
 const mocks = vi.hoisted(() => ({

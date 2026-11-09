@@ -203,7 +203,7 @@ export const Mailer = {
               const item1 = items[i];
               const item2 = items[i + 1];
               
-              const renderItem = (item: any, indexOffset: number) => {
+              const renderItem = (item: any) => {
                   if (!item) return `<td width="48%" valign="top" style="padding: 15px;"></td>`;
                   
                   let finalCover = `${baseUrl}/favicon.ico`;
@@ -256,9 +256,9 @@ export const Mailer = {
               html += `
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 15px;">
                   <tr>
-                      ${renderItem(item1, 0)}
+                      ${renderItem(item1)}
                       <td width="4%"></td>
-                      ${renderItem(item2, 1)}
+                      ${renderItem(item2)}
                   </tr>
               </table>`;
           }

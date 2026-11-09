@@ -492,7 +492,6 @@ export async function POST(request: Request) {
         for (const file of files) {
             const rawExt = path.extname(file);
             if (COMIC_EXTENSIONS.includes(rawExt.toLowerCase())) {
-                const oldName = path.basename(file, rawExt);
                 let finalExt = rawExt.toLowerCase();
                 let issueNumStr = "";
                 let targetIssueMetaId = null;

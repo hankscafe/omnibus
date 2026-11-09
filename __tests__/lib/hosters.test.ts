@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { HosterEngine } from '@/lib/hosters';
 import axios from 'axios';
 import { loggerLog } from '../helpers/setup-global';

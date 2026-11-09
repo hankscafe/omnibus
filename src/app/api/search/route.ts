@@ -2,7 +2,6 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import axios from 'axios';
 import { prisma } from '@/lib/db';
 import { ComicVineVolume } from '@/types';
 import { Logger } from '@/lib/logger';

@@ -21,7 +21,7 @@ const SENSITIVE_KEYS = new Set<string>([
     'omnibus_api_key',
 ]);
 
-export async function GET(request: Request) {
+export async function GET(_request: Request) {
   const authOptions = await getAuthOptions();
   const session = await getServerSession(authOptions);
   

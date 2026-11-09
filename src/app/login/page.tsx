@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert" 
-import { useToast } from "@/components/ui/use-toast"
 import { Loader2, LogIn, ShieldCheck, Fingerprint, UserPlus, AlertTriangle, CheckCircle2, Mail } from "lucide-react" 
 import Image from "next/image"
 import { OmnibusLogo } from "@/components/omnibus-logo"
@@ -27,8 +26,7 @@ function returnPathFromLocation(): string {
 
 export default function LoginPage() {
   const router = useRouter()
-  const { toast } = useToast()
-  
+
   // UI State
   const [view, setView] = useState<'login' | 'register' | 'forgot'>('login')
   const [loading, setLoading] = useState(false)

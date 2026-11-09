@@ -465,7 +465,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
     let totalResults = 1;
     let loopCount = 0;
     let syncedCount = 0;
-    let issuesCallsMade = 0;
 
     Logger.log(`[Metadata Fetcher Debug] Fetching issues for volume "${series.name}" (ID: ${metadataId}, Offset: ${offset}, Limit: 100)`, 'debug');
     let latestDateMs = 0;
@@ -478,7 +477,7 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
         let issueRes;
         try {
             // Cache-aware: each page is its own cache entry (offset is in the key); real calls are
-            // usage-logged inside cachedCvGet, so the old aggregate issuesCallsMade logging is gone.
+            // usage-logged inside cachedCvGet, so the old aggregate call counter is gone.
             issueRes = await cachedCvGet(`https://comicvine.gamespot.com/api/issues/`, {
                 params: {
                     api_key: setting.value, format: 'json', filter: `volume:${metadataId}`, sort: 'issue_number:asc', limit: 100, offset: offset,
@@ -487,7 +486,6 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 headers: { 'User-Agent': 'Omnibus/1.0' },
                 timeout: 15000
             });
-            issuesCallsMade++;
         } catch (e: any) {
             if (isCvRateLimited(e.response?.status)) await markSystemFlag('cv_rate_limit_time');
             throw e;

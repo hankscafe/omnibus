@@ -1,5 +1,5 @@
 // __tests__/lib/metadata-extractor.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseComicInfo } from '@/lib/metadata-extractor';
 
 // 1. Hoist our variables so vi.mock can see them

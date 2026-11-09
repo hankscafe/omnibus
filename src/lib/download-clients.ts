@@ -326,8 +326,6 @@ export const DownloadService = {
           throw new Error("Download aborted: Disk Space is Critically Full (< 2GB).");
       }
 
-      const { Importer } = await import('./importer');
-      
       const extMatch = url.split(/[#?]/)[0].split('.').pop();
       const ext = (extMatch && extMatch.length <= 4) ? extMatch : 'cbz';
       let finalFilename = filename.toLowerCase().endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;

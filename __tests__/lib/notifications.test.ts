@@ -1,7 +1,7 @@
 // beta.014: this file tests the REAL module — undo setup-global's suite-wide mock.
 vi.unmock('@/lib/notifications');
 // __tests__/lib/notifications.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SystemNotifier } from '@/lib/notifications';
 import axios from 'axios';
 import { loggerLog } from '../helpers/setup-global';

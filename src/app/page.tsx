@@ -301,7 +301,7 @@ export default function Home() {
                 </Badge>
               </AlertTitle>
               <AlertDescription className="text-primary/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                Users have flagged comics or the system couldn't find them automatically. Manual intervention is required.
+                Users have flagged comics or the system couldn&apos;t find them automatically. Manual intervention is required.
                 <Button asChild variant="outline" size="sm" className="border-primary/30 text-primary hover:bg-primary/10 h-8 font-bold">
                   <Link href="/admin">
                     Open Queue <ArrowRight className="ml-2 h-3 w-3" />

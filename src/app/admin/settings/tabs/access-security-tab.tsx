@@ -143,7 +143,7 @@ export function AccessSecurityTab({ s }: { s: SettingsBag }) {
 
                             <div className="border-t border-slate-200 dark:border-slate-800 pt-6 mt-4">
                                 <Label className="text-sm font-bold text-rose-500 mb-2 block">Redirect URI Setup</Label>
-                                <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider's client configuration:</p>
+                                <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider&apos;s client configuration:</p>
                                 <Input readOnly value={typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback/oidc` : ''} className="font-mono text-xs text-muted-foreground bg-slate-100 dark:bg-slate-900 border-dashed border-slate-300 dark:border-slate-700" />
                             </div>
                         </div>
@@ -192,7 +192,7 @@ export function AccessSecurityTab({ s }: { s: SettingsBag }) {
                     {generatedKey && (
                         <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 mt-4 animate-in fade-in slide-in-from-top-2 w-full">
                             <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><XCircle className="w-4 h-4"/></button>
-                            <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
+                            <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won&apos;t be shown again.</span></p>
                             <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
                                 <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">
                                     {generatedKey}

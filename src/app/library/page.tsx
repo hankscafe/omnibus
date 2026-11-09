@@ -1546,7 +1546,7 @@ function LibraryContent() {
           </DialogHeader>
           <div className="py-4 space-y-2 max-h-[60vh] overflow-y-auto pr-1">
             {collections.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-6 border-2 border-dashed border-border rounded-lg">You haven't created any lists yet.</p>
+                <p className="text-sm text-muted-foreground text-center py-6 border-2 border-dashed border-border rounded-lg">You haven&apos;t created any lists yet.</p>
             ) : (
                 collections.map(c => (
                     <div key={c.id} className="flex items-center justify-between bg-muted/50 p-3 rounded-lg border border-border">

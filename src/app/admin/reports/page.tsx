@@ -106,7 +106,7 @@ export default function AdminReportsPage() {
         
         {openReports.length === 0 ? (
             <div className="p-10 text-center text-muted-foreground border-2 border-dashed rounded-xl border-border bg-muted/30">
-                No active issue reports. You're all caught up!
+                No active issue reports. You&apos;re all caught up!
             </div>
         ) : (
             <div className="grid gap-4">
@@ -118,7 +118,7 @@ export default function AdminReportsPage() {
                                     <h3 className="font-bold text-lg leading-tight text-foreground">{report.series?.name || "Unknown Series"}</h3>
                                     <Badge variant="destructive" className="text-[10px] uppercase font-bold border-none">Needs Review</Badge>
                                 </div>
-                                <p className="text-sm text-foreground/80 bg-background p-3 rounded border border-border">"{report.description}"</p>
+                                <p className="text-sm text-foreground/80 bg-background p-3 rounded border border-border">&quot;{report.description}&quot;</p>
                                 <div className="flex flex-wrap gap-x-4 gap-y-2 text-[10px] text-muted-foreground pt-1">
                                     <span className="flex items-center gap-1 font-medium"><User className="w-3 h-3 text-primary" /> Reported by: {report.user?.username || "Unknown"}</span>
                                     <span className="flex items-center gap-1 font-medium"><Calendar className="w-3 h-3" /> {new Date(report.createdAt).toLocaleString()}</span>
@@ -153,7 +153,7 @@ export default function AdminReportsPage() {
                             <h3 className="font-bold text-sm text-foreground/70">{report.series?.name}</h3>
                             <span className="text-[10px] text-muted-foreground font-mono">{new Date(report.updatedAt).toLocaleDateString()}</span>
                         </div>
-                        <p className="text-xs text-muted-foreground italic">"{report.description}"</p>
+                        <p className="text-xs text-muted-foreground italic">&quot;{report.description}&quot;</p>
                         {report.adminComment && (
                             <div className="mt-2 bg-muted p-2 rounded text-xs flex gap-2 border border-border">
                                 <MessageSquare className="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" />

@@ -189,7 +189,7 @@ export default function StorageDeepDivePage() {
                               {storageData.length === 0 && !isScanning && (
                                   <tr>
                                       <td colSpan={4} className="px-6 py-12 text-center text-muted-foreground">
-                                          No storage cache found. Click "Force Scan Now" to begin.
+                                          No storage cache found. Click &quot;Force Scan Now&quot; to begin.
                                       </td>
                                   </tr>
                               )}

@@ -135,7 +135,7 @@ export default function ApiGuidePage() {
         <CardContent className="space-y-4">
             <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 p-4 rounded-lg">
                 <p className="text-sm text-amber-800 dark:text-amber-400 font-medium">
-                    <strong>Note:</strong> Due to Homepage's strict YAML parsing logic for custom APIs, you must use the nested field mapping syntax <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded font-mono">field: &#123; data: key &#125;</code> as shown in the example below.
+                    <strong>Note:</strong> Due to Homepage&apos;s strict YAML parsing logic for custom APIs, you must use the nested field mapping syntax <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded font-mono">field: &#123; data: key &#125;</code> as shown in the example below.
                 </p>
             </div>
             

@@ -167,7 +167,7 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
           ) : loadError ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-10 px-4 text-center">
               <AlertTriangle className="w-8 h-8 text-amber-500" />
-              <p className="font-semibold text-foreground">Couldn't load this archive's pages</p>
+              <p className="font-semibold text-foreground">Couldn&apos;t load this archive&apos;s pages</p>
               <p className="text-sm text-muted-foreground max-w-md">{loadError}</p>
             </div>
           ) : pages ? (
@@ -175,7 +175,7 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
               {!isCbz && (
                 <div className="flex items-start gap-2 p-3 mt-1 rounded border border-amber-500/40 bg-amber-500/10 text-xs text-amber-600 dark:text-amber-400">
                   <FileArchive className="w-4 h-4 shrink-0 mt-px" />
-                  <span>Removing pages rewrites this file as <strong>CBZ</strong> — RAR/7z archives can't be written back. Reading continues seamlessly afterward.</span>
+                  <span>Removing pages rewrites this file as <strong>CBZ</strong> — RAR/7z archives can&apos;t be written back. Reading continues seamlessly afterward.</span>
                 </div>
               )}
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 py-2">

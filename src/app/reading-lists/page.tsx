@@ -988,7 +988,7 @@ function ReadingListsContent() {
                     <div className="text-center py-20 border-2 border-dashed rounded-xl border-border bg-muted/30">
                         <BookOpen className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
                         <h3 className="text-lg font-bold text-foreground">This list is empty</h3>
-                        <p className="text-sm text-muted-foreground mt-1">Navigate to any series and use the "Add to List" button on an issue.</p>
+                        <p className="text-sm text-muted-foreground mt-1">Navigate to any series and use the &quot;Add to List&quot; button on an issue.</p>
                     </div>
                   ) : viewMode === 'grouped' ? (
                         /* --- NEW GROUPED COLLAPSIBLE VIEW --- */
@@ -1230,7 +1230,7 @@ function ReadingListsContent() {
                         <Switch id="global-toggle" checked={isGlobal} onCheckedChange={setIsGlobal} />
                         <div className="grid gap-0.5">
                             <Label htmlFor="global-toggle" className="font-bold cursor-pointer">Make public for all users</Label>
-                            <p className="text-[10px] text-muted-foreground">Global lists appear on every user's profile.</p>
+                            <p className="text-[10px] text-muted-foreground">Global lists appear on every user&apos;s profile.</p>
                         </div>
                     </div>
                 )}
@@ -1299,7 +1299,7 @@ function ReadingListsContent() {
                         <Switch id="auto-add-missing-toggle" checked={autoBuildAddMissing} onCheckedChange={setAutoBuildAddMissing} />
                         <div className="grid gap-0.5">
                             <Label htmlFor="auto-add-missing-toggle" className="font-bold cursor-pointer">Add missing series to my library</Label>
-                            <p className="text-[10px] text-muted-foreground">Series from this arc you don't own at all are added metadata-only and monitored. Nothing downloads now, but future releases auto-download like any monitored series.</p>
+                            <p className="text-[10px] text-muted-foreground">Series from this arc you don&apos;t own at all are added metadata-only and monitored. Nothing downloads now, but future releases auto-download like any monitored series.</p>
                         </div>
                     </div>
                 )}

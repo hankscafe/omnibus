@@ -296,7 +296,7 @@ export default function AdminUsersPage() {
               <AlertTitle className="text-blue-800 dark:text-blue-300 font-bold">OIDC Group Sync Active</AlertTitle>
               <AlertDescription className="text-blue-700/90 dark:text-blue-400/90 mt-1 leading-relaxed">
                   User roles and permissions are currently being managed by your Identity Provider via Group Mappings. 
-                  Any manual changes made here to an SSO user's Role or Approval status will be overwritten the next time they log in. Local non-SSO users can still be managed normally.
+                  Any manual changes made here to an SSO user&apos;s Role or Approval status will be overwritten the next time they log in. Local non-SSO users can still be managed normally.
               </AlertDescription>
           </Alert>
       )}

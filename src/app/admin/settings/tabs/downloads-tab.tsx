@@ -28,7 +28,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
             <Card className="shadow-sm border-border bg-background">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-foreground"><Download className="w-5 h-5 text-primary" /> Download Clients</CardTitle>
-                    <CardDescription className="text-muted-foreground">Configure your clients. For Docker setups, use the "Settings" button on each client to configure specific Remote Path Mappings.</CardDescription>
+                    <CardDescription className="text-muted-foreground">Configure your clients. For Docker setups, use the &quot;Settings&quot; button on each client to configure specific Remote Path Mappings.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-10">
                     <div className="space-y-4">
@@ -155,7 +155,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 </div>
                             ))}
                         </div>
-                        <p className="text-[11px] text-muted-foreground">Enabling <strong>Anna's Archive</strong> for automation requires a premium API key and a passing connection test — otherwise it reverts to disabled on save. Interactive search still works without a key (toggle below).</p>
+                        <p className="text-[11px] text-muted-foreground">Enabling <strong>Anna&apos;s Archive</strong> for automation requires a premium API key and a passing connection test — otherwise it reverts to disabled on save. Interactive search still works without a key (toggle below).</p>
                     </div>
 
                     
@@ -184,7 +184,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                             />
                             <div className="grid gap-1 ml-2">
                                 <Label htmlFor="bulk-pack-toggle" className="cursor-pointer font-bold text-base text-foreground">Allow Bulk Collections & Packs</Label>
-                                <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full "Story Arc" or "Chronological" zip packs from direct download sites if an exact single-issue file cannot be found.</p>
+                                <p className="text-[11px] text-muted-foreground">If enabled, when requesting a single issue, Omnibus is allowed to download full &quot;Story Arc&quot; or &quot;Chronological&quot; zip packs from direct download sites if an exact single-issue file cannot be found.</p>
                             </div>
                         </div>
 
@@ -213,7 +213,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                             />
                             <div className="grid gap-1 ml-2">
                                 <Label htmlFor="accept-yearless-toggle" className="cursor-pointer font-bold text-base text-foreground">Accept Undated Indexer Releases</Label>
-                                <p className="text-[11px] text-muted-foreground">Many Usenet/scene releases omit the year (e.g. <code>Batman 89 Echoes 003 (Digital)</code>), and by default Omnibus rejects them because the year is the only way to tell rebooted series apart (a "Wolverine 003" exists for the 1988, 2010, 2014 and 2020 volumes). Enable to accept undated releases — a release <strong>with</strong> a matching year is always preferred, so undated ones only download when nothing dated exists. Slight risk of grabbing the wrong volume of a rebooted series.</p>
+                                <p className="text-[11px] text-muted-foreground">Many Usenet/scene releases omit the year (e.g. <code>Batman 89 Echoes 003 (Digital)</code>), and by default Omnibus rejects them because the year is the only way to tell rebooted series apart (a &quot;Wolverine 003&quot; exists for the 1988, 2010, 2014 and 2020 volumes). Enable to accept undated releases — a release <strong>with</strong> a matching year is always preferred, so undated ones only download when nothing dated exists. Slight risk of grabbing the wrong volume of a rebooted series.</p>
                             </div>
                         </div>
 
@@ -254,8 +254,8 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
 
                     {/* --- Anna's Archive (its own search source, independent of GetComics/Indexers) --- */}
                     <div className="space-y-4 mt-4 pt-6 border-t border-border">
-                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2"><Server className="w-5 h-5 text-primary" /> Anna's Archive (Search Source) <Badge variant="outline" className="text-[10px] uppercase font-bold border-orange-500 text-orange-600 bg-orange-50 dark:bg-orange-900/20">Experimental</Badge></h3>
-                        <p className="text-xs text-muted-foreground">Anna's Archive is its own search source, separate from GetComics and your Indexers. Interactive search works <strong>without</strong> an API key — gated files are sent to the manual download queue. For automatic downloads, add a premium API key under "Hoster Accounts" below.</p>
+                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2"><Server className="w-5 h-5 text-primary" /> Anna&apos;s Archive (Search Source) <Badge variant="outline" className="text-[10px] uppercase font-bold border-orange-500 text-orange-600 bg-orange-50 dark:bg-orange-900/20">Experimental</Badge></h3>
+                        <p className="text-xs text-muted-foreground">Anna&apos;s Archive is its own search source, separate from GetComics and your Indexers. Interactive search works <strong>without</strong> an API key — gated files are sent to the manual download queue. For automatic downloads, add a premium API key under &quot;Hoster Accounts&quot; below.</p>
 
                         <div className="flex items-center space-x-4 bg-muted/30 p-4 rounded-lg border border-border">
                             <Switch
@@ -266,12 +266,12 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                             />
                             <div className="grid gap-1">
                                 <Label htmlFor="annas-interactive-toggle" className="cursor-pointer font-bold text-base text-foreground">Include in Interactive Search</Label>
-                                <p className="text-[11px] text-muted-foreground">When enabled, Interactive Search also queries Anna's Archive and shows its results alongside GetComics and your indexers. (No API key required.)</p>
+                                <p className="text-[11px] text-muted-foreground">When enabled, Interactive Search also queries Anna&apos;s Archive and shows its results alongside GetComics and your indexers. (No API key required.)</p>
                             </div>
                         </div>
 
                         <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
-                            <Label htmlFor="annas_archive_base_url" className="font-bold text-foreground">Anna's Archive Base URL</Label>
+                            <Label htmlFor="annas_archive_base_url" className="font-bold text-foreground">Anna&apos;s Archive Base URL</Label>
                             <Input
                                 id="annas_archive_base_url"
                                 value={config.annas_archive_base_url || ""}
@@ -279,7 +279,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 onChange={(e) => setConfig({ ...config, annas_archive_base_url: e.target.value })}
                                 className="h-12 sm:h-10 bg-background border-border text-foreground"
                             />
-                            <p className="text-[11px] text-muted-foreground mt-1">Anna's Archive rotates mirror domains frequently under takedown pressure (the old .org / .se / .li are gone; .gl is current as of mid-2026). If searches fail with a DNS / "no such host" error, set the current working mirror here — see the Anna's Archive Wikipedia page for the live list. Leave blank to use the default (annas-archive.gl).</p>
+                            <p className="text-[11px] text-muted-foreground mt-1">Anna&apos;s Archive rotates mirror domains frequently under takedown pressure (the old .org / .se / .li are gone; .gl is current as of mid-2026). If searches fail with a DNS / &quot;no such host&quot; error, set the current working mirror here — see the Anna&apos;s Archive Wikipedia page for the live list. Leave blank to use the default (annas-archive.gl).</p>
                         </div>
 
                         <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
@@ -292,7 +292,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 onChange={(e) => setAnnasKey(e.target.value)}
                                 className="h-12 sm:h-10 bg-background border-border text-foreground"
                             />
-                            <p className="text-[11px] text-muted-foreground mt-1">A membership <a href="https://annas-archive.gl/donate" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80">donation</a> grants a fast-download API key. Without one, Anna's Archive works for interactive search only. Use "Test API Key" below to verify it.</p>
+                            <p className="text-[11px] text-muted-foreground mt-1">A membership <a href="https://annas-archive.gl/donate" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80">donation</a> grants a fast-download API key. Without one, Anna&apos;s Archive works for interactive search only. Use &quot;Test API Key&quot; below to verify it.</p>
                         </div>
 
                         <div className="space-y-2 bg-muted/30 p-4 rounded-lg border border-border">
@@ -304,12 +304,12 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 onChange={(e) => setConfig({ ...config, annas_archive_formats: e.target.value })}
                                 className="h-12 sm:h-10 bg-background border-border text-foreground"
                             />
-                            <p className="text-[11px] text-muted-foreground mt-1">Comma-separated file extensions to include in Anna's Archive searches. Leave blank for the default (cbz, cbr, pdf, epub).</p>
+                            <p className="text-[11px] text-muted-foreground mt-1">Comma-separated file extensions to include in Anna&apos;s Archive searches. Leave blank for the default (cbz, cbr, pdf, epub).</p>
                         </div>
 
                         {!configuredHosters.find(c => c.hoster === 'annas_archive')?.apiKey && (
                             <div className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
-                                No Anna's Archive API key is configured. Anna's Archive will work for <strong>interactive search only</strong> — gated files are sent to the manual download queue. Automation requires a premium API key (enter it above).
+                                No Anna&apos;s Archive API key is configured. Anna&apos;s Archive will work for <strong>interactive search only</strong> — gated files are sent to the manual download queue. Automation requires a premium API key (enter it above).
                             </div>
                         )}
 
@@ -429,7 +429,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                     {/* --- CLOUDFLARE SOLVER UI (FlareSolverr / Byparr) --- */}
                     <div className="space-y-4 pb-6 border-b border-border">
                         <Label className="text-base font-bold text-foreground">Cloudflare Bypass (FlareSolverr / Byparr)</Label>
-                        <p className="text-[11px] text-muted-foreground mt-1">When GetComics serves a Cloudflare "Just a moment…" challenge on a download (or a 403 on a search), Omnibus routes the request through a solver to obtain clearance. FlareSolverr is the classic option; <strong>Byparr</strong> is a drop-in alternative (Camoufox-based) that clears the newer interactive Turnstile challenges FlareSolverr frequently times out on.</p>
+                        <p className="text-[11px] text-muted-foreground mt-1">When GetComics serves a Cloudflare &quot;Just a moment…&quot; challenge on a download (or a 403 on a search), Omnibus routes the request through a solver to obtain clearance. FlareSolverr is the classic option; <strong>Byparr</strong> is a drop-in alternative (Camoufox-based) that clears the newer interactive Turnstile challenges FlareSolverr frequently times out on.</p>
 
                         <div className="space-y-2">
                             <Label htmlFor="solver_type" className="font-bold text-foreground">Solver Backend</Label>
@@ -444,7 +444,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 </SelectContent>
                             </Select>
                             <p className="text-[11px] text-muted-foreground mt-1">
-                                All three speak the same API on port 8191, so the URL below works for any of them — point it at whichever container you run (Byparr: <code>ghcr.io/thephaseless/byparr</code>, Trawl: <code>ghcr.io/germondai/trawl</code>). The solve timeout is sent in the correct unit automatically (FlareSolverr and Trawl use milliseconds, Byparr uses seconds). If FlareSolverr keeps timing out on GetComics challenges, Trawl (Camoufox-based) is the community's current pick.
+                                All three speak the same API on port 8191, so the URL below works for any of them — point it at whichever container you run (Byparr: <code>ghcr.io/thephaseless/byparr</code>, Trawl: <code>ghcr.io/germondai/trawl</code>). The solve timeout is sent in the correct unit automatically (FlareSolverr and Trawl use milliseconds, Byparr uses seconds). If FlareSolverr keeps timing out on GetComics challenges, Trawl (Camoufox-based) is the community&apos;s current pick.
                             </p>
                         </div>
 
@@ -504,7 +504,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 className="h-12 sm:h-10 w-full sm:w-32 bg-background border-border text-foreground"
                             />
                             <span className="text-sm text-muted-foreground">
-                                How often to re-search requests that aren't available on any source yet (brand-new / small-press titles). These retry on this slow cadence instead of counting as failures. (Default: 7)
+                                How often to re-search requests that aren&apos;t available on any source yet (brand-new / small-press titles). These retry on this slow cadence instead of counting as failures. (Default: 7)
                             </span>
                         </div>
                     </div>
@@ -521,7 +521,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 Flag stalled requests in System Health
                             </Label>
                             <p className="text-[11px] text-muted-foreground">
-                                When on, downloads stuck after repeated retries count against System Health. Turn off if you track many niche/indie titles and don't want stalled requests to show the instance as Degraded. (Items still awaiting availability never count either way.)
+                                When on, downloads stuck after repeated retries count against System Health. Turn off if you track many niche/indie titles and don&apos;t want stalled requests to show the instance as Degraded. (Items still awaiting availability never count either way.)
                             </p>
                         </div>
                     </div>

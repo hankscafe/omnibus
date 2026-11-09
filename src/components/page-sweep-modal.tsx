@@ -227,7 +227,7 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
           {phase === 'error' && (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-10 px-4 text-center">
               <AlertTriangle className="w-8 h-8 text-amber-500" />
-              <p className="font-semibold text-foreground">The scan didn't finish</p>
+              <p className="font-semibold text-foreground">The scan didn&apos;t finish</p>
               <p className="text-sm text-muted-foreground max-w-md">{error}</p>
             </div>
           )}
@@ -278,7 +278,7 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
               {scanErrors.length > 0 && (
                 <div className="flex items-start gap-2 p-3 rounded border border-red-500/40 bg-red-500/10 text-xs text-red-500">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
-                  <span>{scanErrors.length} file{scanErrors.length !== 1 ? 's' : ''} couldn't be scanned: {scanErrors.slice(0, 4).map(e => e.label).join(', ')}{scanErrors.length > 4 ? ` +${scanErrors.length - 4} more` : ''}</span>
+                  <span>{scanErrors.length} file{scanErrors.length !== 1 ? 's' : ''} couldn&apos;t be scanned: {scanErrors.slice(0, 4).map(e => e.label).join(', ')}{scanErrors.length > 4 ? ` +${scanErrors.length - 4} more` : ''}</span>
                 </div>
               )}
             </div>
@@ -305,7 +305,7 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
               </div>
               {phase === 'running' && (
                 <p className="text-xs text-muted-foreground">
-                  Runs on the server — it's safe to close this window. Progress also shows in Job History, and the admin bell announces completion.
+                  Runs on the server — it&apos;s safe to close this window. Progress also shows in Job History, and the admin bell announces completion.
                 </p>
               )}
               {run?.failedCount > 0 && (

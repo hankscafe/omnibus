@@ -532,7 +532,7 @@ export default function SetupWizard() {
       <div className="max-w-4xl w-full space-y-8">
         <div className="text-center space-y-2">
             <h1 className="text-4xl font-black tracking-tight text-slate-900 dark:text-white">Welcome to Omnibus.</h1>
-            <p className="text-muted-foreground text-lg">Let's get your library configured and ready to read.</p>
+            <p className="text-muted-foreground text-lg">Let&apos;s get your library configured and ready to read.</p>
         </div>
 
         <div className="flex items-center justify-between relative px-4">
@@ -626,7 +626,7 @@ export default function SetupWizard() {
                         <div className="grid gap-2">
                             <Label>API Key <span className="text-red-500">*</span></Label>
                             <Input value={formData.cv_api_key} onChange={e => updateForm('cv_api_key', e.target.value)} placeholder="Enter your ComicVine Key..." className="h-12 bg-white dark:bg-slate-900"/>
-                            <p className="text-xs text-muted-foreground mt-1">Don't have one? Get it for free at <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">comicvine.gamespot.com/api</a>.</p>
+                            <p className="text-xs text-muted-foreground mt-1">Don&apos;t have one? Get it for free at <a href="https://comicvine.gamespot.com/api/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">comicvine.gamespot.com/api</a>.</p>
                         </div>
                         <Button className={`w-full h-12 font-bold mt-2 transition-colors ${getButtonClass('cv')}`} disabled={!formData.cv_api_key || isTesting === 'cv'} onClick={() => handleTestConnection('comicvine', { cv_api_key: formData.cv_api_key }, 'cv')}>
                             {isTesting === 'cv' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : testStates['cv'] === 'success' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />} 
@@ -1235,7 +1235,7 @@ export default function SetupWizard() {
                                 </div>
                                 <div className="border-t border-slate-200 dark:border-slate-800 pt-4 mt-2">
                                     <Label className="text-sm font-bold text-rose-500 mb-2 block">Redirect URI Setup</Label>
-                                    <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider's client configuration:</p>
+                                    <p className="text-[12px] text-muted-foreground mb-2">You must add this exact Redirect URI to your OIDC provider&apos;s client configuration:</p>
                                     <Input readOnly value={typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback/oidc` : ''} className="font-mono text-xs text-muted-foreground bg-slate-100 dark:bg-slate-900 border-dashed border-slate-300 dark:border-slate-700" />
                                 </div>
                             </div>
@@ -1244,7 +1244,7 @@ export default function SetupWizard() {
                         <div className="text-center pt-8 mt-8 border-t border-slate-200 dark:border-slate-800 space-y-4">
                             <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
                             <h2 className="text-2xl font-bold text-foreground">Ready to Launch!</h2>
-                            <p className="text-muted-foreground">We've staged your admin account, {libraries.length} libraries, and {configuredClients.length} clients.</p>
+                            <p className="text-muted-foreground">We&apos;ve staged your admin account, {libraries.length} libraries, and {configuredClients.length} clients.</p>
                             <p className="text-sm font-medium">Click <strong>Finish Setup</strong> to save all configurations and start Omnibus.</p>
                         </div>
                     </div>

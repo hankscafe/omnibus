@@ -1100,7 +1100,7 @@ export default function ProfilePage() {
                     <CardContent className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center">
                         <Trophy className="w-8 h-8 mb-2 opacity-20" />
                         <p className="text-sm font-bold">No Trophies Available</p>
-                        <p className="text-xs mt-1">Admins haven't added any achievements to earn yet!</p>
+                        <p className="text-xs mt-1">Admins haven&apos;t added any achievements to earn yet!</p>
                     </CardContent>
                 </Card>
             )}
@@ -1353,7 +1353,7 @@ export default function ProfilePage() {
                   {generatedKey && (
                       <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg flex flex-col gap-2 relative dark:bg-green-900/20 dark:border-green-800 dark:text-green-400 animate-in fade-in slide-in-from-top-2 w-full">
                           <button onClick={() => setGeneratedKey(null)} className="absolute top-2 right-2 hover:bg-green-200 dark:hover:bg-green-800 p-1 rounded"><XCircle className="w-4 h-4"/></button>
-                          <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won't be shown again.</span></p>
+                          <p className="font-bold flex items-center gap-2 pr-6"><CheckCircle2 className="w-5 h-5 shrink-0"/> <span className="leading-tight">Token created! Copy it now — it won&apos;t be shown again.</span></p>
                           <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2 w-full">
                               <code className="bg-white dark:bg-black p-2 rounded flex-1 font-mono border border-green-200 dark:border-green-800 text-[11px] sm:text-xs select-all w-full min-w-0 break-all">
                                   {generatedKey}
@@ -1376,7 +1376,7 @@ export default function ProfilePage() {
                           </thead>
                           <tbody className="divide-y divide-border bg-background">
                               {apiKeys.length === 0 ? (
-                                  <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground italic">You haven't generated any access keys.</td></tr>
+                                  <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground italic">You haven&apos;t generated any access keys.</td></tr>
                               ) : (
                                   apiKeys.map(key => (
                                       <tr key={key.id} className="hover:bg-muted/30">

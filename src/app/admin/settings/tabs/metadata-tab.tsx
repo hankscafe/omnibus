@@ -37,8 +37,8 @@ export function MetadataTab({ s }: { s: SettingsBag }) {
                                 </h3>
                                 <p className="text-[0.8rem] text-muted-foreground mt-1 max-w-2xl">
                                     Select the default provider for all automated metadata fetching, Smart Match auto-scanning, interactive searches, and Discover page population. 
-                                    <strong> You must configure the corresponding provider's credentials below before you can select it.</strong> 
-                                    If you select Metron, the "Popular Issues" section on the Discover page will be disabled.
+                                    <strong> You must configure the corresponding provider&apos;s credentials below before you can select it.</strong> 
+                                    If you select Metron, the &quot;Popular Issues&quot; section on the Discover page will be disabled.
                                 </p>
                             </div>
                             <Badge variant="outline" className="hidden sm:inline-flex text-[10px] uppercase font-bold border-orange-500 text-orange-600 bg-orange-50 dark:bg-orange-900/20">
@@ -94,9 +94,9 @@ export function MetadataTab({ s }: { s: SettingsBag }) {
                             <Label htmlFor="metron_api_token" className="text-foreground font-semibold">Metron API Token</Label>
                             <Input id="metron_api_token" type="password" value={config.metron_api_token || ""} onChange={(e) => setConfig({...config, metron_api_token: e.target.value})} className="h-12 sm:h-10 bg-muted/50 border-border text-foreground" />
                         </div>
-                        <p className="text-[0.8rem] text-muted-foreground">Create a token on <a href="https://metron.cloud/" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80 transition-colors">metron.cloud</a> under Profile → API Tokens (it's shown once, so paste it here straight away). Metron is retiring username and password sign-in for its API, so a token is the way to connect.</p>
+                        <p className="text-[0.8rem] text-muted-foreground">Create a token on <a href="https://metron.cloud/" target="_blank" rel="noreferrer" className="underline text-primary hover:text-primary/80 transition-colors">metron.cloud</a> under Profile → API Tokens (it&apos;s shown once, so paste it here straight away). Metron is retiring username and password sign-in for its API, so a token is the way to connect.</p>
                         {(config.metron_api_token || "").trim() !== "" && (
-                            <p className="text-[0.8rem] text-muted-foreground">An API token is in use, so the username and password below aren't used.</p>
+                            <p className="text-[0.8rem] text-muted-foreground">An API token is in use, so the username and password below aren&apos;t used.</p>
                         )}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="grid gap-2">
@@ -119,7 +119,7 @@ export function MetadataTab({ s }: { s: SettingsBag }) {
                     <div className="space-y-4 pt-6 border-t border-border mt-4">
                         <div>
                             <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-                                <Database className="w-4 h-4 text-primary" /> Series "Ended" Detection
+                                <Database className="w-4 h-4 text-primary" /> Series &quot;Ended&quot; Detection
                             </h3>
                             <p className="text-[0.8rem] text-muted-foreground mt-1">
                                 ComicVine and Metron rarely record when a series actually ends, so Omnibus guesses: if no new issue has been
@@ -300,7 +300,7 @@ export function MetadataTab({ s }: { s: SettingsBag }) {
                             <div className="grid gap-1">
                                 <Label className="font-bold text-base text-foreground">Cover Art Source</Label>
                                 <p className="text-[11px] text-muted-foreground">
-                                    Where series covers come from. The first page of a comic can be extracted into <code>cover.jpg</code> so even un-matched books get a real cover. An admin's uploaded cover always wins. Changing this won't re-cover series that already have one.
+                                    Where series covers come from. The first page of a comic can be extracted into <code>cover.jpg</code> so even un-matched books get a real cover. An admin&apos;s uploaded cover always wins. Changing this won&apos;t re-cover series that already have one.
                                 </p>
                             </div>
                             <Select

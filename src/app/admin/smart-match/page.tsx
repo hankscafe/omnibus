@@ -1302,7 +1302,7 @@ export default function SmartMatchPage() {
                                         </div>
                                     )}
                                     {!suggestion && !isScanning && (
-                                        <div className="text-sm text-muted-foreground italic py-2">Click 'Start Auto-Scan' above to search.</div>
+                                        <div className="text-sm text-muted-foreground italic py-2">Click &apos;Start Auto-Scan&apos; above to search.</div>
                                     )}
                                     {suggestion === 'NOT_FOUND' && (
                                         <div className="text-sm text-orange-500 font-medium py-2">No confident match found.</div>

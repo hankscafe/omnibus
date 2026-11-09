@@ -159,7 +159,7 @@ export function SearchIndexersTab({ s }: { s: SettingsBag }) {
                         </div>
 
                         {!hasRefreshed && availableIndexers.length === 0 ? (
-                            <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">Click "Refresh List" to load available indexers from Prowlarr.</div>
+                            <div className="border-2 border-dashed border-border rounded-lg p-10 text-center text-muted-foreground">Click &quot;Refresh List&quot; to load available indexers from Prowlarr.</div>
                         ) : (
                             <div className="grid gap-3 max-h-[300px] overflow-y-auto pr-2 border border-border rounded-lg p-3 sm:p-4 bg-muted/30">
                                 {availableIndexers.map(idx => (
@@ -262,7 +262,7 @@ export function SearchIndexersTab({ s }: { s: SettingsBag }) {
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                             <div>
                                 <Label className="text-base font-bold text-foreground">Search Acronym Expansion</Label>
-                                <p className="text-[11px] text-muted-foreground mt-1">Automatically expand acronyms during automated fuzzy searches (e.g., "TMNT" &rarr; "Teenage Mutant Ninja Turtles").</p>
+                                <p className="text-[11px] text-muted-foreground mt-1">Automatically expand acronyms during automated fuzzy searches (e.g., &quot;TMNT&quot; &rarr; &quot;Teenage Mutant Ninja Turtles&quot;).</p>
                             </div>
                             <Button variant="outline" size="sm" onClick={() => setCustomAcronyms([...customAcronyms, { id: `tmp_${Math.random()}`, key: "", value: "" }])} className="h-12 sm:h-9 font-bold w-full sm:w-auto border-border hover:bg-muted text-foreground">
                                 <Plus className="w-5 h-5 sm:w-4 sm:h-4 mr-1 text-primary"/> Add Acronym

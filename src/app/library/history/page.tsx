@@ -133,12 +133,12 @@ export default function HistoryPage() {
         </div>
       ) : items.length === 0 ? (
         <div className="text-center py-20 border-2 border-dashed border-border bg-muted/30 rounded-xl transition-colors duration-300">
-            <p className="text-muted-foreground text-lg">You haven't started any comics yet!</p>
+            <p className="text-muted-foreground text-lg">You haven&apos;t started any comics yet!</p>
             <Button className="mt-4 font-bold bg-primary hover:bg-primary/90 text-primary-foreground" asChild><Link href="/">Go Discover</Link></Button>
         </div>
       ) : visibleItems.length === 0 ? (
         <div className="text-center py-20 border-2 border-dashed border-border bg-muted/30 rounded-xl transition-colors duration-300">
-            <p className="text-muted-foreground text-lg">Nothing matches "{search}".</p>
+            <p className="text-muted-foreground text-lg">Nothing matches &quot;{search}&quot;.</p>
         </div>
       ) : viewMode === 'list' ? (
         <div className="space-y-2 pb-10">

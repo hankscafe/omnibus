@@ -201,7 +201,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
             <div className="bg-background border border-border rounded-lg p-4 sm:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-sm mb-2">
                 <div>
                     <h3 className="font-bold text-foreground flex items-center gap-2 text-base sm:text-lg">
-                        <Ban className="w-5 h-5 text-red-500"/> Can't find what you're looking for?
+                        <Ban className="w-5 h-5 text-red-500"/> Can&apos;t find what you&apos;re looking for?
                     </h3>
                     <p className="text-sm text-muted-foreground mt-1">
                         Send a manual request to the server admins to find and import this comic.

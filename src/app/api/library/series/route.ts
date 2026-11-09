@@ -20,6 +20,7 @@ import { getAccessibleLibraryPaths, canAccessPath } from '@/lib/library-access';
 import { arrivalStamp, rescanStamp } from '@/lib/file-added';
 import { isInsideLibraryRoot } from '@/lib/utils/paths';
 import { retainedChildren } from '@/lib/retained-attachments';
+import type { SeriesIssueRow, OwnedSeriesIssueRow, CoveredIssueRow, DuplicateGroup, SeriesPayload } from '@/types/api/series';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -104,18 +105,18 @@ export async function GET(request: Request) {
         }
     }
 
-    const downloadedIssues: any[] = [];
-    const missingIssues: any[] = [];
+    const downloadedIssues: OwnedSeriesIssueRow[] = [];
+    const missingIssues: SeriesIssueRow[] = [];
     // #203 COLLECTED: attached collected editions live on their own shelf — a TPB is not issue
     // #7.5, and counting it among the run would double-count content the reader may already own.
-    const collectedEditions: any[] = [];
-    const missingCollectedEditions: any[] = [];
+    const collectedEditions: OwnedSeriesIssueRow[] = [];
+    const missingCollectedEditions: SeriesIssueRow[] = [];
     // #255: Specials — one-shots attached to the series — are their own section too. They are not
     // annuals (isAnnual is false), so the run's lists, its Missing count and Request Missing would
     // otherwise read a Special's "#1" as the run's #1.
-    const specials: any[] = [];
-    const missingSpecials: any[] = [];
-    const duplicatesList: any[] = [];
+    const specials: OwnedSeriesIssueRow[] = [];
+    const missingSpecials: SeriesIssueRow[] = [];
+    const duplicatesList: DuplicateGroup[] = [];
 
     if (seriesRecord) {
         // First pass only needs the fields the dedup ranking + file-sync use — avoid hydrating every
@@ -363,7 +364,7 @@ export async function GET(request: Request) {
             const isSpecial = (issue as any).attachedVolume?.kind === 'SPECIAL';
             const specialName = isSpecial ? ((issue as any).attachedVolume?.name ?? null) : null;
 
-            const formatted = {
+            const formatted: SeriesIssueRow = {
                 id: issue.id,
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
                 // #203: annuals compose as "Series Annual #N" and carry the flag for the page/OPDS; a
@@ -403,14 +404,15 @@ export async function GET(request: Request) {
             // A collected edition is its own shelf, never part of the run: it must not swell the
             // issue count, and it must not read as a missing issue when it isn't owned.
             if (isCollected) {
-                if (issue.filePath && existingPaths.has(issue.filePath)) collectedEditions.push(formatted);
+                if (issue.filePath && existingPaths.has(issue.filePath)) collectedEditions.push(formatted as OwnedSeriesIssueRow);
                 else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingCollectedEditions.push(formatted);
             }
             else if (isSpecial) {
-                if (issue.filePath && existingPaths.has(issue.filePath)) specials.push(formatted);
+                if (issue.filePath && existingPaths.has(issue.filePath)) specials.push(formatted as OwnedSeriesIssueRow);
                 else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingSpecials.push(formatted);
             }
-            else if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted);
+            // (On an owned shelf - the file is on disk - fullPath is that path.)
+            else if (issue.filePath && existingPaths.has(issue.filePath)) downloadedIssues.push(formatted as OwnedSeriesIssueRow);
             else if (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) missingIssues.push(formatted);
         }
 
@@ -455,7 +457,7 @@ export async function GET(request: Request) {
                     }
                     const p = progressById.get(book.id);
                     const total = p?.totalPages && !isNaN(p.totalPages) ? p.totalPages : 0;
-                    const formatted = {
+                    const formatted: SeriesIssueRow = {
                         id: book.id,
                         cvId: providerId ? parseInt(providerId) : null,
                         name: book.name || (keptSpecial ? `${child.name} #${book.number}` : `${child.name} Vol. ${book.number}`),
@@ -482,7 +484,7 @@ export async function GET(request: Request) {
                         // The series the book lives in: the shelf links there and reads from its folder.
                         retainedSeries: child,
                     };
-                    if (owned) owns.push(formatted);
+                    if (owned) owns.push(formatted as OwnedSeriesIssueRow);
                     else misses.push(formatted);
                 }
             }
@@ -494,13 +496,13 @@ export async function GET(request: Request) {
     // just not the single. They move to `coveredIssues`, each naming the book that covers it, so a
     // page can still show them (and a request can still be made deliberately). Coverage names
     // main-run numbers only; annuals are never covered by it.
-    const coveredIssues: any[] = [];
+    const coveredIssues: CoveredIssueRow[] = [];
     const coveringBooks = collectedEditions
         .filter(b => typeof b.coversIssues === 'string' && b.coversIssues.trim())
         .map(b => ({ book: b, set: expandCoverage(b.coversIssues) }))
         .filter(({ set }) => set.length > 0);
     if (coveringBooks.length > 0 && missingIssues.length > 0) {
-        const stillMissing: any[] = [];
+        const stillMissing: SeriesIssueRow[] = [];
         for (const m of missingIssues) {
             const hit = m.isAnnual ? undefined : coveringBooks.find(({ set }) => isCovered(m.number, set));
             if (hit) {
@@ -514,13 +516,13 @@ export async function GET(request: Request) {
     }
 
     // #203: annuals read AFTER the main run (Mylar-style), then by number within each domain.
-    const domainThenNumber = (a: any, b: any) =>
+    const domainThenNumber = (a: SeriesIssueRow, b: SeriesIssueRow) =>
         ((a.isAnnual ? 1 : 0) - (b.isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0));
     downloadedIssues.sort(domainThenNumber);
     missingIssues.sort(domainThenNumber);
     coveredIssues.sort(domainThenNumber);
     // Collections read in the order the user numbered them — that curation IS the reading order.
-    const byNumber = (a: any, b: any) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0);
+    const byNumber = (a: SeriesIssueRow, b: SeriesIssueRow) => (a.parsedNum ?? 0) - (b.parsedNum ?? 0);
     collectedEditions.sort(byNumber);
     missingCollectedEditions.sort(byNumber);
     specials.sort(domainThenNumber);
@@ -602,7 +604,7 @@ export async function GET(request: Request) {
       specials,
       missingSpecials,
       duplicates: duplicatesList
-    });
+    } satisfies SeriesPayload);
 
   } catch (error) {
     Logger.log(`[Series API] Fatal Error: ${getErrorMessage(error)}`, 'error');

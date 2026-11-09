@@ -41,6 +41,7 @@ import { hasMetronCredentials } from "@/lib/metron/credentials"
 import { dialogBookTypePayload, dialogChoice } from "@/lib/book-type"
 import { RefreshMetadataButton } from "@/components/refresh-metadata-button"
 import type { AdminConfigResponse } from '@/types/api/config';
+import type { SeriesReply, SeriesIssue, OwnedSeriesIssue, CoveredIssue, DuplicateGroup } from '@/types/api/series';
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -88,19 +89,19 @@ function SeriesContent() {
   // date (annuals fall in between). One remembered choice for every series page, like the view.
   const [sortMode, setSortMode] = useState<IssueSortMode>(DEFAULT_ISSUE_SORT);
 
-  const [downloadedIssues, setDownloadedIssues] = useState<any[]>([]);
-  const [missingIssues, setMissingIssues] = useState<any[]>([]);
+  const [downloadedIssues, setDownloadedIssues] = useState<OwnedSeriesIssue[]>([]);
+  const [missingIssues, setMissingIssues] = useState<SeriesIssue[]>([]);
   const [activeIssue, setActiveIssue] = useState<any>(null);
-  const [duplicates, setDuplicates] = useState<any[]>([]);
+  const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
   // #203 COLLECTED: trades/omnibuses attached to this series — their own shelf, out of the run.
-  const [collectedEditions, setCollectedEditions] = useState<any[]>([]);
-  const [missingCollectedEditions, setMissingCollectedEditions] = useState<any[]>([]);
+  const [collectedEditions, setCollectedEditions] = useState<OwnedSeriesIssue[]>([]);
+  const [missingCollectedEditions, setMissingCollectedEditions] = useState<SeriesIssue[]>([]);
   // #255: Specials — one-shots attached to the series — are their own section, never the run.
-  const [specials, setSpecials] = useState<any[]>([]);
-  const [missingSpecials, setMissingSpecials] = useState<any[]>([]);
+  const [specials, setSpecials] = useState<OwnedSeriesIssue[]>([]);
+  const [missingSpecials, setMissingSpecials] = useState<SeriesIssue[]>([]);
   // #203 COLLECTED coverage: main-run issues an OWNED collected edition reprints — not missing,
   // not on disk; each carries `coveredBy` naming the book.
-  const [coveredIssues, setCoveredIssues] = useState<any[]>([]);
+  const [coveredIssues, setCoveredIssues] = useState<CoveredIssue[]>([]);
 
   const [seriesInfo, setSeriesInfo] = useState<{name: string, cover: string | null, cvId: number | null, metadataId: string | null, metadataSource: string, path: string | null, id: string | null, isFavorite: boolean, isFollowing: boolean, publisher: string | null, year: string | null, description: string | null, status: string | null, bookType: string | null, bookTypeSource?: string | null, monitored: boolean, isManga: boolean, universe?: string | null, seriesGroup?: string | null, matchState?: string, hasCustomCover?: boolean, genres?: string[]}>({
     name: "", cover: null, cvId: null, metadataId: null, metadataSource: 'COMICVINE', path: null, id: null, isFavorite: false, isFollowing: false, publisher: null, year: null, description: null, status: null, bookType: null, monitored: false, isManga: false, matchState: 'MATCHED', hasCustomCover: false, genres: []
@@ -183,7 +184,11 @@ function SeriesContent() {
   const [isLinking, setIsLinking] = useState<string | null>(null);
   
   // Calculate unmatched issues
-  const unmatchedIssues = downloadedIssues.filter(i => i.matchState === 'UNMATCHED' || i.metadataId?.startsWith('unmatched'));
+  // ⚠️ The series reply's rows carry neither matchState nor metadataId, so this list is always empty and
+  // the "Unrecognized Files Detected" panel never shows (an unmatched file arrives with cvId null). Kept
+  // as it is here - the fix is its own change.
+  const unmatchedIssues = downloadedIssues.filter(i => (i as { matchState?: string }).matchState === 'UNMATCHED'
+      || (i as { metadataId?: string | null }).metadataId?.startsWith('unmatched'));
 
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
@@ -316,7 +321,7 @@ function SeriesContent() {
     
     fetch(`/api/library/series?path=${encodeURIComponent(folderPath)}&t=${Date.now()}`)
         .then(res => res.json())
-        .then(data => {
+        .then((data: SeriesReply) => {
             if (data.error) throw new Error(data.error);
             setDownloadedIssues(data.downloadedIssues || []);
             setMissingIssues(data.missingIssues || []);
@@ -328,7 +333,7 @@ function SeriesContent() {
           setCoveredIssues(data.coveredIssues || []);
             
             setSeriesInfo({
-                name: data.seriesName || data.name || "Unknown Series",
+                name: data.seriesName || "Unknown Series",
                 cover: data.coverUrl,
                 hasCustomCover: data.hasCustomCover || false,
                 cvId: data.cvId,
@@ -353,7 +358,7 @@ function SeriesContent() {
             });
 
             setEditForm({
-                name: data.seriesName || data.name || "",
+                name: data.seriesName || "",
                 publisher: data.publisher || "",
                 year: data.year ? data.year.toString() : "",
                 cvId: data.metadataId ? data.metadataId.toString() : (data.cvId ? data.cvId.toString() : ""),
@@ -443,7 +448,7 @@ function SeriesContent() {
       if (!folderPath) return;
       try {
           const res = await fetch(`/api/library/series?path=${encodeURIComponent(folderPath)}&t=${Date.now()}`, { cache: 'no-store' });
-          const data = await res.json();
+          const data: SeriesReply = await res.json();
           if (data.error) return;
           setDownloadedIssues(data.downloadedIssues || []);
           setMissingIssues(data.missingIssues || []);
@@ -475,7 +480,7 @@ function SeriesContent() {
       
       try {
           const res = await fetch(`/api/library/series?path=${encodeURIComponent(folderPath)}&t=${Date.now()}`);
-          const data = await res.json();
+          const data: SeriesReply = await res.json();
           
           if (data.error) throw new Error(data.error);
           
@@ -485,7 +490,7 @@ function SeriesContent() {
           setCoveredIssues(data.coveredIssues || []);
           setSeriesInfo(prev => ({
               ...prev,
-              name: data.seriesName || data.name || prev.name,
+              name: data.seriesName || prev.name,
               cover: data.coverUrl !== undefined ? data.coverUrl : prev.cover,
               hasCustomCover: data.hasCustomCover !== undefined ? data.hasCustomCover : prev.hasCustomCover,
               cvId: data.cvId !== undefined ? data.cvId : prev.cvId,
@@ -549,7 +554,7 @@ function SeriesContent() {
       // Refresh this series' issue lists — moved issues now live elsewhere.
       try {
         const ref = await fetch(`/api/library/series?path=${encodeURIComponent(folderPath || '')}&t=${Date.now()}`, { cache: 'no-store' });
-        const refData = await ref.json();
+        const refData: SeriesReply = await ref.json();
         if (!refData.error) {
           setDownloadedIssues(refData.downloadedIssues || []);
           setMissingIssues(refData.missingIssues || []);
@@ -1801,7 +1806,7 @@ function SeriesContent() {
                                           {book.coverUrl
                                               ? <img loading="lazy" decoding="async" src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
                                               : null}
-                                          {owned && <CollectedProgressBadge book={book} />}
+                                          {owned && <CollectedProgressBadge book={book as OwnedSeriesIssue} />}
                                       </div>
                                       <div className="min-w-0 flex-1">
                                           <p className="text-sm font-bold text-foreground truncate" title={book.name}>{book.name}</p>
@@ -1817,7 +1822,7 @@ function SeriesContent() {
                                               </Link>
                                           )}
                                       </div>
-                                      {owned && <CollectedReadButton book={book} seriesFolder={book.retainedSeries?.folderPath || folderPath || ''} />}
+                                      {owned && <CollectedReadButton book={book as OwnedSeriesIssue} seriesFolder={book.retainedSeries?.folderPath || folderPath || ''} />}
                                       {!owned && canRequest && (
                                           <Button
                                               size="sm"
@@ -1864,7 +1869,7 @@ function SeriesContent() {
                                           {book.coverUrl
                                               ? <img loading="lazy" decoding="async" src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
                                               : null}
-                                          {owned && <CollectedProgressBadge book={book} />}
+                                          {owned && <CollectedProgressBadge book={book as OwnedSeriesIssue} />}
                                       </div>
                                       <div className="min-w-0 flex-1">
                                           <p className="text-sm font-bold text-foreground truncate" title={book.name}>{book.name}</p>
@@ -1890,7 +1895,7 @@ function SeriesContent() {
                                           />
                                       </div>
                                       {/* #215: an owned collection reads like any issue — straight into the reader. */}
-                                      {owned && <CollectedReadButton book={book} seriesFolder={book.retainedSeries?.folderPath || folderPath || ''} />}
+                                      {owned && <CollectedReadButton book={book as OwnedSeriesIssue} seriesFolder={book.retainedSeries?.folderPath || folderPath || ''} />}
                                       {/* Collections sit outside the run's missing-issue math, so they
                                           need their own way to be asked for — searched by the book's
                                           own title, never as "{Series} #N". */}
@@ -1969,7 +1974,7 @@ function SeriesContent() {
                                        </div>
                                     )}
                                     <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border relative">
-                                      {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
+                                      {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={(issue.coverUrl || seriesInfo.cover)!} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
                                       <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-primary border-0 text-primary-foreground text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
                                       {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-primary" style={{ width: `${issue.readProgress}%` }} /></div>}
                                     </div>
@@ -2046,7 +2051,7 @@ function SeriesContent() {
                                                   )}
                                                   <td className="px-4 py-2">
                                                       <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative">
-                                                          {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
+                                                          {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={(issue.coverUrl || seriesInfo.cover)!} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           {isRead && <div className="absolute inset-0 flex items-center justify-center bg-green-500/20 z-20"><Check className="w-4 h-4 text-green-500 font-bold"/></div>}
                                                       </div>
                                                   </td>
@@ -2150,7 +2155,7 @@ function SeriesContent() {
                                   const isAlreadyRequested = requestedIds.has(issue.id);
                                   return (
                                       <div key={issue.id} onClick={() => setActiveIssue(issue)} className="flex gap-4 p-4 bg-muted/30 border border-border/50 rounded-xl shadow-sm opacity-80 hover:opacity-100 transition-all cursor-pointer">
-                                        <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
+                                        <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={(issue.coverUrl || seriesInfo.cover)!} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
                                         <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                             <div><h5 className="font-bold text-base line-clamp-2 text-foreground leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">{laneLabel(issue)} #{issue.parsedNum}</span></div>
                                             <div className="flex flex-wrap items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] border-border hover:bg-muted uppercase tracking-wider min-w-[80px]" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
@@ -2178,7 +2183,7 @@ function SeriesContent() {
                                                   <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={cn("cursor-pointer transition-colors", requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-muted/50')}>
                                                       <td className="px-4 py-2">
                                                           <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border grayscale relative">
-                                                              {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
+                                                              {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={(issue.coverUrl || seriesInfo.cover)!} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           </div>
                                                       </td>
                                                       <td className="px-4 py-3 font-bold">

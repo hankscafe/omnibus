@@ -23,6 +23,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { RECOMMENDED_PUBLISHERS, RECOMMENDED_KEYWORDS } from "@/lib/filter-defaults"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
+import { errorMessageOr } from '@/lib/utils/error';
 
 const DISCORD_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
@@ -201,10 +202,10 @@ export default function SetupWizard() {
           } else {
               throw new Error(data.error || "Failed to restore");
           }
-      } catch (error: any) {
+      } catch (error) {
           toast({ 
               title: "Restore Failed", 
-              description: error.message || "Ensure your NEXTAUTH_SECRET matches the original server.", 
+              description: errorMessageOr(error, "Ensure your NEXTAUTH_SECRET matches the original server."), 
               variant: "destructive" 
           });
       } finally {

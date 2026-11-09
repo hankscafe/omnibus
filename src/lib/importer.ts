@@ -24,6 +24,7 @@ import { fixMagicNumberSync } from '@/lib/utils/archive-signature';
 import { storedFolderProblem } from '@/lib/utils/stored-folder';
 import { requeueWithNextRelease } from '@/lib/requeue';
 import { dropPendingHandoff, newImportBatchId, recordImportHandoff, recordPendingHandoff, rekeyPendingHandoff, watchedRelativePath } from '@/lib/import-handoff';
+import { getErrorMessage, errorCode } from '@/lib/utils/error';
 
 // Engine nested-pack helper (list when destDir is omitted, extract when given). Returns null on any
 // engine failure so callers fall back to the local AdmZip path — imports never break on a down engine.
@@ -37,8 +38,8 @@ async function engineNestedArchives(archivePath: string, destDir?: string): Prom
         if (!res.ok) return null;
         const data = await res.json();
         return typeof data?.count === 'number' ? data : null;
-    } catch (e: any) {
-        Logger.log(`[Importer] Engine nested-pack offload unavailable, using local AdmZip: ${e.message}`, 'debug');
+    } catch (e) {
+        Logger.log(`[Importer] Engine nested-pack offload unavailable, using local AdmZip: ${getErrorMessage(e)}`, 'debug');
         return null;
     }
 }
@@ -93,8 +94,8 @@ function ensureLocalCover(folder: string, archivePath: string): string | null {
         const coverPath = path.join(folder, `cover${outExt}`);
         fs.writeFileSync(coverPath, first.getData());
         return coverPath;
-    } catch (e: any) {
-        Logger.log(`[Importer] Cover extraction failed for ${archivePath}: ${e.message}`, 'warn');
+    } catch (e) {
+        Logger.log(`[Importer] Cover extraction failed for ${archivePath}: ${getErrorMessage(e)}`, 'warn');
         return null;
     }
 }
@@ -183,8 +184,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
           } else {
               Logger.log("[Importer] Download not found in active client list. Falling back to folder search.", "warn");
           }
-      } catch (e: any) {
-          Logger.log(`[Importer] Failed to fetch client info: ${e.message}`, "error");
+      } catch (e) {
+          Logger.log(`[Importer] Failed to fetch client info: ${getErrorMessage(e)}`, "error");
       }
     }
     
@@ -267,8 +268,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
             } else if (hex === '504b0304') {
                 inMemoryTrueExt = '.cbz';
             }
-        } catch (e: any) {
-            Logger.log(`[Importer Debug] Failed to verify file signature for in-memory check: ${e.message}`, 'warn');
+        } catch (e) {
+            Logger.log(`[Importer Debug] Failed to verify file signature for in-memory check: ${getErrorMessage(e)}`, 'warn');
         }
     }
 
@@ -356,8 +357,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
                         nestedArchiveCount = comicFiles.length;
                         Logger.log(`[Importer Debug] Found ${nestedArchiveCount} nested archives inside ${path.basename(actualSourceFile)}`, 'debug');
                     }
-                } catch(e: any) {
-                    unreadableReason = e.message;
+                } catch(e) {
+                    unreadableReason = getErrorMessage(e);
                 }
             } else {
                 Logger.log(`[Importer] Engine unavailable — cannot inspect ${path.basename(actualSourceFile)} (RAR) for nested archives; importing as a single file.`, 'debug');
@@ -468,12 +469,12 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
                     routedRelPaths.push(finalRel);
 
                     moveSuccessCount++;
-                } catch(err: any) {
+                } catch(err) {
                     // Nothing landed: withdraw the row rather than leave a PENDING one the sweep can
                     // never stamp (that is the "batch never reported back" verdict, over a file that
                     // was never handed over).
                     await dropPendingHandoff(batchId, plannedRel);
-                    Logger.log(`[Importer Debug] Failed to route ${path.basename(file)} to Watched folder: ${err.message}`, 'warn');
+                    Logger.log(`[Importer Debug] Failed to route ${path.basename(file)} to Watched folder: ${getErrorMessage(err)}`, 'warn');
                 }
             }
             if (!isFromClient && !trackingHash) {
@@ -535,11 +536,11 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
                     if (!isFromClient && !trackingHash) {
                         await fs.remove(sourcePath);
                     }
-                } catch (err: any) {
+                } catch (err) {
                     // The batch did not make it: withdraw the rows of the files already written, so
                     // the requests are left to the download checker with nothing half-promised.
                     for (const rel of routedRelPaths) await dropPendingHandoff(batchId, rel);
-                    Logger.log(`[Importer] Failed to extract batch archive: ${err.message}`, 'error');
+                    Logger.log(`[Importer] Failed to extract batch archive: ${getErrorMessage(err)}`, 'error');
                     return false;
                 }
             }
@@ -840,7 +841,7 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
                     }
                 }
                 destFolder = idealDestFolder;
-            } catch (moveErr: any) {
+            } catch (moveErr) {
                 destFolder = series.folderPath;
             }
         } else if (series.folderPath !== idealDestFolder && !fs.existsSync(series.folderPath)) {
@@ -948,8 +949,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
               
               moveSuccess = true;
               break; 
-          } catch (err: any) {
-              if (err.code === 'ENOENT' || err.code === 'EBUSY' || err.code === 'EPERM') {
+          } catch (err) {
+              if (errorCode(err) === 'ENOENT' || errorCode(err) === 'EBUSY' || errorCode(err) === 'EPERM') {
                   Logger.log(`[Importer] Network File Lock detected (Attempt ${attempt}/5). Retrying in 3s...`, "info");
                   await new Promise(r => setTimeout(r, 3000));
               } else {
@@ -1169,8 +1170,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
                   removeOnFail: true
               });
           }
-      } catch (syncErr: any) {
-          Logger.log(`[Importer] Metadata sync queue failed: ${syncErr.message}`, "warn");
+      } catch (syncErr) {
+          Logger.log(`[Importer] Metadata sync queue failed: ${getErrorMessage(syncErr)}`, "warn");
       }
 
       // Safely clear the queue for anything sharing the link (Except missing match placeholders)
@@ -1265,8 +1266,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
       Logger.log(`[Importer] Successfully imported to: ${destFolder}`, "success");
       return true;
 
-    } catch (e: any) {
-      Logger.log(`[Importer] Import Failed: ${e.message}`, "error");
+    } catch (e) {
+      Logger.log(`[Importer] Import Failed: ${getErrorMessage(e)}`, "error");
       if (req) {
           // --- FIX: Safely route the failed Series metadata mapping ---
           const failedSeries = req.volumeId !== "0" ? await prisma.series.findFirst({ 

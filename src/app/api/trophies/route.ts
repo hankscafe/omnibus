@@ -8,6 +8,7 @@ import path from 'path';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 import { CONFIG_DIR } from '@/lib/utils/paths';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const ACTION_TYPES = new Set(['READ_COUNT', 'REQUEST_COUNT', 'PUBLISHER_COUNT']);
 // The uploads route serves by extension and only knows these image types, so an icon is stored under
@@ -32,8 +33,8 @@ export async function GET() {
     try {
         const trophies = await prisma.trophy.findMany({ orderBy: { targetValue: 'asc' } });
         return NextResponse.json(trophies);
-    } catch (e: any) {
-        Logger.log(`[Trophies API] Fetch Error: ${e.message}`, 'error');
+    } catch (e) {
+        Logger.log(`[Trophies API] Fetch Error: ${getErrorMessage(e)}`, 'error');
         return NextResponse.json({ error: "Failed to fetch trophies." }, { status: 500 });
     }
 }
@@ -91,8 +92,8 @@ export async function POST(req: Request) {
             await AuditLogger.log('CREATE_TROPHY', { trophyId: created.id, name }, session.user.id);
             return NextResponse.json(created);
         }
-    } catch (e: any) {
-        Logger.log(`[Trophies API] Create/Update Error: ${e.message}`, 'error');
+    } catch (e) {
+        Logger.log(`[Trophies API] Create/Update Error: ${getErrorMessage(e)}`, 'error');
         return NextResponse.json({ error: "Failed to save trophy. Please check server logs." }, { status: 500 });
     }
 }
@@ -112,8 +113,8 @@ export async function DELETE(req: Request) {
             await AuditLogger.log('DELETE_TROPHY', { trophyId: id, name: trophy?.name }, session.user.id);
         }
         return NextResponse.json({ success: true });
-    } catch (e: any) {
-        Logger.log(`[Trophies API] Delete Error: ${e.message}`, 'error');
+    } catch (e) {
+        Logger.log(`[Trophies API] Delete Error: ${getErrorMessage(e)}`, 'error');
         return NextResponse.json({ error: "Failed to delete trophy." }, { status: 500 });
     }
 }

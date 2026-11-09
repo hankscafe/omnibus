@@ -15,7 +15,7 @@ import { Loader2, Sparkles, Check, X, FolderSearch, ArrowRight, Image as ImageIc
 import PageManagerModal, { PageManagerTarget } from "@/components/page-manager-modal"
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
-import { getErrorMessage } from "@/lib/utils/error"
+import { getErrorMessage, errorMessageOr } from "@/lib/utils/error";
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
 import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion, closedRequestsNote } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
@@ -280,8 +280,8 @@ export default function SmartMatchPage() {
             if (!data.pageCount && !/\.(cbr|rar|cb7)$/i.test(data.file)) {
                 setPreviewError('No readable pages found in this archive.');
             }
-        } catch (e: any) {
-            setPreviewError(e.message || 'Preview unavailable');
+        } catch (e) {
+            setPreviewError(errorMessageOr(e, 'Preview unavailable'));
         } finally {
             setPreviewLoading(false);
         }
@@ -485,10 +485,10 @@ export default function SmartMatchPage() {
                 } else {
                     setSuggestions(prev => ({ ...prev, [series.id]: 'NOT_FOUND' }));
                 }
-            } catch (e: any) {
+            } catch (e) {
                 setSuggestions(prev => ({ ...prev, [series.id]: 'ERROR' }));
 
-                if (e.message === "FATAL_RATE_LIMIT" || e.message?.includes("429")) {
+                if (errorMessageOr(e, '') === "FATAL_RATE_LIMIT" || errorMessageOr(e, '').includes("429")) {
                     toast({ 
                         title: "Rate Limit Exceeded", 
                         description: "Omnibus has hit the API limits. Pausing the smart scan to protect your connection. Please attempt the scan again later to continue.", 
@@ -674,8 +674,8 @@ export default function SmartMatchPage() {
                     results = res.ok && Array.isArray(data.results)
                         ? data.results
                         : chunk.map(() => ({ ok: false, error: data.error || `HTTP ${res.status}` }));
-                } catch (e: any) {
-                    results = chunk.map(() => ({ ok: false, error: e?.message || 'Network error' }));
+                } catch (e) {
+                    results = chunk.map(() => ({ ok: false, error: errorMessageOr(e, 'Network error') }));
                 }
 
                 const succeededIds = new Set(chunk.filter((_, idx) => results[idx]?.ok).map(s => s.id));
@@ -758,8 +758,8 @@ export default function SmartMatchPage() {
             } else {
                 throw new Error(data.error || "Couldn't load series details");
             }
-        } catch (e: any) {
-            toast({ title: "Lookup Failed", description: e.message, variant: "destructive" });
+        } catch (e) {
+            toast({ title: "Lookup Failed", description: getErrorMessage(e), variant: "destructive" });
             return null;
         } finally {
             setIsManualMatching(false);
@@ -842,8 +842,8 @@ export default function SmartMatchPage() {
             if (!loadMore && (!data.results || data.results.length === 0)) {
                 toast({ title: "No results", description: `No series found for "${manualSearchQuery}". Try another spelling, or match by exact ID below.` });
             }
-        } catch (e: any) {
-            toast({ title: "Search Failed", description: e.message, variant: "destructive" });
+        } catch (e) {
+            toast({ title: "Search Failed", description: getErrorMessage(e), variant: "destructive" });
         } finally {
             setIsManualSearching(false);
             setIsManualSearchingMore(false);
@@ -882,8 +882,8 @@ export default function SmartMatchPage() {
             setExactIssueId(newId);
             setIssueOverrides(prev => ({ ...prev, [manualMatchTarget.id]: { ...prev[manualMatchTarget.id], issueId: newId } }));
             toast({ title: "Issue ID updated", description: `Re-matched to issue #${rawNumber}.` });
-        } catch (e: any) {
-            toast({ title: "Couldn't re-resolve", description: e.message, variant: "destructive" });
+        } catch (e) {
+            toast({ title: "Couldn't re-resolve", description: getErrorMessage(e), variant: "destructive" });
         } finally {
             setIsReresolvingIssueId(false);
         }

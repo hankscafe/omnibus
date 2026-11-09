@@ -460,8 +460,8 @@ export function initWorker() {
                                     let ok = false;
                                     try {
                                         ok = await DownloadService.downloadDirectFile(cand.url, safeTitle, config.download_path, requestId, cand.hoster);
-                                    } catch (e: any) {
-                                        Logger.log(`[BullMQ] DDL candidate '${cand.hoster}' threw for ${name}: ${e.message}`, 'warn');
+                                    } catch (e) {
+                                        Logger.log(`[BullMQ] DDL candidate '${cand.hoster}' threw for ${name}: ${getErrorMessage(e)}`, 'warn');
                                     }
                                     if (ok) {
                                         await new Promise(r => setTimeout(r, 2000));
@@ -538,8 +538,8 @@ export function initWorker() {
                             }
                         }
 
-                    } catch (err: any) {
-                        Logger.log(`[BullMQ] Failed to process Rust search response: ${err.message}`, 'error');
+                    } catch (err) {
+                        Logger.log(`[BullMQ] Failed to process Rust search response: ${getErrorMessage(err)}`, 'error');
                         // updateMany, guarded: a deleted request used to throw here too and fail the job.
                         await writeUnlessClosed(requestId, { status: 'STALLED' });
                     }
@@ -1374,9 +1374,9 @@ export function initWorker() {
 
             await job.updateProgress(100);
 
-        } catch (error: any) {
+        } catch (error) {
             await prisma.jobLog.create({ 
-                data: { jobType: type, status: 'FAILED', message: error.message } 
+                data: { jobType: type, status: 'FAILED', message: getErrorMessage(error) } 
             });
             throw error; 
         }

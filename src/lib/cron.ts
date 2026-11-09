@@ -5,7 +5,7 @@ import { DownloadService } from './download-clients';
 import { Logger } from './logger';
 import { Importer } from './importer';
 import { syncSchedules } from '@/lib/queue';
-import { getErrorMessage } from './utils/error';
+import { getErrorMessage, errorCode } from './utils/error';
 import { extractIssueNumber } from '@/lib/utils/issue-parser';
 import { JUNK_WORDS as junkWords } from '@/lib/utils/search-terms';
 import { deleteUsenetSource } from '@/lib/utils/usenet-cleanup';
@@ -28,9 +28,9 @@ async function acquireLock(lockId: string, timeoutMs: number): Promise<boolean> 
             try {
                 await prisma.jobLock.create({ data: { id: lockId, lockedAt: new Date() } });
                 return true;
-            } catch (e: any) {
+            } catch (e) {
                 // P2002: Unique constraint failed. Another instance created the lock milliseconds before us.
-                if (e.code === 'P2002') return false;
+                if (errorCode(e) === 'P2002') return false;
                 throw e;
             }
         }

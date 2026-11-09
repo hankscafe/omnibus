@@ -7,6 +7,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from '@/lib/logger';
 import { resolveUniquePathSync } from '@/lib/utils/unique-path';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export function fixMagicNumberSync(filePath: string): string {
     try {
@@ -35,8 +36,8 @@ export function fixMagicNumberSync(filePath: string): string {
             fs.renameSync(filePath, correctedPath);
             return correctedPath;
         }
-    } catch (e: any) {
-        Logger.log(`[Importer Debug] Failed to verify file signature for ${filePath}: ${e.message}`, 'warn');
+    } catch (e) {
+        Logger.log(`[Importer Debug] Failed to verify file signature for ${filePath}: ${getErrorMessage(e)}`, 'warn');
     }
     return filePath;
 }

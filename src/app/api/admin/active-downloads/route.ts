@@ -134,7 +134,7 @@ export async function GET() {
                     }
                 } catch (e) { Logger.log(`[Active Downloads] Failed to fetch NZBGet history`, 'warn'); }
             }
-        } catch (e: any) {
+        } catch (e) {
             Logger.log(`[Active Downloads] ${client.name} failed to respond or timed out. Skipping.`, 'warn');
             continue; 
         }

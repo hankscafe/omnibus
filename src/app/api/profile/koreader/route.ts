@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,8 +40,8 @@ export async function GET(_request: Request) {
         }
 
         return NextResponse.json(Array.from(devicesMap.values()));
-    } catch (error: any) {
-        Logger.log(`Failed to fetch KOReader devices: ${error.message}`, 'error');
+    } catch (error) {
+        Logger.log(`Failed to fetch KOReader devices: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }

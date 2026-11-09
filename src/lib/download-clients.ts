@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { pipeline } from 'stream/promises';
 import { DiscordNotifier } from './discord';
-import { getErrorMessage } from './utils/error';
+import { getErrorMessage, errorResponseStatus } from './utils/error';
 import { HosterEngine } from './hosters';
 import { decryptSecret } from './encryption';
 import { assertSafeFetchUrl, assertSafeRedirect, isTrustedConfiguredOrigin } from './utils/ssrf';
@@ -61,14 +61,14 @@ export async function qbitAuthHeaders(
             new URLSearchParams({ username: client.user || '', password: client.pass || '' }),
             { headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded', Referer: cleanUrl, Origin: cleanUrl }, timeout: timeoutMs }
         );
-    } catch (e: any) {
+    } catch (e) {
         // qBittorrent 5.2 rewrote the login responses (measured against 5.2.3): wrong credentials
         // are now HTTP 401 (older versions answered 200 + "Fails."), and the failed-login IP ban
         // stays 403 (now with an explicit body). Both are axios throws — name each.
-        if (e?.response?.status === 401) {
+        if (errorResponseStatus(e) === 401) {
             throw new Error('qBittorrent rejected the username/password (HTTP 401). Check the WebUI credentials in qBittorrent under Tools → Options → Web UI — and note qBittorrent uses a TEMPORARY password (printed in its startup log) that changes on every restart until a permanent one is set. Repeated failed attempts will get this IP temporarily banned.');
         }
-        if (e?.response?.status === 403) {
+        if (errorResponseStatus(e) === 403) {
             throw new Error('qBittorrent refused the login (HTTP 403) — it has banned this IP after failed login attempts. Restart qBittorrent (or wait ~1 hour), verify the credentials, then try again. Tip: with qBittorrent 5.2+ an API key (Preferences → WebUI → API Key) avoids login bans entirely.');
         }
         throw e;
@@ -341,7 +341,7 @@ export const DownloadService = {
               if (!fs.existsSync(getComicsFolder)) {
                   fs.mkdirSync(getComicsFolder, { recursive: true });
               }
-          } catch (mkdirErr: any) {}
+          } catch (mkdirErr) {}
 
           let resolvedHoster: any = null;
 

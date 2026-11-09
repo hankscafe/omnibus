@@ -1,6 +1,7 @@
 // src/lib/hosters/pixeldrain.ts
 import axios from 'axios';
 import { Logger } from '../logger';
+import { getErrorMessage, errorResponseStatus } from '@/lib/utils/error';
 
 export async function resolvePixeldrain(url: string, account?: any) {
     try {
@@ -46,11 +47,11 @@ export async function resolvePixeldrain(url: string, account?: any) {
         }
 
         return { success: false, error: 'File not accessible on Pixeldrain.' };
-    } catch (error: any) {
-        Logger.log(`[Pixeldrain Debug] Request failed: ${error.message}`, 'debug');
-        if (error.response?.status === 429) {
+    } catch (error) {
+        Logger.log(`[Pixeldrain Debug] Request failed: ${getErrorMessage(error)}`, 'debug');
+        if (errorResponseStatus(error) === 429) {
             return { success: false, error: 'Pixeldrain bandwidth limit exceeded. Please add an API Key in Settings.' };
         }
-        return { success: false, error: `Pixeldrain Error: ${error.message}` };
+        return { success: false, error: `Pixeldrain Error: ${getErrorMessage(error)}` };
     }
 }

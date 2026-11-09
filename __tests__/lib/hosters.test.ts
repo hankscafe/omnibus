@@ -38,6 +38,19 @@ describe('Download Pipeline: Hoster Engine', () => {
         );
     });
 
+    // A free-tier 429 says why (the bandwidth limit, and the fix); any other failure says what it was.
+    it('names a Pixeldrain 429 as the bandwidth limit, and passes any other failure on', async () => {
+        mocks.findFirstHoster.mockResolvedValue(null);
+        vi.mocked(axios.head).mockRejectedValueOnce(Object.assign(new Error('Request failed with status code 429'), { response: { status: 429 } }));
+        const limited = await HosterEngine.resolveLink('https://pixeldrain.com/u/FILE123', 'pixeldrain');
+        expect(limited.success).toBe(false);
+        expect(limited.error).toBe('Pixeldrain bandwidth limit exceeded. Please add an API Key in Settings.');
+
+        vi.mocked(axios.head).mockRejectedValueOnce(Object.assign(new Error('Request failed with status code 404'), { response: { status: 404 } }));
+        const missing = await HosterEngine.resolveLink('https://pixeldrain.com/u/FILE123', 'pixeldrain');
+        expect(missing.error).toBe('Pixeldrain Error: Request failed with status code 404');
+    });
+
     it('should block Annas Archive automated downloads if no API key is present', async () => {
         mocks.findFirstHoster.mockResolvedValueOnce(null); // No premium account configured
 

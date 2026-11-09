@@ -33,6 +33,7 @@ import { SystemTab } from "./tabs/system-tab"
 
 import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, WebhookConfig, HosterAccountConfig } from "./tabs/shared"
 import { primarySourceFallback, sourceHasCredentials } from "./tabs/primary-source"
+import { getErrorMessage, errorMessageOr } from '@/lib/utils/error';
 
 // --- Constants & Global Mappings ---
 // RECOMMENDED_PUBLISHERS / RECOMMENDED_KEYWORDS now live in @/lib/filter-defaults (shared with the setup wizard).
@@ -499,12 +500,12 @@ export default function SettingsPage() {
                 variant: "destructive"
             });
         }
-    } catch (e: any) {
+    } catch (e) {
         toast({
-            title: e?.name === 'AbortError' ? "Save Timed Out" : "Save Failed",
-            description: e?.name === 'AbortError'
+            title: (e as { name?: unknown } | null)?.name === 'AbortError' ? "Save Timed Out" : "Save Failed",
+            description: (e as { name?: unknown } | null)?.name === 'AbortError'
                 ? "No response after 45 seconds. The server may still be applying the save in the background — reload the page to check before saving again."
-                : `Could not reach the server: ${e?.message || e}. Check that Omnibus is running, then try again.`,
+                : `Could not reach the server: ${errorMessageOr(e, String(e))}. Check that Omnibus is running, then try again.`,
             variant: "destructive"
         });
     } finally {
@@ -850,8 +851,8 @@ export default function SettingsPage() {
           } else {
               setGenerateError(data.error || "Failed to generate key");
           }
-      } catch (e: any) {
-          setGenerateError(e.message);
+      } catch (e) {
+          setGenerateError(getErrorMessage(e));
       } finally {
           setIsGeneratingKey(false);
       }

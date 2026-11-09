@@ -14,6 +14,7 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
     PieChart, Pie, Cell, LineChart, Line, Legend 
 } from "recharts"
+import { getErrorMessage } from '@/lib/utils/error';
 
 // Use theme-aware colors for the charts
 const COLORS = [
@@ -84,8 +85,8 @@ export default function AnalyticsPage() {
             } else {
                 throw new Error("Failed to purge series");
             }
-        } catch (e: any) {
-            toast({ title: "Purge Failed", description: e.message, variant: "destructive" });
+        } catch (e) {
+            toast({ title: "Purge Failed", description: getErrorMessage(e), variant: "destructive" });
         } finally {
             setIsPurging(false);
         }

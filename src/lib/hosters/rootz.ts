@@ -2,6 +2,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function resolveRootz(url: string, account?: any) {
     try {
@@ -56,8 +57,8 @@ export async function resolveRootz(url: string, account?: any) {
 
         Logger.log(`[Rootz Debug] Evaluation complete. No valid download links found.`, 'debug');
         return { success: false, error: 'Could not locate direct download button on Rootz page.' };
-    } catch (error: any) {
-        Logger.log(`[Rootz Debug] Request failed: ${error.message}`, 'debug');
-        return { success: false, error: `Rootz Scrape Error: ${error.message}` };
+    } catch (error) {
+        Logger.log(`[Rootz Debug] Request failed: ${getErrorMessage(error)}`, 'debug');
+        return { success: false, error: `Rootz Scrape Error: ${getErrorMessage(error)}` };
     }
 }

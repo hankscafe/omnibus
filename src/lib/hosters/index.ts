@@ -9,6 +9,7 @@ import { resolveRootz } from './rootz';
 import { resolveVikingfile } from './vikingfile';
 import { resolveTerabox } from './terabox';
 import { resolveAnnasArchive } from './annas-archive';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export interface HosterResolveResult {
     success: boolean;
@@ -67,10 +68,10 @@ export const HosterEngine = {
             Logger.log(`[Hoster Engine Debug] Resolution result for ${hoster}: ${result.success ? 'Success' : 'Failed'}`, 'debug');
             return result;
 
-        } catch (error: any) {
-            Logger.log(`[Hoster Engine Debug] Uncaught exception during resolution: ${error.message}`, 'debug');
-            Logger.log(`[Hoster Engine] Resolution failed for ${hoster}: ${error.message}`, 'error');
-            return { success: false, error: error.message };
+        } catch (error) {
+            Logger.log(`[Hoster Engine Debug] Uncaught exception during resolution: ${getErrorMessage(error)}`, 'debug');
+            Logger.log(`[Hoster Engine] Resolution failed for ${hoster}: ${getErrorMessage(error)}`, 'error');
+            return { success: false, error: getErrorMessage(error) };
         }
     }
 };

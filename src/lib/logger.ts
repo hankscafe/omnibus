@@ -98,8 +98,9 @@ export const Logger = {
             if (!fs.existsSync(logDir)) {
                 try {
                     fs.mkdirSync(logDir, { recursive: true });
-                } catch (mkdirErr: any) {
-                    if (mkdirErr.code !== 'EEXIST') throw mkdirErr;
+                } catch (mkdirErr) {
+                    // Read inline: the Logger imports nothing beyond paths (the middleware's Edge bundle uses it).
+                    if ((mkdirErr as { code?: unknown } | null)?.code !== 'EEXIST') throw mkdirErr;
                 }
             }
             

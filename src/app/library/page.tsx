@@ -31,6 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FollowBell } from "@/components/follow-bell"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
 import { SetupChecklist } from "@/components/setup-checklist"
+import { getErrorMessage } from '@/lib/utils/error';
 
 interface Comic {
   id: string; // Prisma ID
@@ -439,7 +440,7 @@ function LibraryContent() {
                   setNamesIndex(null);
               }
           }
-      } catch (e: any) {
+      } catch (e) {
           toastRef.current({ title: "Error", description: "Failed to fetch library data.", variant: "destructive" });
       } finally {
           setLoading(false);
@@ -786,7 +787,7 @@ function LibraryContent() {
       } else {
         const err = await res.json(); toastRef.current({ title: "Update Failed", description: err.error || "Unknown error", variant: "destructive" });
       }
-    } catch (e: any) { toastRef.current({ title: "Error", description: e.message, variant: "destructive" }); } finally { setUpdating(false) }
+    } catch (e) { toastRef.current({ title: "Error", description: getErrorMessage(e), variant: "destructive" }); } finally { setUpdating(false) }
   }
 
   const initiateRefreshMetadata = (metadataId: string | undefined | null, metadataSource: string, folderPath: string) => {
@@ -927,7 +928,7 @@ function LibraryContent() {
           toastRef.current({ title: "Series Deleted", description: `Successfully removed ${selectedSeries.size} series.` });
           setSeries(prev => prev.filter(s => !selectedSeries.has(s.id)));
           setSelectedSeries(new Set()); setIsSelectionMode(false); setBulkDeleteModalOpen(false);
-      } catch (e: any) { toastRef.current({ title: "Delete Failed", description: e.message, variant: "destructive" }); } finally { setIsBulkProcessing(false); }
+      } catch (e) { toastRef.current({ title: "Delete Failed", description: getErrorMessage(e), variant: "destructive" }); } finally { setIsBulkProcessing(false); }
   }
 
   const hasActiveFilters = searchQuery !== "" || searchType !== "ALL" || publisherFilter !== "ALL" || libraryFilter !== "ALL" || sortOption !== "alpha_asc" || showFavoritesOnly || monitoredFilter || eraFilter !== "ALL" || bookTypeFilter !== "ALL" || readStatus !== "ALL" || activeCollection !== "ALL" || statusFilter !== "ALL";

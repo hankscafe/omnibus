@@ -5,7 +5,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from './logger';
 import { parseComicVineCredits, stripGenreNoise } from '@/lib/utils';
-import { getErrorMessage } from './utils/error';
+import { getErrorMessage, errorMessageOr, errorResponseStatus } from './utils/error';
 import { MetronProvider } from './metadata/providers/metron';
 import { omnibusQueue } from './queue';
 import { markSystemFlag, countApiUsage } from './utils/system-flags';
@@ -328,13 +328,13 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                             }
                         });
                         enriched++;
-                    } catch (e: any) {
-                        if (e.status === 404 || e.response?.status === 404) {
+                    } catch (e) {
+                        if ((e as { status?: unknown } | null)?.status === 404 || errorResponseStatus(e) === 404) {
                             // Gone from Metron — promote anyway so we never re-pay for the lookup.
                             await prisma.issue.update({ where: { id: candidate.id }, data: { matchState: 'DEEP_SYNCED' } }).catch(() => {});
                             continue;
                         }
-                        if (e.message?.includes('FATAL_RATE_LIMIT') || e.response?.status === 429) await markSystemFlag('metron_rate_limit_time');
+                        if (errorMessageOr(e, '').includes('FATAL_RATE_LIMIT') || errorResponseStatus(e) === 429) await markSystemFlag('metron_rate_limit_time');
                         // The series sync itself already succeeded — stop enriching, retry next sync.
                         Logger.log(`[Metadata] Metron credit enrichment stopped early for "${series.name}": ${getErrorMessage(e)} — remaining issues retry next sync.`, 'warn');
                         break;
@@ -348,8 +348,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             Logger.log(`[Metadata] Successfully synced ${syncedCount} Metron issues.`, 'success');
             return { success: true, count: syncedCount };
 
-        } catch (e: any) {
-            if (e.response?.status === 429) await markSystemFlag('metron_rate_limit_time');
+        } catch (e) {
+            if (errorResponseStatus(e) === 429) await markSystemFlag('metron_rate_limit_time');
             throw e;
         }
     }
@@ -370,8 +370,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
             headers: { 'User-Agent': 'Omnibus/1.0' },
             timeout: 15000
         });
-    } catch (e: any) {
-        if (isCvRateLimited(e.response?.status)) await markSystemFlag('cv_rate_limit_time');
+    } catch (e) {
+        if (isCvRateLimited(errorResponseStatus(e))) await markSystemFlag('cv_rate_limit_time');
         throw e;
     }
 
@@ -486,8 +486,8 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
                 headers: { 'User-Agent': 'Omnibus/1.0' },
                 timeout: 15000
             });
-        } catch (e: any) {
-            if (isCvRateLimited(e.response?.status)) await markSystemFlag('cv_rate_limit_time');
+        } catch (e) {
+            if (isCvRateLimited(errorResponseStatus(e))) await markSystemFlag('cv_rate_limit_time');
             throw e;
         }
 

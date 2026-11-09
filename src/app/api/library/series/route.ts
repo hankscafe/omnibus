@@ -604,8 +604,8 @@ export async function GET(request: Request) {
       duplicates: duplicatesList
     });
 
-  } catch (error: any) {
-    Logger.log(`[Series API] Fatal Error: ${error.message}`, 'error');
+  } catch (error) {
+    Logger.log(`[Series API] Fatal Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

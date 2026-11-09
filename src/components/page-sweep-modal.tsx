@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Loader2, Trash2, AlertTriangle, ScanSearch, XCircle, CheckCircle2, FileArchive } from "lucide-react"
+import { errorMessageOr } from '@/lib/utils/error';
 
 export interface PageSweepSource {
   issueId: string
@@ -106,8 +107,8 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
           setScanProgress({ scanned: Math.min(i + batch.length, candidates.length), total: candidates.length })
         }
         if (!cancelled) setPhase('review')
-      } catch (e: any) {
-        if (!cancelled) { setError(e?.message || 'Scan failed.'); setPhase('error') }
+      } catch (e) {
+        if (!cancelled) { setError(errorMessageOr(e, 'Scan failed.')); setPhase('error') }
       }
     }
     scan()
@@ -162,9 +163,9 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
       setConfirmOpen(false)
       setPhase('running')
       toast({ title: "Page sweep started", description: `${data.total} file(s) queued — it runs in the background, safe to close this window.` })
-    } catch (e: any) {
+    } catch (e) {
       setConfirmOpen(false)
-      toast({ title: "Couldn't start the sweep", description: e?.message || 'Unknown error', variant: "destructive" })
+      toast({ title: "Couldn't start the sweep", description: errorMessageOr(e, 'Unknown error'), variant: "destructive" })
     } finally {
       setEnqueuing(false)
     }

@@ -1,6 +1,7 @@
 // src/lib/audit-logger.ts
 import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const AuditLogger = {
     async log(
@@ -36,8 +37,8 @@ export const AuditLogger = {
             
             // Also log it to the standard rotating log file for redundancy
             Logger.log(`[AUDIT] ${action} by User:${displayName} - ${typeof details === 'string' ? details : JSON.stringify(details)}`, 'warn');
-        } catch (error: any) {
-            Logger.log(`Failed to write audit log: ${error.message}`, 'error');
+        } catch (error) {
+            Logger.log(`Failed to write audit log: ${getErrorMessage(error)}`, 'error');
         }
     }
 };

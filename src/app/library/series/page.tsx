@@ -503,8 +503,8 @@ function SeriesContent() {
           }));
           
           toast({ title: "Scan Complete", description: "Directory contents updated." });
-      } catch (e: any) {
-          toast({ title: "Scan Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Scan Failed", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setIsScanningDirectory(false);
       }
@@ -914,8 +914,8 @@ function SeriesContent() {
               // issue rows was the corruption vector of issue #194.
               window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}`;
           } else throw new Error(data.error);
-      } catch (e: any) {
-          toast({ title: "Match Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Match Failed", description: getErrorMessage(e), variant: "destructive" });
           setIsMatching(false);
       }
   }
@@ -942,8 +942,8 @@ function SeriesContent() {
           const data = await res.json();
           toast({ title: "Info Updated!" });
           window.location.href = `/library/series?path=${encodeURIComponent(data.newPath)}`;
-      } catch (e: any) {
-          toast({ title: "Update Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Update Failed", description: getErrorMessage(e), variant: "destructive" });
           setIsSavingEdit(false);
       }
   }
@@ -968,8 +968,8 @@ function SeriesContent() {
           setIsDeleting(false);
           setDeleteModalOpen(false);
           router.push('/library?refetch=true');
-      } catch (e: any) {
-          toast({ title: "Delete Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Delete Failed", description: getErrorMessage(e), variant: "destructive" });
           setIsDeleting(false);
           setDeleteModalOpen(false);
       }
@@ -996,8 +996,8 @@ function SeriesContent() {
           // Force a reload to seamlessly transition the issue back to the Missing grid
           window.location.reload();
 
-      } catch (e: any) {
-          toast({ title: "Delete Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Delete Failed", description: getErrorMessage(e), variant: "destructive" });
           setIsDeletingIssue(false);
       }
   }
@@ -1019,8 +1019,8 @@ function SeriesContent() {
           toast({ title: "Report Submitted", description: "An admin will review this shortly." });
           setReportModalOpen(false);
           setReportDescription("");
-      } catch (e: any) {
-          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Error", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setIsSubmittingReport(false);
       }
@@ -1162,8 +1162,8 @@ function SeriesContent() {
           } else {
               throw new Error("Failed to link issue.");
           }
-      } catch (e: any) {
-          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Error", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setIsLinking(null);
       }

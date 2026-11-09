@@ -2,6 +2,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function resolveMediaFire(url: string, account?: any) {
     try {
@@ -27,8 +28,8 @@ export async function resolveMediaFire(url: string, account?: any) {
 
         Logger.log(`[MediaFire Debug] Failed to find #downloadButton with a valid href.`, 'debug');
         return { success: false, error: 'Could not locate direct download button on MediaFire page.' };
-    } catch (error: any) {
-        Logger.log(`[MediaFire Debug] Request failed: ${error.message}`, 'debug');
-        return { success: false, error: `MediaFire Scrape Error: ${error.message}` };
+    } catch (error) {
+        Logger.log(`[MediaFire Debug] Request failed: ${getErrorMessage(error)}`, 'debug');
+        return { success: false, error: `MediaFire Scrape Error: ${getErrorMessage(error)}` };
     }
 }

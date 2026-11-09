@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 import { setUserLibraryAccess, grantAllLibraries, getDefaultLibraryIds } from '@/lib/library-access';
 import { TIER_ALL_LIBRARIES, type TierName } from '@/lib/permission-tiers';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -133,8 +134,8 @@ export async function DELETE(req: NextRequest) {
     await AuditLogger.log('DELETE_USER', { userId: id }, token.id as string);
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log(`[Users API] Delete Error: ${error.message}`, 'error');
+  } catch (error) {
+    Logger.log(`[Users API] Delete Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: 'Failed to delete user. Check server logs.' }, { status: 500 });
   }
 }
@@ -196,8 +197,8 @@ export async function POST(req: NextRequest) {
       const { password: _, ...safeUser } = (created ?? newUser) as any;
       return NextResponse.json(safeUser);
 
-  } catch (e: any) {
-      Logger.log(`[Users API] Create Error: ${e.message}`, 'error');
+  } catch (e) {
+      Logger.log(`[Users API] Create Error: ${getErrorMessage(e)}`, 'error');
       return NextResponse.json({ error: "Failed to create user. Please check server logs." }, { status: 500 });
   }
 }

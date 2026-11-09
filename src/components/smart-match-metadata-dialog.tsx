@@ -22,6 +22,7 @@ import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 // consumers (the Smart Matcher page, tests) keep this import path.
 export { COMIC_INFO_DEFAULT_KEYS } from "@/lib/utils/comicinfo-fields"
 export type { ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
+import { errorMessageOr } from '@/lib/utils/error';
 
 // The metadata an admin can pin to an unmatched item before accepting it. Stored per-item on the
 // Smart Matcher page and merged into the /api/library/match-series request on Accept.
@@ -353,8 +354,8 @@ export default function SmartMatchMetadataDialog({
       }
       onIssueIdChange?.(id)
       toast({ title: "Issue re-matched", description: `Now bound to issue #${issueNumber} — Accept will import it as that issue.` })
-    } catch (e: any) {
-      toast({ title: "Couldn't re-resolve", description: e?.message || "Unknown error", variant: "destructive" })
+    } catch (e) {
+      toast({ title: "Couldn't re-resolve", description: errorMessageOr(e, "Unknown error"), variant: "destructive" })
     } finally {
       setRefreshingIssueId(false)
     }

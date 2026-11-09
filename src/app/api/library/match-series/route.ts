@@ -808,8 +808,8 @@ export async function POST(request: Request) {
         // own in-progress guard). In either case the edit is saved in the DB but waits for the next
         // successful sync/embed to actually land in the files. A per-file lock in the writer, so a
         // dedicated embed job could safely coexist with METADATA_SYNC's, would close that gap.
-    } catch (e: any) {
-        Logger.log(`[Match Series] Failed to queue jobs: ${e.message}`, 'warn');
+    } catch (e) {
+        Logger.log(`[Match Series] Failed to queue jobs: ${getErrorMessage(e)}`, 'warn');
     }
 
     if (conflicts > 0) {

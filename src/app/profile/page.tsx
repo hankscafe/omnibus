@@ -25,6 +25,7 @@ import {
   Plus, Smartphone, TabletSmartphone, Wifi, Flame, BookType, Sparkles, Layers,
   ChevronDown, ChevronUp, Settings, Server, Library
 } from "lucide-react"
+import { getErrorMessage } from '@/lib/utils/error';
 
 // --- Helper Component: Collapsible Section ---
 function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }: { title: string, icon: any, children: React.ReactNode, defaultOpen?: boolean }) {
@@ -693,8 +694,8 @@ export default function ProfilePage() {
               setPasswordModalOpen(false);
               setPasswords({ current: "", new: "", confirm: "" });
           } else throw new Error(data.error);
-      } catch (e: any) {
-          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Error", description: getErrorMessage(e), variant: "destructive" });
       } finally { setIsProcessingSecurity(false); }
   }
 
@@ -711,8 +712,8 @@ export default function ProfilePage() {
               setRevokeModalOpen(false);
               update({ sessionVersion: data.newSessionVersion }).catch(()=>{});
           } else throw new Error(data.error);
-      } catch (e: any) {
-          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Error", description: getErrorMessage(e), variant: "destructive" });
       } finally { setIsProcessingSecurity(false); }
   }
 
@@ -767,7 +768,7 @@ export default function ProfilePage() {
                 setProfile((prev: any) => ({ ...prev, user: { ...prev.user, avatar: data.avatarUrl } }));
                 await update({ user: { image: data.avatarUrl } });
             } else throw new Error(data.error);
-        } catch (err: any) { toast({ title: "Upload Failed", description: err.message, variant: "destructive" }); } finally { setUploadingAvatar(false); }
+        } catch (err) { toast({ title: "Upload Failed", description: getErrorMessage(err), variant: "destructive" }); } finally { setUploadingAvatar(false); }
     };
     reader.readAsDataURL(file);
   }
@@ -788,7 +789,7 @@ export default function ProfilePage() {
                 toast({ title: "Banner Updated" });
                 setProfile((prev: any) => ({ ...prev, user: { ...prev.user, banner: data.bannerUrl } }));
             } else throw new Error(data.error);
-        } catch (err: any) { toast({ title: "Upload Failed", description: err.message, variant: "destructive" }); } finally { setUploadingBanner(false); }
+        } catch (err) { toast({ title: "Upload Failed", description: getErrorMessage(err), variant: "destructive" }); } finally { setUploadingBanner(false); }
     };
     reader.readAsDataURL(file);
   }

@@ -7,7 +7,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { Logger } from '@/lib/logger';
-import { getErrorMessage } from '@/lib/utils/error';
+import { getErrorMessage, errorCode } from '@/lib/utils/error';
 
 /**
  * Remove `startDir`, then walk up removing empty parent folders, stopping at (and never removing) the
@@ -49,8 +49,8 @@ export async function cleanupEmptyDirs(startDir: string, libraryRoot: string): P
 export async function moveFileSafe(src: string, dest: string): Promise<void> {
     try {
         await fs.rename(src, dest);
-    } catch (e: any) {
-        if (e?.code !== 'EXDEV') throw e;
+    } catch (e) {
+        if (errorCode(e) !== 'EXDEV') throw e;
         Logger.log(`[safe-fs] Cross-device move detected (EXDEV); staging a copy instead: ${src} -> ${dest}`, 'debug');
         const tmp = `${dest}.${Date.now()}.${Math.random().toString(36).slice(2)}.omnitmp`;
         try {

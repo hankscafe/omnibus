@@ -10,6 +10,7 @@ import { ArrowLeft, Webhook, Terminal, Copy, Check, FileJson, Play, Loader2, X }
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { copyText } from "@/lib/utils/clipboard"
+import { errorMessageOr } from '@/lib/utils/error';
 
 export default function ApiGuidePage() {
   const [copied, setCopied] = useState(false);
@@ -41,8 +42,8 @@ export default function ApiGuidePage() {
       });
       const data = await res.json().catch(() => ({ error: "The endpoint did not return JSON." }));
       setTestResult({ status: res.status, body: JSON.stringify(data, null, 2) });
-    } catch (e: any) {
-      setTestResult({ status: null, body: JSON.stringify({ error: e.message || "Failed to reach endpoint." }, null, 2) });
+    } catch (e) {
+      setTestResult({ status: null, body: JSON.stringify({ error: errorMessageOr(e, "Failed to reach endpoint.") }, null, 2) });
     } finally {
       setIsTesting(false);
     }

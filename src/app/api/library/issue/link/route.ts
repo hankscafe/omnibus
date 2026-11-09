@@ -110,8 +110,8 @@ export async function POST(request: NextRequest) {
             } else {
                 Logger.log(`[Issue Link Debug] Old file path perfectly matches new file path. Skipping physical OS rename.`, 'debug');
             }
-        } catch (err: any) {
-            Logger.log(`[Issue Link Debug] OS RENAME FAILED: ${err.message}`, 'error');
+        } catch (err) {
+            Logger.log(`[Issue Link Debug] OS RENAME FAILED: ${getErrorMessage(err)}`, 'error');
             finalFilePath = oldFilePath;
         }
 

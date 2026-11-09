@@ -1,6 +1,7 @@
 // src/lib/hosters/annas-archive.ts
 import axios from 'axios';
 import { Logger } from '../logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function resolveAnnasArchive(url: string, account?: any) {
     try {
@@ -63,8 +64,8 @@ export async function resolveAnnasArchive(url: string, account?: any) {
             error: "Anna's Archive requires a Premium API Key for automated downloads. Please configure one in Settings -> File Hosters." 
         };
 
-    } catch (error: any) {
-        Logger.log(`[Anna's Archive Debug] Request failed: ${error.message}`, 'debug');
-        return { success: false, error: `Anna's Archive Error: ${error.message}` };
+    } catch (error) {
+        Logger.log(`[Anna's Archive Debug] Request failed: ${getErrorMessage(error)}`, 'debug');
+        return { success: false, error: `Anna's Archive Error: ${getErrorMessage(error)}` };
     }
 }

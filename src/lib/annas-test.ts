@@ -6,6 +6,7 @@
 // returns a download_url and/or account_fast_download_info (quota); an invalid key returns an error.
 // (Placeholder md5 — Phase 3 may switch to a known-present md5 for a stricter check.)
 import axios from 'axios';
+import { errorMessageOr } from '@/lib/utils/error';
 
 export interface AnnasTestResult {
     success: boolean;
@@ -45,7 +46,7 @@ export async function testAnnasArchiveKey(key: string | null | undefined, baseUr
                 ? `Anna's Archive: ${data.error}`
                 : "API key rejected or no response. Check the key and your membership status.",
         };
-    } catch (e: any) {
-        return { success: false, message: `Anna's Archive: ${e?.message || 'connection failed'}` };
+    } catch (e) {
+        return { success: false, message: `Anna's Archive: ${errorMessageOr(e, 'connection failed')}` };
     }
 }

@@ -330,8 +330,8 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log(`[Manual Request Error] ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    Logger.log(`[Manual Request Error] ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

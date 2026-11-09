@@ -94,9 +94,9 @@ export async function GET(request: NextRequest) {
     }));
 
     return NextResponse.json(formattedRequests);
-  } catch (error: any) {
-    Logger.log(`[User Requests API] Fetch Error: ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    Logger.log(`[User Requests API] Fetch Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -506,9 +506,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-  } catch (error: any) {
-    Logger.log(`[Request Error] ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    Logger.log(`[Request Error] ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -660,9 +660,9 @@ export async function PATCH(request: NextRequest) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log(`[Request API] Approval Error: ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    Logger.log(`[Request API] Approval Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -764,8 +764,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    Logger.log(`[Request API] Cancel Error: ${error.message}`, 'error');
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    Logger.log(`[Request API] Cancel Error: ${getErrorMessage(error)}`, 'error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

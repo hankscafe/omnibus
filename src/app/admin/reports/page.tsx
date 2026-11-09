@@ -10,6 +10,7 @@ import { Loader2, ArrowLeft, AlertTriangle, MessageSquare, CheckCircle2, User, B
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { getErrorMessage } from '@/lib/utils/error';
 
 export default function AdminReportsPage() {
   // SET PAGE TITLE
@@ -67,8 +68,8 @@ export default function AdminReportsPage() {
       } else {
         throw new Error("Failed to update report");
       }
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } catch (e) {
+      toast({ title: "Error", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setResolving(false);
     }

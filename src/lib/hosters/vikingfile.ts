@@ -2,6 +2,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function resolveVikingfile(url: string, account?: any) {
     try {
@@ -49,8 +50,8 @@ export async function resolveVikingfile(url: string, account?: any) {
 
         Logger.log(`[VikingFile Debug] Evaluation complete. No valid download links found.`, 'debug');
         return { success: false, error: 'Could not locate direct download button on Vikingfile page.' };
-    } catch (error: any) {
-        Logger.log(`[VikingFile Debug] Request failed: ${error.message}`, 'debug');
-        return { success: false, error: `Vikingfile Scrape Error: ${error.message}` };
+    } catch (error) {
+        Logger.log(`[VikingFile Debug] Request failed: ${getErrorMessage(error)}`, 'debug');
+        return { success: false, error: `Vikingfile Scrape Error: ${getErrorMessage(error)}` };
     }
 }

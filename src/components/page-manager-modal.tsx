@@ -15,6 +15,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Loader2, Trash2, AlertTriangle, SkipForward, FileArchive, ScanSearch } from "lucide-react"
 import PageSweepModal from "@/components/page-sweep-modal"
+import { errorMessageOr } from '@/lib/utils/error';
 
 export interface PageManagerTarget {
   issueId: string
@@ -136,9 +137,9 @@ export default function PageManagerModal({ open, onOpenChange, queue, onApplied,
       })
       setConfirmOpen(false)
       advance()
-    } catch (e: any) {
+    } catch (e) {
       setConfirmOpen(false)
-      toast({ title: "Page removal failed", description: e?.message || "Unknown error", variant: "destructive" })
+      toast({ title: "Page removal failed", description: errorMessageOr(e, "Unknown error"), variant: "destructive" })
     } finally {
       setApplying(false)
     }

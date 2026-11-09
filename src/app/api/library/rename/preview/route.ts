@@ -6,6 +6,7 @@ import path from 'path';
 import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { issueFileName, issuePaddingFromSetting, issueTitleForName, seriesFolderSegments, type NamingInput } from '@/lib/utils/naming';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function POST(request: NextRequest) {
     try {
@@ -123,8 +124,8 @@ export async function POST(request: NextRequest) {
         Logger.log(`[Rename Preview Debug] Successfully returning ${previews.length} rows.`, 'debug');
         return NextResponse.json({ previews });
         
-    } catch (error: any) {
-        Logger.log(`[Rename Preview API Fatal Error]: ${error.message}`, 'error');
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        Logger.log(`[Rename Preview API Fatal Error]: ${getErrorMessage(error)}`, 'error');
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 }

@@ -2,6 +2,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function resolveTerabox(url: string, account?: any) {
     try {
@@ -40,8 +41,8 @@ export async function resolveTerabox(url: string, account?: any) {
             success: false, 
             error: 'Terabox requires heavy JavaScript rendering. Consider entering a premium session cookie (ndus) in Settings, or use a different hoster.' 
         };
-    } catch (error: any) {
-        Logger.log(`[Terabox Debug] Request failed: ${error.message}`, 'debug');
-        return { success: false, error: `Terabox Scrape Error: ${error.message}` };
+    } catch (error) {
+        Logger.log(`[Terabox Debug] Request failed: ${getErrorMessage(error)}`, 'debug');
+        return { success: false, error: `Terabox Scrape Error: ${getErrorMessage(error)}` };
     }
 }

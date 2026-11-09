@@ -206,8 +206,8 @@ export default function ScheduledJobsPage() {
           } else {
               throw new Error(data.error || "Job failed to start.");
           }
-      } catch (e: any) {
-          toast({ title: "Error", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Error", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setRunningJob(null);
       }

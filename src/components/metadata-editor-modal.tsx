@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { Loader2, FileText, FileX, AlertTriangle, Lock, Unlock } from "lucide-react"
 import { COMIC_INFO_DEFAULT_KEYS, COLUMN_TO_LIST_FIELD, type ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
 import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
+import { errorMessageOr } from '@/lib/utils/error';
 
 export interface MetadataEditorSeries {
   currentPath: string
@@ -279,8 +280,8 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
       }
       onOpenChange(false)
       onSaved?.(result)
-    } catch (e: any) {
-      toast({ title: "Save failed", description: e?.message || "Unknown error", variant: "destructive" })
+    } catch (e) {
+      toast({ title: "Save failed", description: errorMessageOr(e, "Unknown error"), variant: "destructive" })
     } finally {
       setSaving(false)
     }
@@ -317,8 +318,8 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
           : "The next metadata refresh may update this series' description again.",
       })
       onSaved?.(result)
-    } catch (e: any) {
-      toast({ title: "Unlock failed", description: e?.message || "Unknown error", variant: "destructive" })
+    } catch (e) {
+      toast({ title: "Unlock failed", description: errorMessageOr(e, "Unknown error"), variant: "destructive" })
     } finally {
       setUnlocking(false)
     }

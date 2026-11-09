@@ -9,6 +9,7 @@ import { Importer } from '@/lib/importer';
 import { omnibusQueue } from '@/lib/queue';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { settleDuplicateOnLink } from '@/lib/request-dedupe';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
 
@@ -178,8 +179,8 @@ export async function POST(request: NextRequest) {
                 });
                 if (engineRes.ok) resultData = await engineRes.json();
                 else Logger.log(`[Retry] Engine recovery search returned ${engineRes.status}.`, 'warn');
-            } catch (e: any) {
-                Logger.log(`[Retry] Engine recovery search unavailable: ${e.message}`, 'warn');
+            } catch (e) {
+                Logger.log(`[Retry] Engine recovery search unavailable: ${getErrorMessage(e)}`, 'warn');
             }
 
             if (resultData?.success && resultData.best_match?.protocol === 'ddl') {
@@ -254,8 +255,8 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({ error: "Direct download link lost or hosters disabled. Please delete and re-request this comic." }, { status: 400 });
         
-    } catch (e: any) {
-        Logger.log(`[Retry API] Error: ${e.message}`, 'error');
+    } catch (e) {
+        Logger.log(`[Retry API] Error: ${getErrorMessage(e)}`, 'error');
         return NextResponse.json({ error: "Failed to retry request. Please check server logs." }, { status: 500 });
     }
 }

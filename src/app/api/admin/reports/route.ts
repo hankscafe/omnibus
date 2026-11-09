@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function GET() {
     const authOptions = await getAuthOptions();
@@ -19,9 +20,9 @@ export async function GET() {
             orderBy: { createdAt: 'desc' }
         });
         return NextResponse.json(reports);
-    } catch (e: any) {
+    } catch (e) {
         // --- SECURITY FIX 1b: Log real error, hide from client ---
-        Logger.log(`[Reports API] Fetch Error: ${e.message}`, 'error');
+        Logger.log(`[Reports API] Fetch Error: ${getErrorMessage(e)}`, 'error');
         return NextResponse.json({ error: "Failed to fetch reports. Please check server logs." }, { status: 500 });
     }
 }
@@ -43,9 +44,9 @@ export async function PATCH(req: Request) {
 
         await AuditLogger.log('RESOLVED_ISSUE_REPORT', { reportId: id, status, comment: adminComment }, session.user.id);
         return NextResponse.json(updated);
-    } catch (e: any) {
+    } catch (e) {
         // --- SECURITY FIX 1b: Log real error, hide from client ---
-        Logger.log(`[Reports API] Update Error: ${e.message}`, 'error');
+        Logger.log(`[Reports API] Update Error: ${getErrorMessage(e)}`, 'error');
         return NextResponse.json({ error: "Failed to update report. Please check server logs." }, { status: 500 });
     }
 }

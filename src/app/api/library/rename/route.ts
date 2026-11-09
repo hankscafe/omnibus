@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
         // pre-existing target + everything in it). Files are relocated one-by-one + guarded below.
         try {
             await fs.ensureDir(targetFolder);
-        } catch (e: any) {
+        } catch (e) {
             Logger.log(`[Rename Debug] Could not create target folder ${targetFolder}: ${getErrorMessage(e)}`, 'error');
             continue;
         }
@@ -231,7 +231,7 @@ export async function POST(request: NextRequest) {
                     data: { filePath: newFilePath }
                 });
                 filesRenamed++;
-            } catch (e: any) {
+            } catch (e) {
                 Logger.log(`[Rename Debug] File move failed for ${sourcePath}: ${getErrorMessage(e)}`, 'error');
             }
         }

@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import { Logger } from '@/lib/logger';
 import { SystemNotifier } from '@/lib/notifications';
 import { removePagesFromIssue, RemovePagesOutcome } from '@/lib/pages/remove-pages-core';
+import { errorMessageOr } from '@/lib/utils/error';
 
 export const PAGE_SWEEP_RESULT_KEY = 'last_page_sweep_result';
 export const PAGE_SWEEP_CANCEL_KEY = 'page_sweep_cancel';
@@ -137,8 +138,8 @@ export async function processPageSweepChunk(
         let outcome: RemovePagesOutcome;
         try {
             outcome = await removeFn(item.issueId, [item.entryName], data.actorUserId, 'sweep');
-        } catch (e: any) {
-            outcome = { ok: false, status: 500, error: e?.message || 'Unexpected error' };
+        } catch (e) {
+            outcome = { ok: false, status: 500, error: errorMessageOr(e, 'Unexpected error') };
         }
         processed += 1;
         if (outcome.ok) {

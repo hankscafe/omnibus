@@ -2,6 +2,7 @@
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import { Logger } from './logger';
+import { errorMessageOr } from '@/lib/utils/error';
 
 // In-memory cache to prevent API bans during mass scans
 const volumeResolutionCache = new Map<string, { cvId: number | string, timestamp: number }>();
@@ -219,12 +220,12 @@ export async function parseComicInfo(filePath: string) {
             metadataSource: resolvedMetaSource,
             metadataIssueId: resolvedMetaIssueId
         };
-    } catch (error: any) {
-        const isFormatError = error.message && error.message.toLowerCase().includes("invalid or unsupported zip format");
+    } catch (error) {
+        const isFormatError = errorMessageOr(error, '').toLowerCase().includes("invalid or unsupported zip format");
         
         // Suppress log spam for genuine RAR archives or fake CBZs failing the ZIP parser
         if (!filePath.toLowerCase().match(/\.(cbr|rar)$/) && !isFormatError) {
-            Logger.log(`[Metadata] Failed to parse ComicInfo in ${filePath}: ${error.message || 'Unknown error'}`, 'error');
+            Logger.log(`[Metadata] Failed to parse ComicInfo in ${filePath}: ${errorMessageOr(error, 'Unknown error')}`, 'error');
         }
         return null;
     }

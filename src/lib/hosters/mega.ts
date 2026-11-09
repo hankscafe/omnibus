@@ -1,6 +1,7 @@
 // src/lib/hosters/mega.ts
 import { File } from 'megajs';
 import { Logger } from '../logger';
+import { getErrorMessage } from '@/lib/utils/error';
 
 export async function resolveMega(url: string, _account?: any) {
     try {
@@ -62,9 +63,9 @@ export async function resolveMega(url: string, _account?: any) {
             fileName: targetFile.name
         };
 
-    } catch (error: any) {
+    } catch (error) {
         // --- NEW: Added debug trace for decryption crashes ---
-        Logger.log(`[Mega Debug] Uncaught exception during decryption: ${error.message}`, 'debug');
-        return { success: false, error: `Mega Error: ${error.message}` };
+        Logger.log(`[Mega Debug] Uncaught exception during decryption: ${getErrorMessage(error)}`, 'debug');
+        return { success: false, error: `Mega Error: ${getErrorMessage(error)}` };
     }
 }

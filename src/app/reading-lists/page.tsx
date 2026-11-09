@@ -361,8 +361,8 @@ function ReadingListsContent() {
           } else {
               throw new Error(data.error);
           }
-      } catch (e: any) {
-          toast({ title: "Auto-Build Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Auto-Build Failed", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setIsAutoBuilding(false);
       }
@@ -461,8 +461,8 @@ function ReadingListsContent() {
               const data = await res.json().catch(() => ({}));
               toast({ title: "Resync failed", description: data.error || "Request failed", variant: "destructive" });
           }
-      } catch (e: any) {
-          toast({ title: "Resync failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Resync failed", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setResyncingSeriesIds(prev => { const next = new Set(prev); next.delete(series.id); return next; });
       }
@@ -499,8 +499,8 @@ function ReadingListsContent() {
           } else {
               throw new Error(data.error);
           }
-      } catch (e: any) {
-          toast({ title: "Import Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Import Failed", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setIsImportingCsv(false);
       }
@@ -534,8 +534,8 @@ function ReadingListsContent() {
           } else {
               throw new Error(data.error);
           }
-      } catch (e: any) {
-          toast({ title: "Import Failed", description: e.message, variant: "destructive" });
+      } catch (e) {
+          toast({ title: "Import Failed", description: getErrorMessage(e), variant: "destructive" });
       } finally {
           setIsImportingCbl(false);
       }

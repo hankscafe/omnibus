@@ -8,7 +8,7 @@ import { prisma } from '@/lib/db';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getErrorMessage } from './utils/error';
+import { getErrorMessage, errorMessageOr, errorCode } from './utils/error';
 import { CACHE_DIR } from '@/lib/utils/paths';
 import { IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
@@ -108,11 +108,12 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
                 // An empty listing means "not a RAR" even on exit 0 (WinRAR's UnRAR.exe
                 // succeeds silently on non-RAR input) — route it to unar instead.
                 rarListing = typeof stdout === 'string' && stdout.trim() !== '' ? stdout : null;
-            } catch (err: any) {
+            } catch (err) {
                 // unrar exits non-zero for benign structural quirks (e.g. a missing
                 // end-of-archive block) even when the listing printed in full, so
                 // salvage its stdout. A genuine non-RAR file yields an empty listing.
-                rarListing = typeof err?.stdout === 'string' && err.stdout.trim() !== '' ? err.stdout : null;
+                const errStdout = (err as { stdout?: unknown } | null)?.stdout;
+                rarListing = typeof errStdout === 'string' && errStdout.trim() !== '' ? errStdout : null;
             }
             if (rarListing !== null) {
                 expectedPages = rarListing.split('\n')
@@ -127,16 +128,16 @@ export async function convertCbrToCbz(cbrPath: string): Promise<string | null> {
                 // against the listing below, not by the exit code.
                 try {
                     await execFileAsync('unrar', ['x', '-y', '-o+', '-p-', '-idq', cbrPath, `${tempDir}/`], execOpts);
-                } catch (err: any) {
+                } catch (err) {
                     unrarExitError = err;
                 }
             } else {
                 try {
                     await execFileAsync('unar', ['-q', '-p', '', '-o', tempDir, '-f', '-D', cbrPath], execOpts);
-                } catch (unarErr: any) {
-                    const detail = unarErr?.code === 'ENOENT'
+                } catch (unarErr) {
+                    const detail = errorCode(unarErr) === 'ENOENT'
                         ? 'unar binary not found on PATH (is it installed in this environment?)'
-                        : unarErr?.stderr || unarErr?.message || 'Unknown CLI error';
+                        : (unarErr as { stderr?: string } | null)?.stderr || errorMessageOr(unarErr, 'Unknown CLI error');
                     throw new Error(`Native extraction failed: ${detail}`);
                 }
             }

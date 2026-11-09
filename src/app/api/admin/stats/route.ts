@@ -52,7 +52,7 @@ export async function GET() {
         failureRate: Math.round(failureRate * 100)
     });
 
-  } catch (globalErr: any) {
+  } catch (globalErr) {
     Logger.log(`[Stats API] Server Error: ${getErrorMessage(globalErr)}`, 'error');
     
     return NextResponse.json({ 

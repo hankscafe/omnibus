@@ -239,8 +239,8 @@ export default function AdminUsersPage() {
               toast({ title: "Reset Email Sent", description: `A password reset link has been sent to ${userToResetPass.username}.` });
               setResetPassConfirmOpen(false);
           } else throw new Error(data.error || "Failed to send reset email");
-      } catch (error: any) {
-          toast({ title: "Reset Failed", description: error.message, variant: "destructive" });
+      } catch (error) {
+          toast({ title: "Reset Failed", description: getErrorMessage(error), variant: "destructive" });
       } finally {
           setIsResettingPass(false);
           setUserToResetPass(null);

@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { readerHref, nextInList } from "@/lib/reading-list-nav"
+import { getErrorMessage } from '@/lib/utils/error';
 
 // In-reader tagging (#199 round 2, concept by CapitanoNemo78; admin-only): note characters,
 // teams, locations, and credits spotted while reading. Nothing saves per-tag — additions
@@ -129,8 +130,8 @@ function ReaderContent() {
           : "Saved to the library."
       });
       setPendingTags(emptyPendingTags());
-    } catch (e: any) {
-      toast({ title: "Couldn't save tags", description: e.message, variant: "destructive" });
+    } catch (e) {
+      toast({ title: "Couldn't save tags", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setIsSavingTags(false);
     }

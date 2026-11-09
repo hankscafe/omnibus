@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import crypto from 'crypto';
 import { prisma } from '@/lib/db'; 
 import { Logger } from '@/lib/logger';
-import { getErrorMessage } from '@/lib/utils/error';
+import { getErrorMessage, errorCode } from '@/lib/utils/error';
 import { CACHE_DIR as BASE_CACHE_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
@@ -125,8 +125,8 @@ export async function GET(request: Request) {
                 'Cache-Control': 'public, max-age=86400',
             },
         });
-    } catch (e: any) {
-        if (e?.code !== 'ENOENT') Logger.log(`[Reader] Failed to read image cache: ${getErrorMessage(e)}`, 'warn');
+    } catch (e) {
+        if (errorCode(e) !== 'ENOENT') Logger.log(`[Reader] Failed to read image cache: ${getErrorMessage(e)}`, 'warn');
     }
 
     // --- ENGINE OFFLOAD ---

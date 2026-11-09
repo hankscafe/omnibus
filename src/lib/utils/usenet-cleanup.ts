@@ -14,6 +14,7 @@ import { prisma } from '@/lib/db';
 import { Logger } from '../logger';
 import { resolveRemotePath } from './path-resolver';
 import { WATCHED_DIR } from './paths';
+import { getErrorMessage } from '@/lib/utils/error';
 
 const USENET_CLIENT_TYPES = ['sab', 'nzbget'];
 
@@ -75,8 +76,8 @@ export async function deleteUsenetSource(opts: {
         await fs.remove(sourcePath);
         Logger.log(`[Usenet Cleanup] Deleted ${reason} usenet download from client folder: ${sourcePath}`, 'info');
         return true;
-    } catch (e: any) {
-        Logger.log(`[Usenet Cleanup] Could not delete "${sourcePath}": ${e.message} — leaving it in place (is the download folder mounted read-only?).`, 'warn');
+    } catch (e) {
+        Logger.log(`[Usenet Cleanup] Could not delete "${sourcePath}": ${getErrorMessage(e)} — leaving it in place (is the download folder mounted read-only?).`, 'warn');
         return false;
     }
 }

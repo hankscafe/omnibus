@@ -175,7 +175,7 @@ export async function GET(request: Request) {
 
         return NextResponse.json({ startDate: startDateStr, endDate: endDateStr, releases: formattedReleases });
 
-    } catch (error: any) {
+    } catch (error) {
         Logger.log(`Global Calendar API Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: "Failed to fetch global releases from Metron." }, { status: 500 });
     }

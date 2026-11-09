@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
+import { errorMessageOr } from '@/lib/utils/error';
 
 export interface LocalAttachItem {
     id?: string;
@@ -85,8 +86,8 @@ export function AttachLocalCollectedDialog({ open, item, onClose, onDone }: Atta
                 variant: data.conflicts > 0 ? "destructive" : undefined,
             });
             onDone(data);
-        } catch (e: any) {
-            toast({ title: "Couldn't attach it", description: e?.message || 'Unknown error', variant: "destructive" });
+        } catch (e) {
+            toast({ title: "Couldn't attach it", description: errorMessageOr(e, 'Unknown error'), variant: "destructive" });
         } finally {
             setBusy(false);
         }

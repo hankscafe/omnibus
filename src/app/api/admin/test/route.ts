@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import axios from 'axios';
-import { getErrorMessage } from '@/lib/utils/error';
+import { getErrorMessage, errorResponseStatus } from '@/lib/utils/error';
 import { decryptSecret } from '@/lib/encryption';
 import { Logger } from '@/lib/logger';
 import { Mailer } from '@/lib/mailer';
@@ -217,8 +217,8 @@ export async function POST(request: Request) {
                         timeout: 5000
                     });
                     return NextResponse.json({ success: true, message: `qBittorrent Connected via API key! (${verRes.data})` });
-                } catch (e: any) {
-                    const status = e?.response?.status;
+                } catch (e) {
+                    const status = errorResponseStatus(e);
                     if (status === 401 || status === 403) {
                         throw new Error("qBittorrent rejected the API key. Re-copy it from qBittorrent → Preferences → WebUI → API Key (generating a new key invalidates the old one), and confirm qBittorrent is v5.2 or newer.");
                     }
@@ -249,14 +249,14 @@ export async function POST(request: Request) {
                     headers: qbitHeaders,
                     timeout: 5000
                 });
-            } catch (e: any) {
+            } catch (e) {
                 // qBittorrent 5.2 rewrote the login responses (measured against 5.2.3):
                 // wrong credentials are now HTTP 401 (older versions: 200 + "Fails."), and the
                 // failed-login IP ban stays 403. Name each instead of leaking the bare code.
-                if (e?.response?.status === 401) {
+                if (errorResponseStatus(e) === 401) {
                     throw new Error("qBittorrent rejected that username/password (HTTP 401). Verify the WebUI credentials (qBittorrent → Tools → Options → Web UI) — and note: until a permanent password is set there, qBittorrent generates a TEMPORARY password on every restart (printed in its startup log), so yesterday's password stops working. (Several failed attempts in a row will get this IP temporarily banned.)");
                 }
-                if (e?.response?.status === 403) {
+                if (errorResponseStatus(e) === 403) {
                     throw new Error("qBittorrent refused the login (HTTP 403). It has banned this IP after failed login attempts — restart qBittorrent (or wait ~1 hour), verify the username/password, then test ONCE. Tip: with qBittorrent 5.2+ use an API key instead (Preferences → WebUI → API Key); API keys never trigger login bans.");
                 }
                 throw e;

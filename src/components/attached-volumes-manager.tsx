@@ -28,6 +28,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useToast } from "@/components/ui/use-toast"
 import { BookMarked, Link2, Loader2, Plus, RefreshCw, Search, Unlink } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { getErrorMessage } from '@/lib/utils/error';
 
 export interface Attachment {
     id: string
@@ -215,8 +216,8 @@ export function AttachedVolumesManager({
             setDialogOpen(false)
             await load()
             onChanged?.()
-        } catch (e: any) {
-            toast({ title: "Couldn't add that edition", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Couldn't add that edition", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setAttachingId(null)
         }
@@ -231,8 +232,8 @@ export function AttachedVolumesManager({
             if (!res.ok) throw new Error(data.error || "Search failed")
             setResults(data.results || [])
             setHasSearched(true)
-        } catch (e: any) {
-            toast({ title: "Search failed", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Search failed", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setIsSearching(false)
         }
@@ -259,8 +260,8 @@ export function AttachedVolumesManager({
             }
             await load()
             onChanged?.()
-        } catch (e: any) {
-            toast({ title: "Couldn't attach that volume", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Couldn't attach that volume", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setAttachingId(null)
         }
@@ -284,8 +285,8 @@ export function AttachedVolumesManager({
             }
             await load()
             onChanged?.()
-        } catch (e: any) {
-            toast({ title: "Refresh failed", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Refresh failed", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setBusyId(null)
         }
@@ -309,8 +310,8 @@ export function AttachedVolumesManager({
             setAbsorbPrompt(null)
             await load()
             onChanged?.()
-        } catch (e: any) {
-            toast({ title: "Couldn't move it", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Couldn't move it", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setIsAbsorbing(false)
         }
@@ -336,8 +337,8 @@ export function AttachedVolumesManager({
             setAbsorbPrompt(null)
             await load()
             onChanged?.()
-        } catch (e: any) {
-            toast({ title: "Couldn't keep it as its own series", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Couldn't keep it as its own series", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setIsAbsorbing(false)
         }
@@ -362,8 +363,8 @@ export function AttachedVolumesManager({
             setDropSkeletons(false)
             await load()
             onChanged?.()
-        } catch (e: any) {
-            toast({ title: "Detach failed", description: e.message, variant: "destructive" })
+        } catch (e) {
+            toast({ title: "Detach failed", description: getErrorMessage(e), variant: "destructive" })
         } finally {
             setBusyId(null)
         }

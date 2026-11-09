@@ -262,11 +262,16 @@ export async function POST(request: NextRequest) {
       }
       const folderPath = path.join(basePath, ...folderParts).replace(/\\/g, '/');
 
+      // The "Monitor Series?" answer. Only an explicit no (monitored: false - "No, Just Request Current
+      // Issues") leaves the series unmonitored; callers that don't answer (monitor-only ones included)
+      // monitor it as they always have. A no never switches off a series that is already monitored.
+      const monitorSeries = monitored !== false;
+
       const series = await prisma.series.upsert({
           where: { metadataSource_metadataId: { metadataSource: metadataSource, metadataId: resolvedCvId.toString() } },
-          update: { 
-              monitored: true, 
-              coverUrl: image, 
+          update: {
+              ...(monitorSeries ? { monitored: true } : {}),
+              coverUrl: image,
               name, 
               cvId: metadataSource === 'COMICVINE' ? parseInt(resolvedCvId.toString()) : null, 
               matchState: 'MATCHED',
@@ -280,8 +285,8 @@ export async function POST(request: NextRequest) {
               name, 
               year: parseInt(year) || new Date().getFullYear(), 
               publisher: safePublisher, 
-              folderPath, 
-              monitored: true,
+              folderPath,
+              monitored: monitorSeries,
               isManga: isManga,
               libraryId: targetLib?.id,
               coverUrl: image,

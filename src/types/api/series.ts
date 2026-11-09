@@ -10,6 +10,8 @@ export interface SeriesIssueRow {
     id: string;
     /** The provider's issue id; null for a file that isn't matched to one. */
     cvId: number | null;
+    /** Not matched to a provider issue: no id, or a scan's / an import's `unmatched_…` placeholder. */
+    isUnmatched: boolean;
     name: string;
     isAnnual: boolean;
     isSpecial: boolean;

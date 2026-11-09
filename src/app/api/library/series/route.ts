@@ -367,6 +367,8 @@ export async function GET(request: Request) {
             const formatted: SeriesIssueRow = {
                 id: issue.id,
                 cvId: (issue.metadataId && !issue.metadataId.startsWith('unmatched_')) ? parseInt(issue.metadataId) : null,
+                // A file the scan or an import couldn't identify: the page offers to link it to a missing issue.
+                isUnmatched: !issue.metadataId || issue.metadataId.startsWith('unmatched_'),
                 // #203: annuals compose as "Series Annual #N" and carry the flag for the page/OPDS; a
                 // Special (#255) as its own volume's "Name #N".
                 name: issue.name || (specialName ? `${specialName} #${issue.number}` : `${seriesRecord.name}${(issue as any).isAnnual ? ' Annual' : ''} #${issue.number}`),
@@ -460,6 +462,7 @@ export async function GET(request: Request) {
                     const formatted: SeriesIssueRow = {
                         id: book.id,
                         cvId: providerId ? parseInt(providerId) : null,
+                        isUnmatched: !providerId,
                         name: book.name || (keptSpecial ? `${child.name} #${book.number}` : `${child.name} Vol. ${book.number}`),
                         isAnnual: false,
                         isSpecial: keptSpecial,

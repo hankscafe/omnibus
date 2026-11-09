@@ -184,11 +184,9 @@ function SeriesContent() {
   const [isLinking, setIsLinking] = useState<string | null>(null);
   
   // Calculate unmatched issues
-  // ⚠️ The series reply's rows carry neither matchState nor metadataId, so this list is always empty and
-  // the "Unrecognized Files Detected" panel never shows (an unmatched file arrives with cvId null). Kept
-  // as it is here - the fix is its own change.
-  const unmatchedIssues = downloadedIssues.filter(i => (i as { matchState?: string }).matchState === 'UNMATCHED'
-      || (i as { metadataId?: string | null }).metadataId?.startsWith('unmatched'));
+  // Files the scan or an import couldn't match to a provider issue (the series reply marks them) - the
+  // admin's "Unrecognized Files Detected" panel offers to link each one to a missing issue.
+  const unmatchedIssues = downloadedIssues.filter(i => i.isUnmatched);
 
   const [reviews, setReviews] = useState<any[]>([]);
   const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });

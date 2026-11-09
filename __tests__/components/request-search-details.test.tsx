@@ -63,4 +63,27 @@ describe('RequestSearch: the details of a picked result', () => {
         expect(url.searchParams.get('provider')).toBe('METRON');
         expect(url.searchParams.has('volId')).toBe(false);
     });
+
+    // The results grid and the volume's issue strip can be long: their covers load as they near the
+    // screen. The picked comic's own cover is on screen at once, so it doesn't wait.
+    it('loads the result and issue-strip covers lazily, and the picked cover at once', async () => {
+        await act(async () => { render(<RequestSearch />); });
+        const input = screen.getByPlaceholderText('Search for a comic series...');
+        await act(async () => { fireEvent.change(input, { target: { value: 'batman' } }); });
+        await act(async () => { fireEvent.submit(input.closest('form')!); });
+        await settle(25);
+
+        const result = screen.getByAltText('Batman');
+        expect(result).toHaveAttribute('loading', 'lazy');
+        expect(result).toHaveAttribute('decoding', 'async');
+
+        await act(async () => { fireEvent.click(result); });
+        await screen.findByText('Gotham needs a hero.');
+
+        // The strip shows the volume's issue under its list name; the picked cover took the details' name.
+        const strip = screen.getByAltText('Batman #1');
+        expect(strip).toHaveAttribute('loading', 'lazy');
+        expect(strip).toHaveAttribute('decoding', 'async');
+        expect(screen.getByAltText('Batman #1: I Am Gotham')).not.toHaveAttribute('loading', 'lazy');
+    });
 });

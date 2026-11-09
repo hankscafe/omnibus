@@ -332,7 +332,7 @@ export function RequestSearch() {
                       
                       <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden border bg-muted shadow-md border-border transition-colors duration-300">
                         {item.image ? (
-                            <img src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-200 ease-out group-hover:scale-105" />
+                            <img loading="lazy" decoding="async" src={item.image} alt={item.name} className="absolute inset-0 w-full h-full object-contain transition-transform duration-200 ease-out group-hover:scale-105" />
                         ) : (
                             <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30">
                                 <ImageIcon className="w-10 h-10 mb-2" />
@@ -606,7 +606,7 @@ export function RequestSearch() {
                                               <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                   {/* --- FIX: Image Fallbacks --- */}
                                                   {issue.image ? (
-                                                      <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
+                                                      <img loading="lazy" decoding="async" src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                   ) : (
                                                       <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30">
                                                           <ImageIcon className="w-6 h-6" />

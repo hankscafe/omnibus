@@ -1798,7 +1798,7 @@ function SeriesContent() {
                                   >
                                       <div className="w-12 h-[68px] shrink-0 rounded overflow-hidden bg-muted border border-border relative">
                                           {book.coverUrl
-                                              ? <img src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
+                                              ? <img loading="lazy" decoding="async" src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
                                               : null}
                                           {owned && <CollectedProgressBadge book={book} />}
                                       </div>
@@ -1861,7 +1861,7 @@ function SeriesContent() {
                                   >
                                       <div className="w-12 h-[68px] shrink-0 rounded overflow-hidden bg-muted border border-border relative">
                                           {book.coverUrl
-                                              ? <img src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
+                                              ? <img loading="lazy" decoding="async" src={book.coverUrl} alt="" className="w-full h-full object-cover" onError={coverImgError(seriesInfo.cover)} />
                                               : null}
                                           {owned && <CollectedProgressBadge book={book} />}
                                       </div>
@@ -1968,7 +1968,7 @@ function SeriesContent() {
                                        </div>
                                     )}
                                     <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border relative">
-                                      {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
+                                      {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}
                                       <div className="absolute top-1 right-1 z-10">{isRead ? <Badge className="bg-green-600 border-0 text-[9px] px-1 h-4"><Check className="w-3 h-3"/></Badge> : issue.readProgress > 0 ? <Badge className="bg-primary border-0 text-primary-foreground text-[9px] px-1 h-4">{Math.round(issue.readProgress)}%</Badge> : null}</div>
                                       {issue.readProgress > 0 && !isRead && <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/50"><div className="h-full bg-primary" style={{ width: `${issue.readProgress}%` }} /></div>}
                                     </div>
@@ -2045,7 +2045,7 @@ function SeriesContent() {
                                                   )}
                                                   <td className="px-4 py-2">
                                                       <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border relative">
-                                                          {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
+                                                          {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className={cn("w-full h-full object-cover", isRead && "opacity-60")} alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           {isRead && <div className="absolute inset-0 flex items-center justify-center bg-green-500/20 z-20"><Check className="w-4 h-4 text-green-500 font-bold"/></div>}
                                                       </div>
                                                   </td>
@@ -2149,7 +2149,7 @@ function SeriesContent() {
                                   const isAlreadyRequested = requestedIds.has(issue.id);
                                   return (
                                       <div key={issue.id} onClick={() => setActiveIssue(issue)} className="flex gap-4 p-4 bg-muted/30 border border-border/50 rounded-xl shadow-sm opacity-80 hover:opacity-100 transition-all cursor-pointer">
-                                        <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
+                                        <div className="w-20 h-28 shrink-0 rounded-md overflow-hidden bg-muted border border-border grayscale">{issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-8 h-8 m-auto mt-10 text-muted-foreground/50" />}</div>
                                         <div className="flex flex-col justify-between flex-1 py-1 min-w-0">
                                             <div><h5 className="font-bold text-base line-clamp-2 text-foreground leading-tight">{issue.name}</h5><span className="text-[10px] mt-1 font-black text-muted-foreground uppercase tracking-widest">{laneLabel(issue)} #{issue.parsedNum}</span></div>
                                             <div className="flex flex-wrap items-center gap-2 mt-3">{isAlreadyRequested ? <Button size="sm" variant="secondary" disabled className="flex-1 h-9 bg-green-50 text-green-700 dark:bg-green-900/20 border-green-200 opacity-100 cursor-not-allowed"><Check className="w-4 h-4 mr-2"/> Queued</Button> : <Button size="sm" variant="outline" className="flex-1 h-9 font-black text-[10px] border-border hover:bg-muted uppercase tracking-wider min-w-[80px]" onClick={(e) => { e.stopPropagation(); handleRequestMissing(issue); }} disabled={isRequesting}>{isRequesting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <CloudDownload className="w-4 h-4 mr-2"/>}Request</Button>}</div>
@@ -2177,7 +2177,7 @@ function SeriesContent() {
                                                   <tr key={issue.id} onClick={() => setActiveIssue(issue)} className={cn("cursor-pointer transition-colors", requestingIds.has(issue.id) ? 'opacity-50' : 'hover:bg-muted/50')}>
                                                       <td className="px-4 py-2">
                                                           <div className="w-10 h-14 bg-muted rounded overflow-hidden flex items-center justify-center shrink-0 border border-border grayscale relative">
-                                                              {issue.coverUrl || seriesInfo.cover ? <img src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
+                                                              {issue.coverUrl || seriesInfo.cover ? <img loading="lazy" decoding="async" src={issue.coverUrl || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-4 h-4 text-muted-foreground/50" />}
                                                           </div>
                                                       </td>
                                                       <td className="px-4 py-3 font-bold">

@@ -209,6 +209,31 @@ describe('Reading Lists page: coming back from the reader (#270)', () => {
         await waitFor(() => expect(scrolledTo).toEqual(['it2']));
     });
 
+    // A list can run to hundreds of entries: their covers load as they near the screen, in either view.
+    // Each entry's cover sits in a fixed-size box, so a late cover never moves the place the way
+    // back from the reader scrolls to.
+    it('loads the entry covers lazily, grouped and flat', async () => {
+        const entryCovers = () => Array.from(document.querySelectorAll('[data-item-id] img'));
+        const first = render(<ReadingListsPage />);
+        fireEvent.click(await crisisGroup());
+        expect(entryCovers()).toHaveLength(3);
+        for (const img of entryCovers()) {
+            expect(img).toHaveAttribute('loading', 'lazy');
+            expect(img).toHaveAttribute('decoding', 'async');
+        }
+        first.unmount();
+
+        window.localStorage.setItem(READING_LIST_VIEW_KEY, 'flat');
+        render(<ReadingListsPage />);
+        await screen.findByText('Issue #2');
+        // Flat lists every entry: the owned ones and the ones not in the library.
+        expect(entryCovers()).toHaveLength(4);
+        for (const img of entryCovers()) {
+            expect(img).toHaveAttribute('loading', 'lazy');
+            expect(img).toHaveAttribute('decoding', 'async');
+        }
+    });
+
     it("an ordinary visit keeps the groups closed and the page at the top", async () => {
         render(<ReadingListsPage />);
         await screen.findByText(/1 \/ 4 read/);

@@ -1034,7 +1034,7 @@ function ReadingListsContent() {
                                                     <div key={item.id} data-testid="reading-list-row" data-item-id={item.id} className="flex items-center gap-4 p-3 bg-background border border-border rounded-xl shadow-sm hover:border-primary/50 transition-all">
                                                         <span className="w-8 text-center font-mono text-xs font-bold text-muted-foreground">{index + 1}</span>
                                                         <div className="w-10 h-14 shrink-0 rounded overflow-hidden bg-muted border border-border">
-                                                            <img src={coverUrl} className={`w-full h-full object-cover ${item.progress?.isRead ? 'opacity-60' : ''}`} alt="" />
+                                                            <img loading="lazy" decoding="async" src={coverUrl} className={`w-full h-full object-cover ${item.progress?.isRead ? 'opacity-60' : ''}`} alt="" />
                                                     </div>
                                                     <div className="flex-1 min-w-0">
                                                         {issue ? (
@@ -1109,7 +1109,7 @@ function ReadingListsContent() {
                                                               </div>
                                                               
                                                               <div className="w-12 h-16 shrink-0 rounded overflow-hidden bg-muted border border-border flex items-center justify-center grayscale">
-                                                                  <img src={coverUrl} className="w-full h-full object-cover" alt="" />
+                                                                  <img loading="lazy" decoding="async" src={coverUrl} className="w-full h-full object-cover" alt="" />
                                                               </div>
 
                                                               <div className="flex-1 min-w-0">
@@ -1154,7 +1154,7 @@ function ReadingListsContent() {
                                                           </div>
                                                           
                                                           <div className="w-12 h-16 shrink-0 rounded overflow-hidden bg-muted border border-border flex items-center justify-center">
-                                                              <img src={coverUrl} className={`w-full h-full object-cover ${item.progress?.isRead ? 'opacity-60' : ''}`} alt="" />
+                                                              <img loading="lazy" decoding="async" src={coverUrl} className={`w-full h-full object-cover ${item.progress?.isRead ? 'opacity-60' : ''}`} alt="" />
                                                           </div>
 
                                                           <div className="flex-1 min-w-0">

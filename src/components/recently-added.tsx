@@ -59,7 +59,7 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
               onClick={() => router.push(`/library/series?path=${encodeURIComponent(item.path)}`)}
             >
               {item.coverUrl ? (
-                  <img src={item.coverUrl} alt={item.name} className="object-cover w-full h-full" />
+                  <img loading="lazy" decoding="async" src={item.coverUrl} alt={item.name} className="object-cover w-full h-full" />
               ) : (
                   <div className="w-full h-full flex items-center justify-center">
                       <ImageIcon className="w-8 h-8 text-muted-foreground/50" />

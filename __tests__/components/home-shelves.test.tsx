@@ -42,6 +42,22 @@ describe('home shelves refresh wiring', () => {
         await waitFor(() => expect(recentCalls()).toHaveLength(2));
     });
 
+    // The shelves are long horizontal strips: their covers load as they near the screen.
+    it.each([
+        ['RecentlyAdded', 'items', () => <RecentlyAdded refreshSignal={0} />],
+        ['RecommendationsShelf', 'series', () => <RecommendationsShelf refreshSignal={0} />],
+    ] as const)('%s covers load lazily', async (_name, key, shelf) => {
+        fetchMock.mockResolvedValue({
+            ok: true,
+            json: async () => ({ [key]: [{ id: 's1', name: 'Alpha', year: 2026, path: '/lib/a', coverUrl: '/api/library/cover?path=%2Flib%2Fa', issueCount: 1 }], basedOn: 'Alpha' }),
+        });
+        const { findByAltText } = render(shelf());
+
+        const img = await findByAltText('Alpha');
+        expect(img).toHaveAttribute('loading', 'lazy');
+        expect(img).toHaveAttribute('decoding', 'async');
+    });
+
     it('RecommendationsShelf re-fetches with no-store when refreshSignal bumps', async () => {
         fetchMock.mockResolvedValue(shelfPayload('series'));
         const { rerender } = render(<RecommendationsShelf refreshSignal={0} />);

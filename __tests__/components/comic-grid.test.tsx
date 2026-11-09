@@ -94,6 +94,27 @@ describe('Component: ComicGrid', () => {
         expect(screen.getAllByTitle('In Library')).toHaveLength(1);
     });
 
+    // The details dialog's strip of the volume's other issues can be long: those covers load as they
+    // near the screen. The dialog's own cover is on screen at once, so it doesn't wait.
+    it('loads the related-issue covers lazily, and the dialog cover at once', async () => {
+        const base = global.fetch as unknown as (url: string) => Promise<unknown>;
+        global.fetch = vi.fn(async (url: string) => url.includes('/api/series-issues')
+            ? { ok: true, json: async () => ({ results: [{ id: 7, name: 'Superman #2', image: 'superman2.jpg', issueNumber: '2' }] }) }
+            : base(url)) as unknown as typeof fetch;
+        render(<ComicGrid title="New Releases" type="new" />);
+        await waitFor(() => expect(screen.getByLabelText('View details for Superman #1')).toBeInTheDocument());
+
+        fireEvent.click(screen.getByLabelText('View details for Superman #1'));
+
+        const related = await screen.findByAltText('Superman #2');
+        expect(related).toHaveAttribute('loading', 'lazy');
+        expect(related).toHaveAttribute('decoding', 'async');
+        // The card in the grid (already lazy) and the dialog's cover share the name; the dialog's is eager.
+        const dialogCover = screen.getAllByAltText('Superman #1').find(img => img.getAttribute('src') === 'superman.jpg' && !img.closest('[aria-label="View details for Superman #1"]'));
+        expect(dialogCover).toBeDefined();
+        expect(dialogCover).not.toHaveAttribute('loading', 'lazy');
+    });
+
     it('should fire a POST request to /api/request when the Request button is clicked in the modal', async () => {
         render(<ComicGrid title="New Releases" type="new" />);
 

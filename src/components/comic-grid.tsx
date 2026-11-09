@@ -588,7 +588,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                               >
                                                 <div className="relative aspect-[2/3] rounded-md overflow-hidden bg-muted border border-border shadow-sm hover:ring-2 hover:ring-primary transition-all">
                                                     {issue.image ? (
-                                                        <img src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
+                                                        <img loading="lazy" decoding="async" src={issue.image} className="absolute inset-0 w-full h-full object-contain" alt={issue.name} />
                                                     ) : (
                                                         <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground/30">
                                                             <ImageIcon className="w-6 h-6" />

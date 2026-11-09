@@ -138,7 +138,7 @@ export async function DELETE(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = session?.user ? (session.user as any).id : 'System';
+    const userId = session?.user ? session.user.id : 'System';
 
     let idsToDelete: string[] = [];
     const { searchParams } = new URL(request.url);

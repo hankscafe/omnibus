@@ -35,13 +35,13 @@ export async function GET(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id;
+        const userId = session?.user?.id;
 
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         // Per-library access: hide list items whose linked issue is in a library the user can't access.
         // Metadata-only items (no linked issue yet) are kept — they're reading-order placeholders, not content.
-        const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+        const accessibleLibs = await getAccessibleLibraryIds(userId, session?.user?.role);
         const itemAccessWhere: Prisma.ReadingListItemWhereInput = accessibleLibs === 'ALL'
             ? {}
             : { OR: [{ issueId: null }, { issue: { series: { libraryId: { in: accessibleLibs } } } }] };
@@ -149,13 +149,13 @@ export async function POST(request: Request) {
         const session = await getServerSession(authOptions);
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
         const { name, description, isGlobal, coverUrl } = await request.json();
 
         if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
         // Only admins and users granted global lists can set the global flag
-        const canMakeGlobal = (session.user as any).role === 'ADMIN' || (session.user as any).canCreateGlobalLists === true;
+        const canMakeGlobal = session.user.role === 'ADMIN' || session.user.canCreateGlobalLists === true;
 
         const newList = await prisma.readingList.create({
             data: {
@@ -189,7 +189,7 @@ export async function DELETE(request: Request) {
         const list = await prisma.readingList.findUnique({ where: { id } });
         if (!list) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-        if (list.userId !== (session.user as any).id && (session.user as any).role !== 'ADMIN') {
+        if (list.userId !== session.user.id && session.user.role !== 'ADMIN') {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 });
         }
 

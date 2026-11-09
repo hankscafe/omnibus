@@ -30,7 +30,7 @@ export async function POST(request: Request) {
             update: { value: runId },
             create: { key: PAGE_SWEEP_CANCEL_KEY, value: runId },
         });
-        await AuditLogger.log('PAGE_SWEEP_CANCELLED', { runId, processedAtRequest: current.processed }, (session.user as any).id);
+        await AuditLogger.log('PAGE_SWEEP_CANCELLED', { runId, processedAtRequest: current.processed }, session.user.id);
         Logger.log(`[Page Sweep] Cancel requested for run ${runId} (stops on the next file boundary).`, 'warn');
         return NextResponse.json({ success: true });
     } catch (error: unknown) {

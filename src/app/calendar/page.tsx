@@ -37,7 +37,7 @@ interface UpcomingIssue {
 export default function CalendarPage() {
     const { data: session, status } = useSession();
     const isAdmin = session?.user?.role === 'ADMIN';
-    const canRequest = isAdmin || (session?.user as any)?.canRequest;
+    const canRequest = isAdmin || session?.user?.canRequest;
 
     // Personal-first since the follow feature landed: the pull list IS the user's calendar. The
     // tracked and global tabs keep their values ("my-pulls" predates the personal tab; renaming

@@ -29,7 +29,7 @@ export async function GET(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    let userId = (session?.user as any)?.id || null;
+    let userId = session?.user?.id || null;
     
     if (!userId && session?.user) {
         const user = await prisma.user.findFirst({ where: { OR: [ ...(session.user.email ? [{ email: session.user.email }] : []), ...(session.user.name ? [{ username: session.user.name }] : []) ] } });
@@ -51,7 +51,7 @@ export async function GET(request: Request) {
     if (!isAuthorized) return NextResponse.json({ error: "Unauthorized path access" }, { status: 403 });
 
     // Per-library access: the folder must live under a library the user has been granted (admins bypass).
-    const accessiblePaths = await getAccessibleLibraryPaths(userId, (session?.user as any)?.role);
+    const accessiblePaths = await getAccessibleLibraryPaths(userId, session?.user?.role);
     if (!canAccessPath(accessiblePaths, folderPath)) {
         return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
     }
@@ -646,7 +646,7 @@ export async function DELETE(request: Request) {
             deletedPhysicalFiles: deleteFiles,
             deletedPaths,
             refusedPaths
-        }, (session.user as any).id);
+        }, session.user.id);
 
         return NextResponse.json({ success: true });
     } catch (error: unknown) {

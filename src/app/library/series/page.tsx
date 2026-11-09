@@ -192,8 +192,8 @@ function SeriesContent() {
   const { toast } = useToast();
 
   const isAdmin = session?.user?.role === 'ADMIN';
-  const canDownload = isAdmin || (session?.user as any)?.canDownload;
-  const canRequest = isAdmin || (session?.user as any)?.canRequest;
+  const canDownload = isAdmin || session?.user?.canDownload;
+  const canRequest = isAdmin || session?.user?.canRequest;
 
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
@@ -381,7 +381,7 @@ function SeriesContent() {
               if (data.reviews) {
                   setReviews(data.reviews);
                   setCommunityRating({ avg: data.avgRating, total: data.total });
-                  const myReview = data.reviews.find((r: any) => r.userId === (session?.user as any)?.id);
+                  const myReview = data.reviews.find((r: any) => r.userId === session?.user?.id);
                   if (myReview) setUserReview({ rating: myReview.rating, text: myReview.text || "" });
               }
           });

@@ -69,7 +69,7 @@ function LibraryIssuesInner() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
-  const canRequest = isAdmin || !!(session?.user as any)?.canRequest;
+  const canRequest = isAdmin || !!session?.user?.canRequest;
   const [requestingIds, setRequestingIds] = useState<Set<string>>(new Set());
   const [requestedIds, setRequestedIds] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);

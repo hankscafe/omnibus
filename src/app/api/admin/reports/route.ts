@@ -41,7 +41,7 @@ export async function PATCH(req: Request) {
             data: { status, adminComment }
         });
 
-        await AuditLogger.log('RESOLVED_ISSUE_REPORT', { reportId: id, status, comment: adminComment }, (session.user as any).id);
+        await AuditLogger.log('RESOLVED_ISSUE_REPORT', { reportId: id, status, comment: adminComment }, session.user.id);
         return NextResponse.json(updated);
     } catch (e: any) {
         // --- SECURITY FIX 1b: Log real error, hide from client ---

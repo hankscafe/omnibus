@@ -14,7 +14,7 @@ import { IMPERSONATION_COOKIE } from '@/lib/impersonation';
 
 export async function POST(req: NextRequest) {
     const token = await getToken({ req });
-    if (!token || (token as any).error) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!token || token.error) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Always: also clears a cookie left behind by an earlier sign-in (it no longer counts, but tidy).
     const cookieStore = await cookies();

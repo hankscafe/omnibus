@@ -40,7 +40,7 @@ export async function GET(request: Request) {
     // Per-library access: the issue's series must be in a library the user has been granted (admins bypass).
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(session?.user?.id, session?.user?.role);
     if (!canAccessLibraryId(accessibleLibs, issue.series?.libraryId)) {
         return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
     }
@@ -342,7 +342,7 @@ export async function PATCH(request: Request) {
                 where: { id: issueId },
                 data: { hasCustomMetadata: false, matchState: 'MATCHED' },
             });
-            await AuditLogger.log('RESTORE_ISSUE_DEFAULTS', { issueId, issueName, scope: 'single' }, (session.user as any).id);
+            await AuditLogger.log('RESTORE_ISSUE_DEFAULTS', { issueId, issueName, scope: 'single' }, session.user.id);
             return NextResponse.json({ success: true, unlocked: true });
         }
 
@@ -364,7 +364,7 @@ export async function PATCH(request: Request) {
             }
             if (normalized !== ((existing as any).coversIssues ?? null)) {
                 await prisma.issue.update({ where: { id: issueId }, data: { coversIssues: normalized } });
-                await AuditLogger.log('UPDATE_ISSUE_COVERAGE', { issueId, issueName, coversIssues: normalized }, (session.user as any).id);
+                await AuditLogger.log('UPDATE_ISSUE_COVERAGE', { issueId, issueName, coversIssues: normalized }, session.user.id);
                 coverageChanged = true;
             }
             const otherKeys = Object.keys(body).filter(k => k !== 'issueId' && k !== 'coversIssues');
@@ -432,7 +432,7 @@ export async function PATCH(request: Request) {
         // Zero changes → zero writes: no lock, no DEEP_SYNCED stamp, no ComicInfo embed. The
         // #194 terminal state was exactly a no-op blank save locking an already-blank row forever.
         if (changedFields.length === 0) {
-            await AuditLogger.log('UPDATE_ISSUE_METADATA', { issueId, issueName, changed: false, wroteToFile: false }, (session.user as any).id);
+            await AuditLogger.log('UPDATE_ISSUE_METADATA', { issueId, issueName, changed: false, wroteToFile: false }, session.user.id);
             return NextResponse.json({ success: true, changed: false, wroteToFile: false });
         }
 
@@ -471,7 +471,7 @@ export async function PATCH(request: Request) {
             issueName,
             changedFields,
             wroteToFile: !!writeToFile
-        }, (session.user as any).id);
+        }, session.user.id);
 
         return NextResponse.json({ success: true, changed: true, changedFields, wroteToFile: !!writeToFile });
     } catch (error: unknown) {
@@ -502,7 +502,7 @@ export async function DELETE(request: Request) {
         await AuditLogger.log('DELETE_ISSUE', { 
             issueId, 
             deletedPhysicalFile: deleteFile ? fullPath : 'None' 
-        }, (session.user as any).id);
+        }, session.user.id);
         
         return NextResponse.json({ success: true });
     } catch (error: unknown) {

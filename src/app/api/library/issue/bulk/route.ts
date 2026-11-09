@@ -23,7 +23,7 @@ export async function PUT(request: Request) {
                 data: { hasCustomMetadata: false }
             });
 
-            await AuditLogger.log('RESTORE_ISSUE_DEFAULTS', { count: updates.length }, (session.user as any).id);
+            await AuditLogger.log('RESTORE_ISSUE_DEFAULTS', { count: updates.length }, session.user.id);
             return NextResponse.json({ success: true, message: "Defaults restored. Please refresh metadata." });
         }
 
@@ -45,7 +45,7 @@ export async function PUT(request: Request) {
         await AuditLogger.log('UPDATE_ISSUE_BULK', {
             updatedCount: updates.length,
             updates: updates.map((u: any) => ({ id: u.id, name: u.name, number: u.number }))
-        }, (session.user as any).id);
+        }, session.user.id);
 
         // #251: the same rule as a single-issue edit - its own toggle wins, otherwise the setting.
         if (updates.length > 0 && await resolveWriteToFile(writeToFile)) {

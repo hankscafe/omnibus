@@ -285,7 +285,7 @@ export async function POST(request: Request) {
 
         await AuditLogger.log('ATTACH_VOLUME', {
             seriesId, seriesName: series.name, metadataSource, volumeId, kind, summary,
-        }, (session.user as any).id);
+        }, session.user.id);
 
         // #203 COLLECTED: this volume may ALREADY be in the library as its own series — the common
         // shape for trades, which ComicVine publishes as one volume per collection. We don't decide
@@ -404,7 +404,7 @@ export async function PUT(request: Request) {
         await AuditLogger.log('ABSORB_SERIES_INTO_ATTACHMENT', {
             attachmentId, sourceSeriesId, sourceName: source.name, parentSeriesId: attachment.seriesId,
             moved, skeletonsReplaced, removedSeries,
-        }, (session.user as any).id);
+        }, session.user.id);
 
         Logger.log(`[Attachments API] Absorbed "${source.name}" into its parent series: ${moved} book(s) moved, ${skeletonsReplaced} skeleton(s) replaced.`, 'info');
         return NextResponse.json({ success: true, moved, skeletonsReplaced, removedSeries });
@@ -476,7 +476,7 @@ export async function PATCH(request: Request) {
         await AuditLogger.log('RETAIN_ATTACHED_SERIES', {
             attachmentId, parentSeriesId: attachment.seriesId, volumeId: attachment.volumeId,
             metadataSource: attachment.metadataSource, keptSeriesId: children[0].id, skeletonsRemoved: skeletonIds.length,
-        }, (session.user as any).id);
+        }, session.user.id);
 
         return NextResponse.json({ success: true, retainedSeries: children[0], skeletonsRemoved: skeletonIds.length });
     } catch (error: unknown) {
@@ -523,7 +523,7 @@ export async function DELETE(request: Request) {
         await AuditLogger.log('DETACH_VOLUME', {
             seriesId: attachment.seriesId, volumeId: attachment.volumeId,
             metadataSource: attachment.metadataSource, skeletonsDeleted, keptIssues: unlinked.count,
-        }, (session.user as any).id);
+        }, session.user.id);
 
         return NextResponse.json({ success: true, keptIssues: unlinked.count, skeletonsDeleted });
     } catch (error: unknown) {

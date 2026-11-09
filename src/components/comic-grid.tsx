@@ -61,7 +61,7 @@ function ComicGridSkeleton({ count = 14 }: { count?: number }) {
 export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const { data: session } = useSession()
   // Admins, or users granted the Request permission, may make requests. Civilians cannot.
-  const canRequest = (session?.user as any)?.role === 'ADMIN' || !!(session?.user as any)?.canRequest
+  const canRequest = session?.user?.role === 'ADMIN' || !!session?.user?.canRequest
   const [comics, setComics] = useState<Comic[]>([])
   const [loading, setLoading] = useState(true)
   
@@ -204,7 +204,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                   { 
                       volumeId: id.toString(), 
                       name: exactIssueName, 
-                      status: (session?.user as any)?.role === 'ADMIN' ? 'PENDING' : 'PENDING_APPROVAL' 
+                      status: session?.user?.role === 'ADMIN' ? 'PENDING' : 'PENDING_APPROVAL' 
                   }
               ]);
           }

@@ -88,7 +88,7 @@ export async function PATCH(request: Request) {
 
         await AuditLogger.log(ignored ? 'IGNORE_SERIES' : 'UNIGNORE_SERIES', {
             seriesIds, updated: result.count,
-        }, (session.user as any).id);
+        }, session.user.id);
 
         Logger.log(`[Unmatched API] ${ignored ? 'Ignored' : 'Restored'} ${result.count} series.`, 'info');
         return NextResponse.json({ success: true, updated: result.count });

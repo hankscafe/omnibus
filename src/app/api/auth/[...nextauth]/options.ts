@@ -153,7 +153,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           let targetRole = "USER";
           let isApproved = oidcAutoApprove;
 
-          const userGroups = Array.isArray((user as any).groups) ? (user as any).groups : [];
+          const userGroups = Array.isArray(user.groups) ? user.groups : [];
           Logger.log(`[SSO Debug] Extracted User Groups: ${JSON.stringify(userGroups)}. Checking against Admin Group: "${oidcAdminGroup}" and User Group: "${oidcUserGroup}"`, 'debug');
           const hasAdminGroup = oidcAdminGroup && userGroups.includes(oidcAdminGroup);
           const hasUserGroup = oidcUserGroup && userGroups.includes(oidcUserGroup);
@@ -214,13 +214,13 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
 
           if (!dbUser.isApproved) return false;
           user.id = dbUser.id;
-          (user as any).role = dbUser.role;
-          (user as any).autoApproveRequests = dbUser.autoApproveRequests;
-          (user as any).canRequest = dbUser.canRequest;
-          (user as any).canDownload = dbUser.canDownload;
-          (user as any).canCreateGlobalLists = dbUser.canCreateGlobalLists;
+          user.role = dbUser.role;
+          user.autoApproveRequests = dbUser.autoApproveRequests;
+          user.canRequest = dbUser.canRequest;
+          user.canDownload = dbUser.canDownload;
+          user.canCreateGlobalLists = dbUser.canCreateGlobalLists;
           user.image = dbUser.avatar; 
-          (user as any).sessionVersion = dbUser.sessionVersion; 
+          user.sessionVersion = dbUser.sessionVersion; 
           return true;
         }
         return false;
@@ -228,13 +228,13 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       async jwt({ token, user, trigger, session }) {
         if (user) {
           token.id = user.id;
-          token.role = (user as any).role;
-          token.autoApproveRequests = (user as any).autoApproveRequests;
-          token.canRequest = (user as any).canRequest;
-          token.canDownload = (user as any).canDownload;
-          token.canCreateGlobalLists = (user as any).canCreateGlobalLists;
+          token.role = user.role;
+          token.autoApproveRequests = user.autoApproveRequests;
+          token.canRequest = user.canRequest;
+          token.canDownload = user.canDownload;
+          token.canCreateGlobalLists = user.canCreateGlobalLists;
           token.picture = user.image;
-          token.sessionVersion = (user as any).sessionVersion;
+          token.sessionVersion = user.sessionVersion;
           token.lastActive = Date.now();
           token.lastSessionCheck = Date.now();
           // An impersonation cookie counts only if it was issued after this — signing out and back
@@ -341,11 +341,11 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       async session({ session, token }) {
         if (token.error === "SessionExpired") return { ...session, user: undefined, error: "SessionExpired" } as any;
         if (session?.user) {
-          (session.user as any).id = token.id; (session.user as any).role = token.role;
-          (session.user as any).autoApproveRequests = token.autoApproveRequests; (session.user as any).canDownload = token.canDownload;
-          (session.user as any).canRequest = token.canRequest;
-          (session.user as any).canCreateGlobalLists = token.canCreateGlobalLists;
-          (session.user as any).isImpersonating = token.isImpersonating;
+          session.user.id = token.id; session.user.role = token.role;
+          session.user.autoApproveRequests = token.autoApproveRequests; session.user.canDownload = token.canDownload;
+          session.user.canRequest = token.canRequest;
+          session.user.canCreateGlobalLists = token.canCreateGlobalLists;
+          session.user.isImpersonating = token.isImpersonating;
           let pic = token.picture as string | null;
           if (pic && !pic.startsWith('/') && !pic.startsWith('http')) pic = `/${pic}`;
           session.user.image = pic || null;

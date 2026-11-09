@@ -39,7 +39,7 @@ export async function GET(request: Request) {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
 
-        let userId = (session?.user as any)?.id;
+        let userId = session?.user?.id;
         if (!userId && session?.user?.email) {
             const user = await prisma.user.findUnique({ where: { email: session.user.email } });
             userId = user?.id;
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
 
-        let userId = (session?.user as any)?.id;
+        let userId = session?.user?.id;
         if (!userId && session?.user?.email) {
             const user = await prisma.user.findUnique({ where: { email: session.user.email } });
             userId = user?.id;

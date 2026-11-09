@@ -17,7 +17,7 @@ export async function GET() {
   try {
     // Defense-in-depth behind the middleware /api/admin/* gate — enforce admin in-handler too.
     const session = await getServerSession(await getAuthOptions());
-    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
     const clients = await prisma.downloadClient.findMany();
     if (clients.length === 0) {

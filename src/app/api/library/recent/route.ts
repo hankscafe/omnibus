@@ -12,7 +12,7 @@ export async function GET() {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
+        const accessibleLibs = await getAccessibleLibraryIds(session?.user?.id, session?.user?.role);
         // "Recently added" = newest ISSUE import per series, so new files landing in an existing
         // series bump it to the front (series-row order only moved on brand-new series). By arrival
         // (Issue.fileAddedAt, #206 follow-up): a download filling a monitored placeholder keeps the

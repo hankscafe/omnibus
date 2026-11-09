@@ -282,7 +282,7 @@ function LibraryContent() {
 
   const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
 
-  const isAdmin = (session?.user as any)?.role === 'ADMIN'
+  const isAdmin = session?.user?.role === 'ADMIN'
 
   const filtersRef = useRef({
       search: debouncedSearch, type: searchType, library: libraryFilter, pub: publisherFilter,
@@ -1603,7 +1603,7 @@ function LibraryContent() {
                   <Input id="bulk-new-list-desc" placeholder="e.g. A collection of my favorite comics." value={newCollectionDesc} className="bg-background h-12 sm:h-10 border-border" onChange={e => setNewCollectionDesc(e.target.value)} />
                 </div>
             )}
-            {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+            {(isAdmin || session?.user?.canCreateGlobalLists) && (
                   <div className="flex items-center gap-3 mt-2 p-3 bg-muted border border-border rounded-lg">
                       <Switch id="global-list-toggle-bulk" checked={isGlobalList} onCheckedChange={setIsGlobalList} />
                       <div className="grid gap-0.5">
@@ -1751,7 +1751,7 @@ function LibraryContent() {
               {!selectedCollectionId && (
                   <div className="space-y-2"><Label htmlFor="col-desc-single">List Description (Optional)</Label><Input id="col-desc-single" placeholder="e.g. A collection of my favorite comics." value={newCollectionDesc} className="bg-background border-border h-12 sm:h-10" onChange={e => setNewCollectionDesc(e.target.value)} /></div>
               )}
-              {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+              {(isAdmin || session?.user?.canCreateGlobalLists) && (
                   <div className="flex items-center gap-3 mt-2 p-3 bg-muted border border-border rounded-lg">
                       <Switch id="global-list-toggle" checked={isGlobalList} onCheckedChange={setIsGlobalList} />
                       <div className="grid gap-0.5">

@@ -20,7 +20,7 @@ export async function POST(request: Request) {
         const result = await removePagesFromIssue(
             body.issueId,
             Array.isArray(body.entryNames) ? body.entryNames : [],
-            (session.user as any).id,
+            session.user.id,
         );
         if (!result.ok) {
             return NextResponse.json({ error: result.error }, { status: result.status });

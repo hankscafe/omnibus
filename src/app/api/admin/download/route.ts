@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
 
     const body = await req.json();
     const { guid, downloadUrl, title, protocol, requestId, infoHash } = body; 

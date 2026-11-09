@@ -9,7 +9,7 @@ import { Logger } from '@/lib/logger';
 export async function POST(request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { listId } = await request.json();
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
         const list = await prisma.readingList.findUnique({ where: { id: listId } });
         
         // Safely check for Admin role
-        const isAdmin = (session?.user as any)?.role === 'ADMIN';
+        const isAdmin = session?.user?.role === 'ADMIN';
         
         // Consider it public if it has the new isGlobal flag OR the legacy userId = null
         const isPublic = list?.isGlobal === true || list?.userId === null;

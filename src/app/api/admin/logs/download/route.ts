@@ -31,7 +31,7 @@ export async function GET() {
 
         const fileBuffer = fs.readFileSync(logFile);
 
-        await AuditLogger.log('DOWNLOADED_SYSTEM_LOGS', "Raw system log file exported.", (session.user as any).id);
+        await AuditLogger.log('DOWNLOADED_SYSTEM_LOGS', "Raw system log file exported.", session.user.id);
 
         return new NextResponse(fileBuffer, {
             headers: {

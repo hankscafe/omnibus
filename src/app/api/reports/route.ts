@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id;
+        const userId = session?.user?.id;
 
         if (!session || !userId) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
             await SystemNotifier.sendAlert('issue_reported', {
                 title: series?.name || 'Unknown Series',
                 description,
-                user: (session.user as any)?.name || 'A user',
+                user: session.user?.name || 'A user',
                 imageUrl: series?.coverUrl || null,
                 publisher: series?.publisher || null,
                 year: series?.year ? String(series.year) : null,

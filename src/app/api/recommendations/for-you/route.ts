@@ -35,7 +35,7 @@ interface ForYouItem {
 export async function GET(request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id as string | undefined;
+    const userId = session?.user?.id as string | undefined;
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     try {

@@ -17,8 +17,8 @@ const PAGE_SIZE = 24;
 export default function ForYouPage() {
   const { data: session } = useSession();
   const { toast } = useToast();
-  const isAdmin = (session?.user as any)?.role === 'ADMIN';
-  const canRequest = isAdmin || !!(session?.user as any)?.canRequest;
+  const isAdmin = session?.user?.role === 'ADMIN';
+  const canRequest = isAdmin || !!session?.user?.canRequest;
 
   const [items, setItems] = useState<ForYouItem[]>([]);
   const [seeds, setSeeds] = useState<ForYouSeed[]>([]);

@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
 
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     }
 
     // Per-library access: a non-admin may only add content from libraries they've been granted.
-    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(userId, session?.user?.role);
 
     if (action === 'add') {
       const lastItem = await prisma.readingListItem.findFirst({
@@ -109,7 +109,7 @@ export async function PUT(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id;
+        const userId = session?.user?.id;
   
         if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   

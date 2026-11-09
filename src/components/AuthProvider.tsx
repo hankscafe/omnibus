@@ -64,7 +64,7 @@ export function SessionExpiryGuard() {
   fireRef.current = fire;
 
   useEffect(() => {
-    if (sessionLooksExpired(status, (session as any)?.error, hadUserRef.current)) fireRef.current();
+    if (sessionLooksExpired(status, session?.error, hadUserRef.current)) fireRef.current();
   }, [status, session]);
 
   // The 401 net. Wraps window.fetch for this page's life; the caller still receives its response.

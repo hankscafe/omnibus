@@ -33,7 +33,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { seriesId, rating, text } = await request.json();

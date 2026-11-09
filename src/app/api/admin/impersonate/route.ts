@@ -20,7 +20,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        const adminId = (session.user as any).id;
+        const adminId = session.user.id;
         const { userId, action } = await request.json();
         
         // SECURITY FIX: Mandatory secret check for signing cookies

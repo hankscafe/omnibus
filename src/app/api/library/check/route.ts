@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     // Per-library access: a match only counts as "owned" if it lives in a library the user can access.
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(session?.user?.id, session?.user?.role);
 
     const [seriesMatch, issueMatch] = await Promise.all([
       prisma.series.findFirst({

@@ -74,7 +74,7 @@ export async function POST(request: Request) {
                 syncKeyHash,
                 prefix,
                 userId,
-                createdById: (session.user as any).id,
+                createdById: session.user.id,
                 expiresAt
             },
             include: {
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
             }
         });
 
-        await AuditLogger.log('CREATED_ADMIN_API_KEY', { keyName: name, assignedTo: apiKey.user.username }, (session.user as any).id);
+        await AuditLogger.log('CREATED_ADMIN_API_KEY', { keyName: name, assignedTo: apiKey.user.username }, session.user.id);
         
         // Strip keyHash and syncKeyHash out before sending to the client
         const { keyHash: _, syncKeyHash: __, ...safeKey } = apiKey;
@@ -112,7 +112,7 @@ export async function DELETE(request: Request) {
         await prisma.apiKey.delete({ where: { id } });
         
         // --- AUDIT LOG ---
-        await AuditLogger.log('REVOKE_API_KEY', { keyId: id }, (session.user as any).id);
+        await AuditLogger.log('REVOKE_API_KEY', { keyId: id }, session.user.id);
 
         return NextResponse.json({ success: true });
     } catch (error) {

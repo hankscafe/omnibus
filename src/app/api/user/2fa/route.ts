@@ -22,7 +22,7 @@ export async function GET(_req: Request) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         const user = await prisma.user.findUnique({
-            where: { id: (session.user as any).id },
+            where: { id: session.user.id },
             select: { twoFactorEnabled: true }
         });
 
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
         const session = await getServerSession(authOptions);
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
         
         // Prevent brute forcing the TOTP endpoint
         rateLimit = checkRateLimit(`2fa_${userId}`, 5, 15 * 60 * 1000);

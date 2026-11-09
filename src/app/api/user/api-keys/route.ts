@@ -17,7 +17,7 @@ export async function GET() {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     try {
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
         
         // Use the new dedicated table!
         const opdsKeys = await prisma.opdsKey.findMany({
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
         const { name } = await request.json();
         if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
 
         const rawKey = 'omn_' + crypto.randomBytes(32).toString('hex');
         const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
@@ -90,7 +90,7 @@ export async function DELETE(request: Request) {
         const id = searchParams.get('id');
         if (!id) return NextResponse.json({ error: "Missing ID" }, { status: 400 });
 
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
 
         const key = await prisma.opdsKey.findUnique({ where: { id } });
         if (!key || key.userId !== userId) {

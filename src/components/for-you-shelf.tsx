@@ -252,8 +252,8 @@ const SHELF_SIZE = 7;
 
 export function ForYouShelf({ refreshSignal = 0 }: { refreshSignal?: number }) {
   const { data: session } = useSession();
-  const isAdmin = (session?.user as any)?.role === 'ADMIN';
-  const canRequest = isAdmin || !!(session?.user as any)?.canRequest;
+  const isAdmin = session?.user?.role === 'ADMIN';
+  const canRequest = isAdmin || !!session?.user?.canRequest;
   const [items, setItems] = useState<ForYouItem[]>([]);
   const [loading, setLoading] = useState(true);
   const { busy, monitor, dismiss } = useForYouActions(setItems);

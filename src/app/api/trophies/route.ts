@@ -81,14 +81,14 @@ export async function POST(req: Request) {
             if (iconUrl) data.iconUrl = iconUrl;
             const updated = await prisma.trophy.update({ where: { id }, data });
 
-            await AuditLogger.log('UPDATE_TROPHY', { trophyId: updated.id, name }, (session.user as any).id);
+            await AuditLogger.log('UPDATE_TROPHY', { trophyId: updated.id, name }, session.user.id);
             return NextResponse.json(updated);
         } else {
             const created = await prisma.trophy.create({
                 data: { name, description, actionType, targetValue, iconUrl }
             });
             
-            await AuditLogger.log('CREATE_TROPHY', { trophyId: created.id, name }, (session.user as any).id);
+            await AuditLogger.log('CREATE_TROPHY', { trophyId: created.id, name }, session.user.id);
             return NextResponse.json(created);
         }
     } catch (e: any) {
@@ -109,7 +109,7 @@ export async function DELETE(req: Request) {
         if (id) {
             const trophy = await prisma.trophy.findUnique({ where: { id } });
             await prisma.trophy.delete({ where: { id } });
-            await AuditLogger.log('DELETE_TROPHY', { trophyId: id, name: trophy?.name }, (session.user as any).id);
+            await AuditLogger.log('DELETE_TROPHY', { trophyId: id, name: trophy?.name }, session.user.id);
         }
         return NextResponse.json({ success: true });
     } catch (e: any) {

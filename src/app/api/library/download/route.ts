@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     const session = await getServerSession(authOptions);
 
     let user = null;
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
     if (userId) {
         user = await prisma.user.findUnique({ where: { id: userId } });
     } else if (session?.user?.email) {

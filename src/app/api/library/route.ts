@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id || null;
+    const userId = session?.user?.id || null;
 
     if (!userId) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
     const where: any = { AND: [] };
 
     // Per-library access: non-admins only see series in their granted libraries (admins bypass).
-    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(userId, session?.user?.role);
     if (accessibleLibs !== 'ALL') where.AND.push({ libraryId: { in: accessibleLibs } });
 
     if (libraryFilterParam === 'COMICS') where.AND.push({ isManga: false });
@@ -351,7 +351,7 @@ export async function POST(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id;
+        const userId = session?.user?.id;
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         const body = await request.json();
@@ -452,7 +452,7 @@ export async function DELETE(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id;
+        const userId = session?.user?.id;
         
         if (session?.user?.role !== 'ADMIN') {
             return NextResponse.json({ error: "Unauthorized. Admin required." }, { status: 403 });

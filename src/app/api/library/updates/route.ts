@@ -22,10 +22,10 @@ export async function GET() {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(userId, session?.user?.role);
     const cutoff = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
     // Arrival time (Issue.fileAddedAt, #206 follow-up), not createdAt: a monitored download fills a

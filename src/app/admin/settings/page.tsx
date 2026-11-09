@@ -414,7 +414,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
       if (session?.user?.id && !newKeyUserId && users.length > 0) {
-          setNewKeyUserId((session.user as any).id);
+          setNewKeyUserId(session.user.id);
       }
   }, [session, users, newKeyUserId]);
 
@@ -838,7 +838,7 @@ export default function SettingsPage() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                   name: newKeyName,
-                  userId: newKeyUserId || (session?.user as any)?.id,
+                  userId: newKeyUserId || session?.user?.id,
                   expiresInDays: parseInt(newKeyExpiration)
               })
           });

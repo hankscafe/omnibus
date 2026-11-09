@@ -38,7 +38,7 @@ export async function POST(request: Request) {
             Logger.log(`[Repack API] Failed to contact Rust Engine: ${getErrorMessage(e)}`, 'error');
         }
 
-        await AuditLogger.log('REPACK_ARCHIVES_QUEUED_IN_RUST', { seriesIds }, (session.user as any).id);
+        await AuditLogger.log('REPACK_ARCHIVES_QUEUED_IN_RUST', { seriesIds }, session.user.id);
 
         return NextResponse.json({ success: true, message: "Repacking job queued in Rust Engine." });
     } catch (error: unknown) {

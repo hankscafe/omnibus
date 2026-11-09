@@ -132,7 +132,7 @@ export async function POST(request: Request) {
         await AuditLogger.log(
             'DATABASE_RESTORE', 
             { message: "State overwritten from backup." }, 
-            session?.user ? (session.user as any).id : 'System'
+            session?.user ? session.user.id : 'System'
         );
 
         // A folder the server can't use doesn't block the restore: a backup moved from a native

@@ -113,7 +113,7 @@ export async function POST(request: Request) {
         if (session?.user?.role !== 'ADMIN') {
             return NextResponse.json({ error: "Unauthorized." }, { status: 403 });
         }
-        userId = (session.user as any).id;
+        userId = session.user.id;
     } else {
         const userCount = await prisma.user.count();
         if (userCount === 0) {

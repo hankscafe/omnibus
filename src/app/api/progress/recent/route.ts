@@ -12,7 +12,7 @@ export async function GET(_request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
     
-    let userId = (session?.user as any)?.id || null;
+    let userId = session?.user?.id || null;
     
     if (!userId && session?.user) {
         const sessionEmail = session.user.email;

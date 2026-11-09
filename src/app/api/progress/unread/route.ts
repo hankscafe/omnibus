@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
     
     // 1. Authenticate the User
-    let userId = (session?.user as any)?.id || null;
+    let userId = session?.user?.id || null;
     
     if (!userId && session?.user) {
         const sessionEmail = session.user.email;

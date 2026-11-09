@@ -22,7 +22,7 @@ async function parseBody(request: Request): Promise<{ volumeId: string; source: 
 export async function POST(request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id as string | undefined;
+    const userId = session?.user?.id as string | undefined;
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const parsed = await parseBody(request);
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id as string | undefined;
+    const userId = session?.user?.id as string | undefined;
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const parsed = await parseBody(request);

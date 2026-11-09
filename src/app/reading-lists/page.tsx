@@ -1225,7 +1225,7 @@ function ReadingListsContent() {
                     <Label>Description (Optional)</Label>
                     <Input placeholder="e.g. A custom list of great stories." value={newListDesc} onChange={e => setNewListDesc(e.target.value)} className="bg-background border-border" />
                 </div>
-                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                {(isAdmin || session?.user?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-muted border border-border rounded-lg">
                         <Switch id="global-toggle" checked={isGlobal} onCheckedChange={setIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1284,7 +1284,7 @@ function ReadingListsContent() {
                         : "Find the ID in the URL of the event on Metron.Cloud (e.g. /arc/52/)"}
                 </p>
 
-                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                {(isAdmin || session?.user?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="auto-global-toggle" checked={autoBuildGlobal} onCheckedChange={setAutoBuildGlobal} />
                         <div className="grid gap-0.5">
@@ -1294,7 +1294,7 @@ function ReadingListsContent() {
                     </div>
                 )}
 
-                {(isAdmin || (session?.user as any)?.canRequest) && (
+                {(isAdmin || session?.user?.canRequest) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="auto-add-missing-toggle" checked={autoBuildAddMissing} onCheckedChange={setAutoBuildAddMissing} />
                         <div className="grid gap-0.5">
@@ -1358,7 +1358,7 @@ function ReadingListsContent() {
                     />
                 </div>
 
-                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                {(isAdmin || session?.user?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="csv-global-toggle" checked={csvIsGlobal} onCheckedChange={setCsvIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1449,7 +1449,7 @@ function ReadingListsContent() {
                     />
                 </div>
 
-                {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                {(isAdmin || session?.user?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 mt-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="cbl-global-toggle" checked={cblIsGlobal} onCheckedChange={setCblIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1491,7 +1491,7 @@ function ReadingListsContent() {
                           <p className="text-[10px] text-muted-foreground">Omnibus will queue missing titles for download.</p>
                       </div>
                   </div>
-                  {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                  {(isAdmin || session?.user?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="anilist-global-toggle" checked={aniListIsGlobal} onCheckedChange={setAniListIsGlobal} />
                         <div className="grid gap-0.5">
@@ -1533,7 +1533,7 @@ function ReadingListsContent() {
                           <p className="text-[10px] text-muted-foreground">Omnibus will queue missing titles for download.</p>
                       </div>
                   </div>
-                  {(isAdmin || (session?.user as any)?.canCreateGlobalLists) && (
+                  {(isAdmin || session?.user?.canCreateGlobalLists) && (
                     <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                         <Switch id="mal-global-toggle" checked={malIsGlobal} onCheckedChange={setMalIsGlobal} />
                         <div className="grid gap-0.5">

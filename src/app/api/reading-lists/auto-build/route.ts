@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id;
+        const userId = session?.user?.id;
 
         const body = await request.json();
         const eventId = body.eventId || body.cvEventId;
@@ -121,7 +121,7 @@ export async function POST(request: Request) {
 
         // 3. Create the List in Omnibus
         Logger.log(`[Auto-Build] Creating Reading List database entry for "${eventName}"...`, 'info');
-        const canMakeGlobal = (session?.user as any)?.role === 'ADMIN' || (session?.user as any)?.canCreateGlobalLists === true;
+        const canMakeGlobal = session?.user?.role === 'ADMIN' || session?.user?.canCreateGlobalLists === true;
 
         const newList = await prisma.readingList.create({
             data: {

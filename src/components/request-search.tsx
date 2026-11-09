@@ -62,7 +62,7 @@ interface Issue {
 export function RequestSearch() {
   const { data: session } = useSession()
   // Admins, or users granted the Request permission, may make requests. Civilians cannot.
-  const canRequest = (session?.user as any)?.role === 'ADMIN' || !!(session?.user as any)?.canRequest
+  const canRequest = session?.user?.role === 'ADMIN' || !!session?.user?.canRequest
   const [open, setOpen] = useState(false)
   const [homeQuery, setHomeQuery] = useState("")
   const [searchSort, setSearchSort] = useState("relevance")
@@ -241,7 +241,7 @@ export function RequestSearch() {
                 { 
                     volumeId: id.toString(), 
                     name: exactIssueName, 
-                    status: (session?.user as any)?.role === 'ADMIN' ? 'PENDING' : 'PENDING_APPROVAL' 
+                    status: session?.user?.role === 'ADMIN' ? 'PENDING' : 'PENDING_APPROVAL' 
                 }
             ]);
         }

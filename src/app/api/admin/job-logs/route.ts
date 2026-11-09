@@ -12,7 +12,7 @@ export async function GET() {
   try {
     // Defense-in-depth behind the middleware /api/admin/* gate.
     const session = await getServerSession(await getAuthOptions());
-    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
     // Stuck-job auto-heal lives in the 60s cron tick now (lib/job-heal.ts) — this route is
     // polled every 3 seconds by the admin UI, and a write here contended with the engine's
@@ -33,8 +33,8 @@ export async function DELETE(request: Request) {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-    const userId = (session?.user as any)?.id;
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    const userId = session?.user?.id;
     const { searchParams } = new URL(request.url);
     const days = searchParams.get('days');
 

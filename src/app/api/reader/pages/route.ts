@@ -35,7 +35,7 @@ export async function GET(request: Request) {
     // archive in any library — including ones they were never granted.
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const accessiblePaths = await getAccessibleLibraryPaths((session?.user as any)?.id, (session?.user as any)?.role);
+    const accessiblePaths = await getAccessibleLibraryPaths(session?.user?.id, session?.user?.role);
     if (!canAccessPath(accessiblePaths, filePath)) {
       return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
     }

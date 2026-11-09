@@ -41,7 +41,7 @@ export async function GET(_request: Request) {
         await AuditLogger.log('CLEANUP_DUPLICATE_SERIES', { 
             deletedCount: idsToDelete.length, 
             series: duplicatesToDelete.map(s => s.name) 
-        }, (session.user as any).id);
+        }, session.user.id);
         
         Logger.log(`[Cleanup] Removed ${idsToDelete.length} duplicate local series records.`, 'success');
     }

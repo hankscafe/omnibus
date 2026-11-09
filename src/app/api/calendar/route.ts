@@ -23,8 +23,8 @@ export async function GET(request: Request) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         // Per-library access: non-admins only see calendar entries from libraries they've been granted.
-        const userId = (session.user as any).id;
-        const accessibleLibs = await getAccessibleLibraryIds(userId, (session.user as any).role);
+        const userId = session.user.id;
+        const accessibleLibs = await getAccessibleLibraryIds(userId, session.user.role);
         const seriesAccess = accessibleLibs !== 'ALL' ? { libraryId: { in: accessibleLibs } } : {};
 
         const { searchParams } = new URL(request.url);

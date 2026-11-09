@@ -89,7 +89,7 @@ export async function GET(request: Request) {
     // Per-library access: the file must live under a library the user has been granted (admins bypass).
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const accessiblePaths = await getAccessibleLibraryPaths((session?.user as any)?.id, (session?.user as any)?.role);
+    const accessiblePaths = await getAccessibleLibraryPaths(session?.user?.id, session?.user?.role);
     if (!canAccessPath(accessiblePaths, filePath)) {
       return new NextResponse("You don't have access to this library.", { status: 403 });
     }

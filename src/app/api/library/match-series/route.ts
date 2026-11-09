@@ -270,7 +270,7 @@ export async function POST(request: Request) {
         } catch (e) {
             Logger.log(`[Match Series] Couldn't queue the series.json export: ${getErrorMessage(e)}`, 'warn');
         }
-        const actorId = (session?.user as any)?.id;
+        const actorId = session?.user?.id;
         if (actorId) {
             await AuditLogger.log('MATCH_SERIES_AS_COLLECTED', {
                 oldPath: oldFolderPath, attachedTo: owner.id, attachedToName: owner.name, metadataSource: targetSource, volumeId: targetMetaId,
@@ -717,7 +717,7 @@ export async function POST(request: Request) {
                                     // sidecar cover above is already saved for display.
                                     if (issueCoverEmbed === true) {
                                         const { embedUploadedCoverIntoArchive } = await import('@/lib/pages/insert-cover-core');
-                                        const embedOutcome = await embedUploadedCoverIntoArchive(finalIssueId, (session?.user as any)?.id, 'matcher');
+                                        const embedOutcome = await embedUploadedCoverIntoArchive(finalIssueId, session?.user?.id, 'matcher');
                                         if (!embedOutcome.ok) {
                                             Logger.log(`[Match Series] Cover saved but embedding into the archive failed for ${finalIssueId}: ${embedOutcome.error}`, 'warn');
                                         }
@@ -816,7 +816,7 @@ export async function POST(request: Request) {
         Logger.log(`[Match Series] Completed with ${conflicts} duplicate-file conflict(s) — left in place, not overwritten.`, 'warn');
     }
 
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
     if (userId) {
         await AuditLogger.log('MATCH_SERIES', { oldPath: oldFolderPath, newPath: activeFolderPath, conflicts }, userId);
     }

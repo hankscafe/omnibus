@@ -59,7 +59,7 @@ export async function POST(req: Request) {
             resetLink 
         });
 
-        await AuditLogger.log('ADMIN_SENT_PASSWORD_RESET', { targetUser: user.username }, (session.user as any).id);
+        await AuditLogger.log('ADMIN_SENT_PASSWORD_RESET', { targetUser: user.username }, session.user.id);
 
         return NextResponse.json({ success: true });
     } catch (error: unknown) {

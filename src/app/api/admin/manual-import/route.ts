@@ -38,7 +38,7 @@ export async function POST(request: Request) {
 
     if (success) {
       if (session?.user) {
-        await AuditLogger.log('MANUAL_IMPORT_TRIGGERED', { requestId, torrentName }, (session.user as any).id);
+        await AuditLogger.log('MANUAL_IMPORT_TRIGGERED', { requestId, torrentName }, session.user.id);
       }
       return NextResponse.json({ success: true, message: "Import successful" });
     } else {

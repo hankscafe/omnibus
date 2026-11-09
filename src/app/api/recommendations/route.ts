@@ -12,12 +12,12 @@ export const dynamic = 'force-dynamic';
 export async function GET(_request: Request) {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const userId = (session?.user as any)?.id;
+    const userId = session?.user?.id;
 
     if (!userId) return NextResponse.json({ series: [], basedOn: null });
 
     // Per-library access: only recommend series from libraries the user has been granted.
-    const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(userId, session?.user?.role);
 
     try {
         // Seed rotation: collapse the last reads to DISTINCT series and pick by day bucket, so the

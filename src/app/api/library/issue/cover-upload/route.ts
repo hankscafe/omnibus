@@ -65,7 +65,7 @@ export async function POST(request: Request) {
         await AuditLogger.log('UPLOAD_ISSUE_COVER', {
             issueId: issue.id,
             issueName: `${issue.series?.name || ''} #${issue.number}`
-        }, (session.user as any).id);
+        }, session.user.id);
 
         // Issue #189 follow-up: optionally bake the uploaded cover INTO the archive as page 0
         // (insert-only — a superseded old cover page is removed via the Page Manager). The shared
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
         // upload: the sidecar cover above is already saved for display.
         let embedResult: Awaited<ReturnType<typeof embedUploadedCoverIntoArchive>> | null = null;
         if (body?.embedInArchive === true) {
-            embedResult = await embedUploadedCoverIntoArchive(issue.id, (session.user as any).id, 'upload');
+            embedResult = await embedUploadedCoverIntoArchive(issue.id, session.user.id, 'upload');
         }
 
         return NextResponse.json({
@@ -168,7 +168,7 @@ export async function DELETE(request: Request) {
             issueId: issue.id,
             issueName: `${issue.series?.name || ''} #${issue.number}`,
             restored: !!newCoverUrl
-        }, (session.user as any).id);
+        }, session.user.id);
 
         return NextResponse.json({ success: true, coverUrl: newCoverUrl });
     } catch (error: unknown) {

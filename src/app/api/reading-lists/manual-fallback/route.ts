@@ -11,7 +11,7 @@ export async function POST(request: Request) {
         const session = await getServerSession(authOptions);
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
 
         // Flagging an unmatched list item for admin download is still a request — gate it.
         const requester = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, canRequest: true } });

@@ -115,7 +115,7 @@ export async function POST(request: Request) {
             targetSeriesId: target.id,
             targetSeriesName: target.name,
             createdNewSeries: !targetSeriesId,
-        }, (session.user as any).id);
+        }, session.user.id);
 
         return NextResponse.json({ success: true, moved, conflicts: conflicts.length, targetSeriesId: target.id, targetName: target.name });
     } catch (error: unknown) {

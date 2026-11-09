@@ -9,8 +9,8 @@ export async function middleware(req: NextRequest) {
   // an idle-beyond-window token may exist in a cookie that was never rewritten (no client refetch
   // ran). Both must be treated as logged out server-side, not just by the client-side signOut.
   const isAuth = !!token
-    && !(token as any).error
-    && !isInactivityExpired(windowRole(token as any), (token as any).lastActive)
+    && !token.error
+    && !isInactivityExpired(windowRole(token), token.lastActive)
 
   const pathname = req.nextUrl.pathname
   const isAuthPage = pathname.startsWith('/login')

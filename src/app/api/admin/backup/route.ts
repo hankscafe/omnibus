@@ -115,7 +115,7 @@ export async function GET() {
             }
         });
 
-        await AuditLogger.log('DOWNLOADED_DATABASE_BACKUP', "Full database backup exported.", (session.user as any).id);
+        await AuditLogger.log('DOWNLOADED_DATABASE_BACKUP', "Full database backup exported.", session.user.id);
 
         return new NextResponse(stream, {
             status: 200,

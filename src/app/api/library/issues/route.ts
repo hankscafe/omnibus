@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     try {
         const authOptions = await getAuthOptions();
         const session = await getServerSession(authOptions);
-        const userId = (session?.user as any)?.id || null;
+        const userId = session?.user?.id || null;
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
         const { searchParams } = new URL(request.url);
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
 
         // Series-level constraints (publisher / era / library + per-library access) traverse the relation.
         const seriesWhere: any = {};
-        const accessibleLibs = await getAccessibleLibraryIds(userId, (session?.user as any)?.role);
+        const accessibleLibs = await getAccessibleLibraryIds(userId, session?.user?.role);
         if (accessibleLibs !== 'ALL') seriesWhere.libraryId = { in: accessibleLibs };
         if (library === 'COMICS') seriesWhere.isManga = false;
         else if (library === 'MANGA') seriesWhere.isManga = true;

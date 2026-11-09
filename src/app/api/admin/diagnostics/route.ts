@@ -20,7 +20,7 @@ export async function POST(request: Request) {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-        const userId = (session.user as any).id;
+        const userId = session.user.id;
         const { action, payload } = await request.json();
 
         // --- RUST OFFLOADED SCAN: GHOST RECORDS ---

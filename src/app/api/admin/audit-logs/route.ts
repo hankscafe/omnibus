@@ -39,7 +39,7 @@ export async function DELETE(request: Request) {
     try {
         const { searchParams } = new URL(request.url);
         const days = searchParams.get('days');
-        const currentUserId = (session?.user as any)?.id;
+        const currentUserId = session?.user?.id;
 
         if (days) {
             const cutoffDate = new Date();

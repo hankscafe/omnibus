@@ -18,7 +18,7 @@ export async function GET() {
   try {
     // Defense-in-depth behind the middleware /api/admin/* gate.
     const session = await getServerSession(await getAuthOptions());
-    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
     const [entries, sized, oldest] = await Promise.all([
       prisma.metadataCache.count(),
@@ -40,8 +40,8 @@ export async function GET() {
 export async function DELETE() {
   try {
     const session = await getServerSession(await getAuthOptions());
-    if ((session?.user as any)?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-    const userId = (session?.user as any)?.id;
+    if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    const userId = session?.user?.id;
 
     const deleted = await prisma.metadataCache.deleteMany({});
     if (userId) await AuditLogger.log('CLEARED_METADATA_CACHE', { count: deleted.count }, userId);

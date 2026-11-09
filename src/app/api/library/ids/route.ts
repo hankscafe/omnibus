@@ -20,7 +20,7 @@ export async function GET() {
   try {
     const authOptions = await getAuthOptions();
     const session = await getServerSession(authOptions);
-    const accessibleLibs = await getAccessibleLibraryIds((session?.user as any)?.id, (session?.user as any)?.role);
+    const accessibleLibs = await getAccessibleLibraryIds(session?.user?.id, session?.user?.role);
     const isAll = accessibleLibs === 'ALL';
 
     const now = Date.now();

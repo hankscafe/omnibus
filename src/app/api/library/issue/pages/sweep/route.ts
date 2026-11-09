@@ -92,7 +92,7 @@ export async function POST(request: Request) {
         });
 
         const data: PageSweepJobData = {
-            type: 'PAGE_SWEEP', runId, sourceLabel, actorUserId: (session.user as any).id,
+            type: 'PAGE_SWEEP', runId, sourceLabel, actorUserId: session.user.id,
             total: items.length, items, processed: 0, removed: 0, failed: [], startedAt,
         };
         // Every chunk of a sweep takes the top tier (job-priority.ts), the first one too: the sweep
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
 
         await AuditLogger.log('PAGE_SWEEP_STARTED', {
             source: sourceLabel, matchedFiles: items.length,
-        }, (session.user as any).id);
+        }, session.user.id);
         Logger.log(`[Page Sweep] Queued: "${sourceLabel}" across ${items.length} file(s) (issue #189).`, 'info');
 
         return NextResponse.json({ success: true, runId, total: items.length });

@@ -52,6 +52,14 @@ const eslintConfig = [
     files: ["**/*.js", "**/*.cjs"],
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
+  {
+    // Tests (beta.020): `any` is allowed. Nearly all of it is mocks and partial fixtures - a Prisma row
+    // with only the three fields a test needs - where a typed version would need an `as never` cast
+    // anyway and say nothing more. Every other rule still applies to tests; the app's own code keeps
+    // the `any` warning.
+    files: ["__tests__/**"],
+    rules: { "@typescript-eslint/no-explicit-any": "off" },
+  },
 ];
 
 export default eslintConfig;

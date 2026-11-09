@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
 import { useRouter } from "next/navigation"
+import type { AdminConfigResponse } from '@/types/api/config';
 
 const TEMPLATE_KEYS = [
     { id: "account_approved", label: "Account Approved", vars: ["user"] },
@@ -45,11 +46,11 @@ export default function EmailTemplatesPage() {
     document.title = "Omnibus - Email Templates";
     fetch('/api/admin/config')
         .then(res => res.json())
-        .then(data => {
+        .then((data: AdminConfigResponse) => {
             const loadedTemplates: Record<string, string> = {};
             if (data.settings && Array.isArray(data.settings)) {
                 TEMPLATE_KEYS.forEach(tk => {
-                    const dbSetting = data.settings.find((s: any) => s.key === `email_template_${tk.id}`);
+                    const dbSetting = data.settings.find((s) => s.key === `email_template_${tk.id}`);
                     loadedTemplates[tk.id] = dbSetting ? dbSetting.value : DEFAULT_TEMPLATES[tk.id];
                 });
             }

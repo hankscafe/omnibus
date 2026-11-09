@@ -20,6 +20,7 @@ import { getErrorMessage } from "@/lib/utils/error"
 import { PERMISSION_TIERS, tierFlags, tierFromUser, type TierName } from "@/lib/permission-tiers"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu"
 import { TIER_BADGE_CLASS } from "@/components/tier-badge"
+import type { AdminConfigResponse } from '@/types/api/config';
 
 export default function AdminUsersPage() {
   useEffect(() => {
@@ -70,11 +71,11 @@ export default function AdminUsersPage() {
       // --- NEW: Fetch OIDC Settings to determine if we show the warning banner ---
       const configRes = await fetch('/api/admin/config')
       if (configRes.ok) {
-          const configData = await configRes.json()
+          const configData: AdminConfigResponse = await configRes.json()
           const settings = configData.settings || []
-          const isEnabled = settings.find((s: any) => s.key === 'oidc_enabled')?.value === 'true'
-          const hasGroups = !!settings.find((s: any) => s.key === 'oidc_admin_group')?.value || 
-                            !!settings.find((s: any) => s.key === 'oidc_user_group')?.value
+          const isEnabled = settings.find((s) => s.key === 'oidc_enabled')?.value === 'true'
+          const hasGroups = !!settings.find((s) => s.key === 'oidc_admin_group')?.value || 
+                            !!settings.find((s) => s.key === 'oidc_user_group')?.value
           setOidcConfig({ enabled: isEnabled, groupsMapped: hasGroups })
       }
     } catch (e) {

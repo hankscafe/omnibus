@@ -40,6 +40,7 @@ import { requestNameFor } from "@/lib/utils/request-name"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
 import { dialogBookTypePayload, dialogChoice } from "@/lib/book-type"
 import { RefreshMetadataButton } from "@/components/refresh-metadata-button"
+import type { AdminConfigResponse } from '@/types/api/config';
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -228,11 +229,11 @@ function SeriesContent() {
       if (!isAdmin) return;
       fetch('/api/admin/config')
           .then(res => res.ok ? res.json() : null)
-          .then(data => {
+          .then((data: AdminConfigResponse | null) => {
               if (data?.settings) {
-                  const savedFolder = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
-                  const savedFile = data.settings.find((s: any) => s.key === 'file_naming_pattern')?.value;
-                  const savedMangaFile = data.settings.find((s: any) => s.key === 'manga_file_naming_pattern')?.value;
+                  const savedFolder = data.settings.find((s) => s.key === 'folder_naming_pattern')?.value;
+                  const savedFile = data.settings.find((s) => s.key === 'file_naming_pattern')?.value;
+                  const savedMangaFile = data.settings.find((s) => s.key === 'manga_file_naming_pattern')?.value;
                   
                   if (savedFolder) setFolderPattern(savedFolder);
                   

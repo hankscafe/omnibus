@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+import type { AdminConfigResponse } from '@/types/api/config';
 
 export default function LogsPage() {
   const { toast } = useToast();
@@ -60,9 +61,9 @@ export default function LogsPage() {
     // Fetch current log level
     fetch('/api/admin/config')
       .then(res => res.json())
-      .then(data => {
+      .then((data: AdminConfigResponse) => {
         if (data.settings) {
-          const levelSetting = data.settings.find((s: any) => s.key === 'system_log_level');
+          const levelSetting = data.settings.find((s) => s.key === 'system_log_level');
           if (levelSetting) setLogLevel(levelSetting.value);
         }
       }).catch(()=>{});

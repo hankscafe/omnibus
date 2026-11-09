@@ -13,6 +13,7 @@ import { Loader2, FileText, FileX, AlertTriangle, Lock, Unlock } from "lucide-re
 import { COMIC_INFO_DEFAULT_KEYS, COLUMN_TO_LIST_FIELD, type ComicInfoDefaults } from "@/lib/utils/comicinfo-fields"
 import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
 import { errorMessageOr } from '@/lib/utils/error';
+import type { AdminConfigResponse } from '@/types/api/config';
 
 export interface MetadataEditorSeries {
   currentPath: string
@@ -99,8 +100,8 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
       setLocked(false)
       // Global default for the write-to-file toggle.
       try {
-        const cfg = await fetch("/api/admin/config").then(r => (r.ok ? r.json() : null)).catch(() => null)
-        const wv = cfg?.settings?.find((s: any) => s.key === "metadata_write_comicinfo")?.value
+        const cfg: AdminConfigResponse | null = await fetch("/api/admin/config").then(r => (r.ok ? r.json() : null)).catch(() => null)
+        const wv = cfg?.settings?.find((s) => s.key === "metadata_write_comicinfo")?.value
         if (!cancelled) setWriteToFile(wv !== "false")
       } catch { /* default stays true */ }
 

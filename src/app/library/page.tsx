@@ -32,6 +32,7 @@ import { FollowBell } from "@/components/follow-bell"
 import MetadataEditorModal from "@/components/metadata-editor-modal"
 import { SetupChecklist } from "@/components/setup-checklist"
 import { getErrorMessage } from '@/lib/utils/error';
+import type { AdminConfigResponse } from '@/types/api/config';
 
 interface Comic {
   id: string; // Prisma ID
@@ -334,11 +335,11 @@ function LibraryContent() {
       if (!isAdmin) return;
       fetch('/api/admin/config')
           .then(res => res.ok ? res.json() : null)
-          .then(data => {
+          .then((data: AdminConfigResponse | null) => {
               if (data?.settings) {
-                  const savedFolder = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
-                  const savedFile = data.settings.find((s: any) => s.key === 'file_naming_pattern')?.value;
-                  const savedMangaFile = data.settings.find((s: any) => s.key === 'manga_file_naming_pattern')?.value;
+                  const savedFolder = data.settings.find((s) => s.key === 'folder_naming_pattern')?.value;
+                  const savedFile = data.settings.find((s) => s.key === 'file_naming_pattern')?.value;
+                  const savedMangaFile = data.settings.find((s) => s.key === 'manga_file_naming_pattern')?.value;
 
                   if (savedFolder) setFolderPattern(savedFolder);
                   if (savedFile) setFilePattern(savedFile);

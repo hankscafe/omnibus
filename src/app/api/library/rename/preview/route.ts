@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
         // previously ran every series through the single filePattern, so it LIED about what the
         // standardize would do to manga.
         const settings = await prisma.systemSetting.findMany();
-        const config = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
+        const config = Object.fromEntries(settings.map((s) => [s.key, s.value]));
         const activeMangaFilePattern = mangaFilePattern || config.manga_file_naming_pattern || "{Series} Vol. {Issue}";
         const activeCollectedFilePattern = collectedFilePattern || config.collected_file_naming_pattern || null;
         const issuePadding = issuePaddingFromSetting(config.issue_number_padding);

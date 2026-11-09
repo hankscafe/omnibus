@@ -19,6 +19,7 @@ import {
 import { getErrorMessage } from "@/lib/utils/error"
 import { SCHEDULE_DEFAULTS } from "@/lib/schedule-defaults"
 import { restoreCompleteToast, rememberRestoreWarnings, takeRestoreWarnings } from "@/lib/restore-warnings"
+import type { AdminConfigResponse } from '@/types/api/config';
 
 const INTERVALS = [
     { label: "Disabled (Manual Only)", value: "0" },
@@ -139,25 +140,25 @@ export default function ScheduledJobsPage() {
     try {
       const res = await fetch('/api/admin/config');
       if (res.ok) {
-        const data = await res.json();
-        const metaItem = data.settings.find((c: any) => c.key === 'metadata_sync_schedule');
-        const embedItem = data.settings.find((c: any) => c.key === 'embed_metadata_schedule');
-        const seriesJsonItem = data.settings.find((c: any) => c.key === 'series_json_schedule');
-        const seriesJsonEnabledItem = data.settings.find((c: any) => c.key === 'export_series_json');
-        const libItem = data.settings.find((c: any) => c.key === 'library_sync_schedule');
-        const monitorItem = data.settings.find((c: any) => c.key === 'monitor_sync_schedule'); 
-        const diagItem = data.settings.find((c: any) => c.key === 'diagnostics_sync_schedule'); 
-        const backupItem = data.settings.find((c: any) => c.key === 'backup_sync_schedule');
-        const backupDayItem = data.settings.find((c: any) => c.key === 'backup_sync_day');
-        const cacheItem = data.settings.find((c: any) => c.key === 'cache_cleanup_schedule'); 
-        const popularItem = data.settings.find((c: any) => c.key === 'popular_sync_schedule'); 
-        const converterItem = data.settings.find((c: any) => c.key === 'cbr_conversion_schedule');
-        const digestItem = data.settings.find((c: any) => c.key === 'weekly_digest_schedule');
-        const digestDayItem = data.settings.find((c: any) => c.key === 'weekly_digest_day'); 
+        const data: AdminConfigResponse = await res.json();
+        const metaItem = data.settings.find((c) => c.key === 'metadata_sync_schedule');
+        const embedItem = data.settings.find((c) => c.key === 'embed_metadata_schedule');
+        const seriesJsonItem = data.settings.find((c) => c.key === 'series_json_schedule');
+        const seriesJsonEnabledItem = data.settings.find((c) => c.key === 'export_series_json');
+        const libItem = data.settings.find((c) => c.key === 'library_sync_schedule');
+        const monitorItem = data.settings.find((c) => c.key === 'monitor_sync_schedule'); 
+        const diagItem = data.settings.find((c) => c.key === 'diagnostics_sync_schedule'); 
+        const backupItem = data.settings.find((c) => c.key === 'backup_sync_schedule');
+        const backupDayItem = data.settings.find((c) => c.key === 'backup_sync_day');
+        const cacheItem = data.settings.find((c) => c.key === 'cache_cleanup_schedule'); 
+        const popularItem = data.settings.find((c) => c.key === 'popular_sync_schedule'); 
+        const converterItem = data.settings.find((c) => c.key === 'cbr_conversion_schedule');
+        const digestItem = data.settings.find((c) => c.key === 'weekly_digest_schedule');
+        const digestDayItem = data.settings.find((c) => c.key === 'weekly_digest_day'); 
         
         // --- ADDED: Load saved values ---
-        const watchedItem = data.settings.find((c: any) => c.key === 'watched_sync_schedule'); 
-        const healthItem = data.settings.find((c: any) => c.key === 'health_check_schedule'); 
+        const watchedItem = data.settings.find((c) => c.key === 'watched_sync_schedule'); 
+        const healthItem = data.settings.find((c) => c.key === 'health_check_schedule'); 
         
         if (metaItem) setMetadataSyncSchedule(metaItem.value);
         if (embedItem) setEmbedMetadataSchedule(embedItem.value);
@@ -165,7 +166,7 @@ export default function ScheduledJobsPage() {
         // Default ON since discussion #182 — an absent row means enabled (parity with the
         // engine's write_series_json gate); only an explicit "false" reads as off.
         setSeriesJsonEnabled(seriesJsonEnabledItem?.value !== 'false');
-        const cbrEnabledItem = data.settings.find((c: any) => c.key === 'cbr_conversion_enabled');
+        const cbrEnabledItem = data.settings.find((c) => c.key === 'cbr_conversion_enabled');
         setCbrConversionEnabled(cbrEnabledItem?.value !== 'false');
         const comicInfoItem = data.settings.find((c: { key: string }) => c.key === 'metadata_write_comicinfo');
         setComicInfoWritesEnabled(comicInfoItem?.value !== 'false');

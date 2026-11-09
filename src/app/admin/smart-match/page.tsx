@@ -25,6 +25,7 @@ import { BookMarked } from "lucide-react"
 import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
+import type { AdminConfigResponse } from '@/types/api/config';
 
 // Auto-scan results (the ComicVine/Metron match suggestions) are kept in sessionStorage so a page
 // refresh or navigate-away-and-back restores them instead of re-running the scan. The cache is
@@ -357,11 +358,11 @@ export default function SmartMatchPage() {
     useEffect(() => {
         fetch('/api/admin/config')
             .then(res => res.ok ? res.json() : null)
-            .then(data => {
+            .then((data: AdminConfigResponse | null) => {
                 if (data?.settings) {
-                    const primary = data.settings.find((s: any) => s.key === 'primary_metadata_source')?.value;
-                    const pattern = data.settings.find((s: any) => s.key === 'folder_naming_pattern')?.value;
-                    const writeDefault = data.settings.find((s: any) => s.key === 'metadata_write_comicinfo')?.value;
+                    const primary = data.settings.find((s) => s.key === 'primary_metadata_source')?.value;
+                    const pattern = data.settings.find((s) => s.key === 'folder_naming_pattern')?.value;
+                    const writeDefault = data.settings.find((s) => s.key === 'metadata_write_comicinfo')?.value;
                     if (hasMetronCredentials(data.settings)) setMetronConfigured(true);
                     if (primary) setSearchProvider(primary);
                     if (pattern) setFolderPattern(pattern);

@@ -11,6 +11,7 @@ import { CACHE_DIR, LOGS_DIR, BACKUPS_DIR, WATCHED_DIR, UNMATCHED_DIR, serverPat
 import { encryptSecret, decryptSecret } from '@/lib/encryption';
 import { SECRET_SETTING_KEYS } from '@/lib/secret-keys';
 import { testAnnasArchiveKey } from '@/lib/annas-test';
+import type { AdminConfigPayload } from '@/types/api/config';
 
 // Masked on the way out: every credential stored encrypted (apprise_url included - it can carry basic
 // auth), plus two that aren't encrypted but still mustn't reach the browser. Derived from
@@ -97,7 +98,7 @@ export async function GET(_request: Request) {
       customHeaders: headers,
       searchAcronyms: acronyms,
       envPaths 
-  });
+  } satisfies AdminConfigPayload);
 }
 
 export async function POST(request: Request) {

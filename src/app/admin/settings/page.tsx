@@ -34,6 +34,7 @@ import { SystemTab } from "./tabs/system-tab"
 import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, WebhookConfig, HosterAccountConfig } from "./tabs/shared"
 import { primarySourceFallback, sourceHasCredentials } from "./tabs/primary-source"
 import { getErrorMessage, errorMessageOr } from '@/lib/utils/error';
+import type { AdminConfigResponse } from '@/types/api/config';
 
 // --- Constants & Global Mappings ---
 // RECOMMENDED_PUBLISHERS / RECOMMENDED_KEYWORDS now live in @/lib/filter-defaults (shared with the setup wizard).
@@ -259,18 +260,20 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    fetch('/api/admin/config').then(res => res.json()).then(data => {
+    fetch('/api/admin/config').then(res => res.json()).then((data: AdminConfigResponse) => {
         setConfiguredLibraries(data.libraries || []);
-        setConfiguredClients(data.downloadClients || []);
-        setConfiguredWebhooks(data.discordWebhooks || []);
+        // The rows can hold null where the form types say string / undefined (user, pass, username, the
+        // webhook bot fields) and a client `type` is any string: asserted here, typed properly later.
+        setConfiguredClients((data.downloadClients || []) as unknown as ClientConfig[]);
+        setConfiguredWebhooks((data.discordWebhooks || []) as unknown as WebhookConfig[]);
         setConfiguredIndexers(data.indexers || []);
-        setConfiguredHosters(data.hosterAccounts || []);
+        setConfiguredHosters((data.hosterAccounts || []) as unknown as HosterAccountConfig[]);
         setEnvPaths(data.envPaths || {});
         
-        const parsedHeaders = (data.customHeaders || []).map((h: any) => ({ ...h, id: h.id || `tmp_${Math.random()}` }));
+        const parsedHeaders = (data.customHeaders || []).map((h) => ({ ...h, id: h.id || `tmp_${Math.random()}` }));
         setCustomHeaders(parsedHeaders);
 
-        const parsedAcronyms = (data.searchAcronyms || []).map((a: any) => ({ ...a, id: a.id || `tmp_${Math.random()}` }));
+        const parsedAcronyms = (data.searchAcronyms || []).map((a) => ({ ...a, id: a.id || `tmp_${Math.random()}` }));
         if (parsedAcronyms.length > 0) {
             setCustomAcronyms(parsedAcronyms);
         } else {
@@ -288,13 +291,13 @@ export default function SettingsPage() {
 
         const newConfig: any = { ...config };
         if (Array.isArray(data.settings)) {
-            data.settings.forEach((item: any) => { 
+            data.settings.forEach((item) => { 
                 if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority' && item.key !== 'release_scoring_rules' && item.key !== 'search_source_priority') {
                     newConfig[item.key] = item.value;
                 }
             });
 
-            const scoringSetting = data.settings.find((s: any) => s.key === 'release_scoring_rules');
+            const scoringSetting = data.settings.find((s) => s.key === 'release_scoring_rules');
             if (scoringSetting?.value) {
                 try {
                     setScoringRules(JSON.parse(scoringSetting.value));
@@ -305,7 +308,7 @@ export default function SettingsPage() {
                 setScoringRules(DEFAULT_SCORING_RULES.map((r, i) => ({ id: `s${i + 1}`, ...r })));
             }
 
-            const hpSetting = data.settings.find((s: any) => s.key === 'hoster_priority');
+            const hpSetting = data.settings.find((s) => s.key === 'hoster_priority');
             const defaultHosters = [
                 { hoster: 'getcomics_direct', enabled: true },
                 { hoster: 'getcomics_main', enabled: true },
@@ -351,7 +354,7 @@ export default function SettingsPage() {
                 setHosterPriority(defaultHosters);
             }
 
-            const sspSetting = data.settings.find((s: any) => s.key === 'search_source_priority');
+            const sspSetting = data.settings.find((s) => s.key === 'search_source_priority');
             const defaultSources = [
                 { source: 'getcomics', enabled: true },
                 { source: 'annas_archive', enabled: false },

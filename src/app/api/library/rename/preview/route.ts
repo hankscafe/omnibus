@@ -7,6 +7,7 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { issueFileName, issuePaddingFromSetting, issueTitleForName, seriesFolderSegments, type NamingInput } from '@/lib/utils/naming';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { RenamePreviewRow } from '@/types/api/library';
 
 export async function POST(request: NextRequest) {
     try {
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ previews: [] });
         }
 
-        const previews = [];
+        const previews: RenamePreviewRow[] = [];
         const libraries = await prisma.library.findMany();
 
         // Per-series pattern selection mirrors the rename route (worklist item 8) — the preview
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
             const retainedCollected = (await retainedKindsForSeries(series)).includes('COLLECTED');
 
             const downloadedIssues = allIssues
-                .filter((i: any) => i.filePath && i.filePath.trim() !== '')
+                .filter((i) => i.filePath && i.filePath.trim() !== '')
                 .slice(0, 3); // Grab up to 3 valid, physical files
 
             Logger.log(`[Rename Preview Debug] Series "${series.name}" has ${downloadedIssues.length} downloaded files queued for preview.`, 'debug');
@@ -115,7 +116,8 @@ export async function POST(request: NextRequest) {
 
                 previews.push({
                     seriesName: series.name,
-                    oldPath: issue.filePath,
+                    // downloadedIssues holds only issues with a file.
+                    oldPath: issue.filePath as string,
                     newPath: targetFilePath
                 });
             }

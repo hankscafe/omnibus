@@ -33,25 +33,7 @@ import MetadataEditorModal from "@/components/metadata-editor-modal"
 import { SetupChecklist } from "@/components/setup-checklist"
 import { getErrorMessage } from '@/lib/utils/error';
 import type { AdminConfigResponse } from '@/types/api/config';
-
-interface Comic {
-  id: string; // Prisma ID
-  cvId: number; // ComicVine ID
-  volumeId: number; 
-  name: string;
-  issueNumber?: string;
-  year: string;
-  publisher: string;
-  image: string;
-  description?: string;
-  siteUrl?: string;
-  writers?: string[];
-  artists?: string[];
-  coverArtists?: string[];
-  characters?: string[];
-  isVolume?: boolean;
-  [key: string]: any;
-}
+import type { RenamePreviewReply, RenamePreviewRow } from '@/types/api/library';
 
 interface LibrarySeries {
   id: string;
@@ -86,10 +68,10 @@ type ListRowContext = {
 // identity is stable across renders (changing component identity would force Virtuoso to remount every row).
 const LIST_TABLE_COMPONENTS: TableComponents<LibrarySeries, ListRowContext> = {
   Table: (props) => <table {...props} className="w-full text-sm text-left" />,
-  TableHead: forwardRef<HTMLTableSectionElement, any>(function ListTableHead(props, ref) {
+  TableHead: forwardRef<HTMLTableSectionElement, React.ComponentPropsWithoutRef<'thead'>>(function ListTableHead(props, ref) {
     return <thead {...props} ref={ref} className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border" />;
   }),
-  TableBody: forwardRef<HTMLTableSectionElement, any>(function ListTableBody(props, ref) {
+  TableBody: forwardRef<HTMLTableSectionElement, React.ComponentPropsWithoutRef<'tbody'>>(function ListTableBody(props, ref) {
     return <tbody {...props} ref={ref} className="divide-y divide-border" />;
   }),
   TableRow: ({ item, context, ...props }) => {
@@ -255,7 +237,7 @@ function LibraryContent() {
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
   const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
   const [mangaFilePattern, setMangaFilePattern] = useState("{Series} Vol. {Issue}");
-  const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
+  const [renamePreviews, setRenamePreviews] = useState<RenamePreviewRow[]>([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
   useEffect(() => {
@@ -272,7 +254,7 @@ function LibraryContent() {
               })
           })
           .then(res => res.json())
-          .then(data => { if (data.previews) setRenamePreviews(data.previews); })
+          .then((data: RenamePreviewReply) => { if (data.previews) setRenamePreviews(data.previews); })
           .catch(() => {})
           .finally(() => setIsLoadingPreview(false));
       } else {
@@ -281,8 +263,6 @@ function LibraryContent() {
   }, [renameModalOpen, folderPattern, filePattern, mangaFilePattern, selectedSeries]);
 
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
-
-  const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
 
   const isAdmin = session?.user?.role === 'ADMIN'
 
@@ -348,32 +328,6 @@ function LibraryContent() {
           })
           .catch(() => {});
   }, [isAdmin]);
-
-  useEffect(() => {
-    if (!selectedComic?.cvId) return;
-    
-    fetch(`/api/issue-details?id=${selectedComic.cvId}&type=volume&_t=${Date.now()}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data && !data.error) {
-          setSelectedComic(prev => {
-            if (prev?.id !== selectedComic.id) return prev; 
-            return {
-                ...prev,
-                ...data,
-                name: prev?.name || data.name,
-                publisher: (data.publisher && data.publisher !== 'Unknown') ? data.publisher : prev?.publisher,
-                year: (data.year && data.year !== '????') ? data.year : prev?.year,
-                image: data.image || prev?.image || prev?.cover,
-                description: data.description?.trim() ? data.description : prev?.description,
-                writers: data.writers,
-                artists: data.artists,
-                characters: data.characters
-            } as Comic;
-          });
-        }
-      });
-  }, [selectedComic?.id, selectedComic?.cvId]);
 
   const loadLibraryData = useCallback(async (pageNum: number, isRefreshScan: boolean, appendResults: boolean) => {
       if (isRefreshScan) setIsRefreshing(true);
@@ -1204,11 +1158,11 @@ function LibraryContent() {
                           tabIndex={0}
                           aria-label={`Open series: ${item.name}`}
                           className="relative flex-1 bg-muted flex items-center justify-center overflow-hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-                          onClick={(e) => { if (!isSelectionMode) handleNavigate(e as any, item.path, navId); else toggleSeriesSelection(item.id); }}
+                          onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); else toggleSeriesSelection(item.id); }}
                           onKeyDown={(e) => {
                               if (e.key === 'Enter' || e.key === ' ') {
                                   e.preventDefault();
-                                  if (!isSelectionMode) handleNavigate(e as any, item.path, navId); else toggleSeriesSelection(item.id);
+                                  if (!isSelectionMode) handleNavigate(e, item.path, navId); else toggleSeriesSelection(item.id);
                               }
                           }}
                       >
@@ -1264,7 +1218,7 @@ function LibraryContent() {
                             variant="default"
                             size="sm"
                             className="w-full font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0"
-                            onClick={(e) => handleNavigate(e as any, item.path, navId)}
+                            onClick={(e) => handleNavigate(e, item.path, navId)}
                             aria-label={`Open reader for ${item.name}`}
                         >
                             {navigatingTo === navId ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <BookOpen className="w-3 h-3 shrink-0" />}
@@ -1312,11 +1266,11 @@ function LibraryContent() {
                       className="px-0.5 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm" 
                       role="button"
                       tabIndex={0}
-                      onClick={(e) => { if (!isSelectionMode) handleNavigate(e as any, item.path, navId); }}
+                      onClick={(e) => { if (!isSelectionMode) handleNavigate(e, item.path, navId); }}
                       onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
-                              if (!isSelectionMode) handleNavigate(e as any, item.path, navId);
+                              if (!isSelectionMode) handleNavigate(e, item.path, navId);
                           }
                       }}
                   >
@@ -1358,11 +1312,11 @@ function LibraryContent() {
                                 role="button"
                                 tabIndex={0}
                                 aria-label={`Open series: ${item.name}`}
-                                onClick={(e) => { if(!isSelectionMode) handleNavigate(e as any, item.path, navId); }}
+                                onClick={(e) => { if(!isSelectionMode) handleNavigate(e, item.path, navId); }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' || e.key === ' ') {
                                         e.preventDefault();
-                                        if (!isSelectionMode) handleNavigate(e as any, item.path, navId);
+                                        if (!isSelectionMode) handleNavigate(e, item.path, navId);
                                     }
                                 }}
                             >
@@ -1383,7 +1337,7 @@ function LibraryContent() {
                             <div className="flex items-center gap-2">
                                 {isSelectionMode ? (<span>{item.name}</span>) : (
                                     <button 
-                                        onClick={(e) => handleNavigate(e as any, item.path, navId)} 
+                                        onClick={(e) => handleNavigate(e, item.path, navId)} 
                                         className="hover:text-primary transition-colors text-left font-bold flex items-center gap-2 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded-sm"
                                         title={item.name}
                                     >
@@ -1429,7 +1383,7 @@ function LibraryContent() {
                                         className="h-10 w-10 sm:h-8 sm:w-8 hover:text-primary hover:bg-primary/10"
                                         title="Read Series"
                                         aria-label={`Open reader for ${item.name}`}
-                                        onClick={(e) => handleNavigate(e as any, item.path, navId)}
+                                        onClick={(e) => handleNavigate(e, item.path, navId)}
                                     > 
                                         {navigatingTo === navId ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin text-primary" /> : <BookOpen className="w-5 h-5 sm:w-4 sm:h-4" />}
                                     </Button>

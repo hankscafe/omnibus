@@ -11,6 +11,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
 import { UNMATCHED_DIR } from '@/lib/utils/paths';
 import { findDuplicateGroups } from '@/lib/duplicate-detector';
+import type { CorruptedFile, DiagnosticsScanReply, GhostRow, OrphanFile } from '@/types/api/diagnostics';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,11 +48,11 @@ export async function POST(request: Request) {
                     if (s.metadataId && activeReqVolumeIds.has(s.metadataId)) return false;
                     return true;
                 })
-                .map(s => ({ id: s.id, type: 'SERIES', name: s.name, path: s.folderPath || 'Missing Path' }));
+                .map((s): GhostRow => ({ id: s.id, type: 'SERIES', name: s.name, path: s.folderPath || 'Missing Path' }));
             
             const ghostIssues = issues
                 .filter(i => i.status === 'MISSING') // Rust actively marks missing files as 'MISSING' in the DB
-                .map(i => ({ id: i.id, type: 'ISSUE', name: `${i.series?.name} #${i.number}`, path: i.filePath }));
+                .map((i): GhostRow => ({ id: i.id, type: 'ISSUE', name: `${i.series?.name} #${i.number}`, path: i.filePath }));
 
             const totalGhosts = ghostSeries.length + ghostIssues.length;
             Logger.log(`Manual Ghost Scan complete via Rust. Found ${totalGhosts} issues.`, totalGhosts > 0 ? "warn" : "success");
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
             // the detection step.
             await AuditLogger.log('GHOST_SCAN', { seriesFlagged: ghostSeries.length, issuesFlaggedMissing: ghostIssues.length }, userId).catch(() => {});
 
-            return NextResponse.json({ ghosts: [...ghostSeries, ...ghostIssues] });
+            return NextResponse.json({ ghosts: [...ghostSeries, ...ghostIssues] } satisfies DiagnosticsScanReply);
         }
 
         // --- RUST OFFLOADED SCAN: ORPHANED FILES ---
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
             });
 
             Logger.log(`Manual Orphan Scan complete via Rust. Found ${filteredOrphans.length} orphaned files.`, filteredOrphans.length > 0 ? "warn" : "success");
-            return NextResponse.json({ orphans: filteredOrphans.map(p => ({ path: p, name: path.basename(p) })) });
+            return NextResponse.json({ orphans: filteredOrphans.map((p): OrphanFile => ({ path: p, name: path.basename(p) })) } satisfies DiagnosticsScanReply);
         }
 
         // --- RUST OFFLOADED SCAN: ARCHIVE INTEGRITY ---
@@ -106,7 +107,7 @@ export async function POST(request: Request) {
                 include: { series: true }
             });
 
-            const corrupted = corruptedIssues.map(i => ({
+            const corrupted = corruptedIssues.map((i): CorruptedFile => ({
                 id: i.id,
                 name: `${i.series?.name} #${i.number}`,
                 path: i.filePath,
@@ -118,14 +119,14 @@ export async function POST(request: Request) {
             // Also a mutation (marks bad archives status='CORRUPTED' in the engine) — audit the run.
             await AuditLogger.log('INTEGRITY_SCAN', { archivesFlaggedCorrupted: corrupted.length }, userId).catch(() => {});
 
-            return NextResponse.json({ corrupted });
+            return NextResponse.json({ corrupted } satisfies DiagnosticsScanReply);
         }
 
         // --- SCAN: DUPLICATE ISSUES (lightweight DB grouping; shared with the dashboard health check) ---
         if (action === 'scan-duplicates') {
             Logger.log("[UI Job] Manual Duplicate scan started", "info");
             const duplicates = await findDuplicateGroups();
-            return NextResponse.json({ duplicates });
+            return NextResponse.json({ duplicates } satisfies DiagnosticsScanReply);
         }
 
         if (action === 'delete-duplicates') {

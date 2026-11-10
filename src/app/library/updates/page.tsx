@@ -13,11 +13,12 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { coverSrc } from "@/lib/utils/cover-url";
 import { groupUpdates, dayLabel, filterUnread } from "@/lib/utils/updates-view";
+import type { UpdateItem, UpdatesResponse } from "@/types/api/updates";
 
 const UNREAD_KEY = 'omnibus_updates_unread';
 
 export default function UpdatesPage() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<UpdateItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -29,7 +30,7 @@ export default function UpdatesPage() {
     try {
         const res = await fetch('/api/library/updates');
         if (res.ok) {
-            const data = await res.json();
+            const data: UpdatesResponse = await res.json();
             setItems(data.items || []);
         }
     } finally {
@@ -58,13 +59,13 @@ export default function UpdatesPage() {
 
   const groups = useMemo(() => groupUpdates(filterUnread(items, unreadOnly)), [items, unreadOnly]);
 
-  const openReader = (item: any) =>
+  const openReader = (item: UpdateItem) =>
       router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
 
   const toggleExpand = (key: string) =>
       setExpanded(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
 
-  const itemRow = (item: any, indented = false) => (
+  const itemRow = (item: UpdateItem, indented = false) => (
       <div
           key={item.id}
           className={cn("group flex items-center gap-3 p-2.5 bg-background border border-border rounded-xl shadow-sm hover:border-primary/50 cursor-pointer transition-all", indented && "ml-10")}

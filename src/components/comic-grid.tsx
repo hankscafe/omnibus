@@ -15,6 +15,7 @@ import { Search as SearchIcon } from "lucide-react"
 import { InteractiveSearchModal } from "./interactive-search-modal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import type { SeriesIssueResult, SeriesIssuesReply } from "@/types/api/series-issues"
 
 interface Comic {
   id: number;
@@ -39,6 +40,8 @@ interface Comic {
   isVolume?: boolean;
   isReleased?: boolean;
   volumeName?: string;
+  /** COMICVINE or METRON - which provider the ids belong to (absent = ComicVine). */
+  metadataSource?: string;
 }
 
 interface Props {
@@ -77,7 +80,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   const { getVolumeStatus, getIssueStatus, setMonitoredSeries, setRequestedVolumes, setRequestedIssues, setActiveRequests } = useLibraryOwnership(refreshSignal);
 
   const [selectedComic, setSelectedComic] = useState<Comic | null>(null)
-  const [relatedIssues, setRelatedIssues] = useState<Comic[]>([])
+  const [relatedIssues, setRelatedIssues] = useState<SeriesIssueResult[]>([])
   const [loadingRelated, setLoadingRelated] = useState(false)
   const { toast } = useToast()
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
@@ -115,7 +118,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   // Keyed on the id AND the provider: the same number on the other provider is another comic. Not
   // on the whole selection, which this effect rewrites with the details it fetches.
   const selectedComicId = selectedComic?.id;
-  const selectedComicSource = (selectedComic as any)?.metadataSource || 'COMICVINE';
+  const selectedComicSource = selectedComic?.metadataSource || 'COMICVINE';
   useEffect(() => {
     if (!selectedComicId) return;
 
@@ -142,18 +145,18 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
   useEffect(() => {
     if (!selectedComic?.volumeId || String(selectedComic.volumeId) === "0") { setRelatedIssues([]); return; }
     setLoadingRelated(true)
-    fetch(`/api/series-issues?volumeId=${selectedComic.volumeId}&provider=${(selectedComic as any).metadataSource || 'COMICVINE'}`)
+    fetch(`/api/series-issues?volumeId=${selectedComic.volumeId}&provider=${selectedComic.metadataSource || 'COMICVINE'}`)
       .then(res => res.json())
-      .then(data => {
+      .then((data: SeriesIssuesReply) => {
         if (data.results) {
-           const sorted = data.results.sort((a: any, b: any) => (parseFloat(b.issueNumber) || 0) - (parseFloat(a.issueNumber) || 0));
+           const sorted = data.results.sort((a, b) => (parseFloat(b.issueNumber) || 0) - (parseFloat(a.issueNumber) || 0));
            setRelatedIssues(sorted);
         }
       })
       .finally(() => setLoadingRelated(false))
   }, [selectedComic?.volumeId, selectedComic])
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
+  const handleRequest = async (id: number, name: string, image: string | null, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, directSource?: string, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
     if (!canRequest) {
         toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
         return;
@@ -399,7 +402,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                         <Button 
                                             className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white whitespace-normal" 
                                             variant="default" 
-                                            onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'volume', selectedComic.publisher || 'Unknown', true, undefined, undefined, true, (selectedComic as any).metadataSource || 'COMICVINE')} 
+                                            onClick={() => handleRequest(selectedComic.volumeId, seriesBaseName, selectedComic.image, selectedComic.year, 'volume', selectedComic.publisher || 'Unknown', true, undefined, undefined, true, selectedComic.metadataSource || 'COMICVINE')} 
                                             disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
                                         >
                                             {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
@@ -410,7 +413,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                         <Button 
                                             className={cn("w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold whitespace-normal", isVolOwned && "bg-green-600 hover:bg-green-700 text-white")} 
                                             variant="default" 
-                                            onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined, metadataSource: (selectedComic as any).metadataSource || 'COMICVINE' })} 
+                                            onClick={() => setMonitorPrompt({ id: selectedComic.volumeId, name: seriesBaseName, image: selectedComic.image, year: selectedComic.year, publisher: selectedComic.publisher || 'Unknown', directSource: undefined, metadataSource: selectedComic.metadataSource || 'COMICVINE' })} 
                                             disabled={requestingTarget === `vol-${selectedComic.volumeId}`}
                                         >
                                             {requestingTarget === `vol-${selectedComic.volumeId}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : (
@@ -435,7 +438,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                           <Button 
                                              className="w-full gap-1.5 shadow-sm h-auto min-h-10 py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/30 hover:bg-primary/20 whitespace-normal" 
                                              variant="outline" 
-                                             onClick={() => handleRequest(selectedComic.volumeId, selectedComic.isVolume ? seriesBaseName : selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber, false, (selectedComic as any).metadataSource || 'COMICVINE')} 
+                                             onClick={() => handleRequest(selectedComic.volumeId, selectedComic.isVolume ? seriesBaseName : selectedComic.name, selectedComic.image, selectedComic.year, 'issue', selectedComic.publisher, false, undefined, selectedComic.issueNumber, false, selectedComic.metadataSource || 'COMICVINE')} 
                                              disabled={requestingTarget === `iss-${issueTargetName}`}
                                           >
                                               {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <><Download className="w-4 h-4 shrink-0" /> <span className="leading-tight text-center">Request Issue</span></>}
@@ -565,7 +568,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                         writers: undefined,
                                                         artists: undefined,
                                                         characters: undefined,
-                                                        metadataSource: (selectedComic as any).metadataSource || 'COMICVINE'
+                                                        metadataSource: selectedComic.metadataSource || 'COMICVINE'
                                                     } as Comic);
                                                 }}
                                                 onKeyDown={(e) => {
@@ -580,7 +583,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                             writers: undefined,
                                                             artists: undefined,
                                                             characters: undefined,
-                                                            metadataSource: (selectedComic as any).metadataSource || 'COMICVINE'
+                                                            metadataSource: selectedComic.metadataSource || 'COMICVINE'
                                                         } as Comic);
                                                     }
                                                 }}
@@ -607,7 +610,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
                                                                 onClick={(e) => {
                                                                     e.preventDefault();
                                                                     e.stopPropagation();
-                                                                    handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher, false, undefined, issue.issueNumber, false, (selectedComic as any).metadataSource || 'COMICVINE');
+                                                                    handleRequest(selectedComic.volumeId, issue.name, issue.image, issue.year, 'issue', selectedComic.publisher, false, undefined, issue.issueNumber, false, selectedComic.metadataSource || 'COMICVINE');
                                                                 }}
                                                                 title="Request Issue"
                                                                 tabIndex={-1}
@@ -658,7 +661,7 @@ export function ComicGrid({ title, type, refreshSignal = 0 }: Props) {
             publisher: selectedComic.publisher || 'Unknown',
             image: selectedComic.image,
             type: interactiveQuery.type,
-            metadataSource: (selectedComic as any).metadataSource || 'COMICVINE'
+            metadataSource: selectedComic.metadataSource || 'COMICVINE'
           }}
         />
       )}

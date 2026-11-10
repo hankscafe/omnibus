@@ -9,14 +9,15 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2, ShieldAlert, Ghost, FileQuestion, FileWarning, Trash2, CheckCircle2, Search, ArrowLeft, EyeOff, Files, Star, AlertTriangle, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
+import type { CorruptedFile, DiagnosticsScanReply, DuplicateGroup, GhostRow, OrphanFile } from "@/types/api/diagnostics"
 
 // Stable key per duplicate group. seriesId + attached lane + issue number identifies the group (#203:
 // two annual volumes on one series each own a "#1"); the index keeps it unique even in the
 // impossible event of a collision.
-const groupKey = (g: any, idx: number) => `${g.seriesId}_${g.attachedVolumeId || ''}_${g.issueNumber}_${idx}`;
+const groupKey = (g: DuplicateGroup, idx: number) => `${g.seriesId}_${g.attachedVolumeId || ''}_${g.issueNumber}_${idx}`;
 // What a group is called: "Annual #1", "Vol. 2" for a collected book, "Special #1" (#255), prefixed with the attached
 // volume's own name when the group lives in one — "The Amazing Spider-Man '96 · Annual #1".
-const groupLabel = (g: any) => {
+const groupLabel = (g: DuplicateGroup) => {
     const domain = g.laneKind === 'COLLECTED' ? 'Vol.' : g.laneKind === 'SPECIAL' ? 'Special' : g.isAnnual ? 'Annual' : 'Issue';
     return `${g.laneName ? `${g.laneName} · ` : ''}${domain} #${g.issueNumber}`;
 };
@@ -36,14 +37,14 @@ export default function DiagnosticsPage() {
     const [isScanning, setIsScanning] = useState(false);
     const [isResolving, setIsResolving] = useState(false);
     
-    const [ghosts, setGhosts] = useState<any[] | null>(null);
-    const [orphans, setOrphans] = useState<any[] | null>(null);
-    const [corrupted, setCorrupted] = useState<any[] | null>(null);
+    const [ghosts, setGhosts] = useState<GhostRow[] | null>(null);
+    const [orphans, setOrphans] = useState<OrphanFile[] | null>(null);
+    const [corrupted, setCorrupted] = useState<CorruptedFile[] | null>(null);
 
     // Multi-select state for orphans
     const [selectedOrphans, setSelectedOrphans] = useState<Set<string>>(new Set());
 
-    const [duplicates, setDuplicates] = useState<any[] | null>(null);
+    const [duplicates, setDuplicates] = useState<DuplicateGroup[] | null>(null);
     // Per-group keeper selection: groupKey -> the file id to KEEP (or DELETE_ALL to remove every copy).
     const [keepMap, setKeepMap] = useState<Record<string, string>>({});
     // Files queued for a confirmed deletion.
@@ -59,16 +60,18 @@ export default function DiagnosticsPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: type })
             });
-            const data = await res.json();
+            const data: DiagnosticsScanReply = await res.json();
 
-            if (type === 'scan-ghosts') setGhosts(data.ghosts);
+            // A failed scan answers { error } without its list: the tab stays "not scanned" (every read
+            // below checks the list for truth, so null and the old undefined render the same).
+            if (type === 'scan-ghosts') setGhosts(data.ghosts ?? null);
             if (type === 'scan-orphans') {
-                setOrphans(data.orphans);
+                setOrphans(data.orphans ?? null);
                 setSelectedOrphans(new Set()); // Reset selection on new scan
             }
-            if (type === 'scan-integrity') setCorrupted(data.corrupted);
+            if (type === 'scan-integrity') setCorrupted(data.corrupted ?? null);
             if (type === 'scan-duplicates') {
-                const groups: any[] = data.duplicates || [];
+                const groups = data.duplicates || [];
                 setDuplicates(groups);
                 // Default keeper for each group is the largest file (usually the most complete copy).
                 // Suspected mispairs default to keeping EVERY copy — the files are probably different
@@ -79,7 +82,7 @@ export default function DiagnosticsPage() {
                         km[groupKey(g, idx)] = KEEP_ALL;
                         return;
                     }
-                    const largest = [...g.files].sort((a: any, b: any) => (b.size || 0) - (a.size || 0))[0];
+                    const largest = [...g.files].sort((a, b) => (b.size || 0) - (a.size || 0))[0];
                     km[groupKey(g, idx)] = largest?.id ?? DELETE_ALL;
                 });
                 setKeepMap(km);
@@ -107,19 +110,19 @@ export default function DiagnosticsPage() {
 
     // Delete every copy the admin didn't mark "keep" for this group. DELETE_ALL removes them all;
     // KEEP_ALL deletes none (so "Resolve All" naturally skips suspected-mispair groups).
-    const idsToDeleteFor = (group: any, key: string): string[] => {
+    const idsToDeleteFor = (group: DuplicateGroup, key: string): string[] => {
         const keepId = keepMap[key];
         if (keepId === KEEP_ALL) return [];
         return group.files
-            .filter((f: any) => keepId === DELETE_ALL || f.id !== keepId)
-            .map((f: any) => f.id);
+            .filter((f) => keepId === DELETE_ALL || f.id !== keepId)
+            .map((f) => f.id);
     };
 
     // One-click steer for suspected mispairs: queue a metadata re-sync for the series — the
     // number-anchored pairing re-links crossed records in place, which is the actual fix (the
     // resolver's delete would remove a real comic). Only offered when the series is provider-matched.
     const [refreshingKey, setRefreshingKey] = useState<string | null>(null);
-    const queueMetadataRefresh = async (group: any, key: string) => {
+    const queueMetadataRefresh = async (group: DuplicateGroup, key: string) => {
         setRefreshingKey(key);
         try {
             const res = await fetch('/api/library/refresh-metadata', {
@@ -469,7 +472,7 @@ export default function DiagnosticsPage() {
                                             <div className="flex flex-wrap items-center justify-between gap-2 mb-3 p-3 rounded border border-amber-500/40 bg-amber-500/10">
                                                 <p className="text-xs text-amber-600 dark:text-amber-400 flex-1 min-w-[16rem]">
                                                     <AlertTriangle className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-                                                    These files disagree about which issue they are ({group.files.map((f: any) => `#${f.parsedNumber}`).join(' vs ')}), so they are probably <strong>different comics</strong> mislabeled with the same number by an earlier metadata mix-up — not real duplicates. Deleting a copy would remove a real issue. Refresh Metadata re-pairs the records instead; nothing here is pre-selected for deletion.
+                                                    These files disagree about which issue they are ({group.files.map((f) => `#${f.parsedNumber}`).join(' vs ')}), so they are probably <strong>different comics</strong> mislabeled with the same number by an earlier metadata mix-up — not real duplicates. Deleting a copy would remove a real issue. Refresh Metadata re-pairs the records instead; nothing here is pre-selected for deletion.
                                                 </p>
                                                 {group.seriesMetadataId && (
                                                     <Button size="sm" variant="outline" className="border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0"
@@ -481,7 +484,7 @@ export default function DiagnosticsPage() {
                                             </div>
                                         )}
                                         <div className="space-y-2">
-                                            {group.files.map((file: any) => {
+                                            {group.files.map((file) => {
                                                 const isKeep = keepId === file.id;
                                                 const willDelete = keepId === DELETE_ALL || (keepId !== KEEP_ALL && !isKeep);
                                                 return (

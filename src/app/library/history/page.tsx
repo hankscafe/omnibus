@@ -9,13 +9,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { filterHistory, sortHistory, HISTORY_SORTS, type HistorySort, type HistoryView } from "@/lib/utils/history-view";
+import type { HistoryEntry } from "@/types/api/history";
 
 // localStorage keys follow the Library page's view-toggle persistence pattern (fork review #3).
 const VIEW_KEY = 'omnibus_history_view';
 const SORT_KEY = 'omnibus_history_sort';
 
 export default function HistoryPage() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<HistorySort>('recent');
@@ -25,7 +26,7 @@ export default function HistoryPage() {
   useEffect(() => {
     fetch('/api/progress/history')
       .then(res => res.json())
-      .then(data => setItems(data.items || []))
+      .then((data: { items?: HistoryEntry[] }) => setItems(data.items || []))
       .finally(() => setLoading(false));
 
     const savedView = localStorage.getItem(VIEW_KEY);
@@ -39,18 +40,19 @@ export default function HistoryPage() {
 
   const visibleItems = useMemo(() => sortHistory(filterHistory(items, search), sortBy), [items, search, sortBy]);
 
-  const openReader = (item: any) =>
-      router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
+  // A progress row can outlive its file (filePath null); String() keeps the link exactly as before ("null").
+  const openReader = (item: HistoryEntry) =>
+      router.push(`/reader?path=${encodeURIComponent(String(item.filePath))}&series=${encodeURIComponent(item.seriesPath)}`);
 
   // The full-size card shared by grid + compact; compact just packs more columns.
-  const renderCard = (item: any, compact: boolean) => (
+  const renderCard = (item: HistoryEntry, compact: boolean) => (
       <div
           key={item.id}
           className="group space-y-2 cursor-pointer"
           onClick={() => openReader(item)}
       >
           <div className="relative aspect-[2/3] rounded-xl overflow-hidden border border-border shadow-sm bg-muted transition-[transform,box-shadow] duration-200 group-hover:shadow-md group-hover:scale-[1.02] group-hover:ring-2 group-hover:ring-primary">
-              <img src={item.seriesCoverUrl} className="w-full h-full object-cover" alt="" loading="lazy" />
+              <img src={item.seriesCoverUrl ?? undefined} className="w-full h-full object-cover" alt="" loading="lazy" />
 
               {/* Gradient for progress bar visibility */}
               <div className="absolute inset-0 bg-linear-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none group-hover:opacity-0 transition-opacity duration-200" />
@@ -149,7 +151,7 @@ export default function HistoryPage() {
                     onClick={() => openReader(item)}
                 >
                     <div className="w-10 h-14 shrink-0 rounded overflow-hidden bg-muted border border-border">
-                        <img src={item.seriesCoverUrl} className="w-full h-full object-cover" alt="" loading="lazy" />
+                        <img src={item.seriesCoverUrl ?? undefined} className="w-full h-full object-cover" alt="" loading="lazy" />
                     </div>
                     <div className="flex-1 min-w-0">
                         <h3 className="text-sm font-bold truncate text-foreground group-hover:text-primary transition-colors">{item.seriesName}</h3>

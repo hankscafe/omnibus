@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, Suspense, useMemo } from "react"
 import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
-import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
+import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -27,6 +27,7 @@ import { getErrorMessage } from "@/lib/utils/error"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { readerHref, markReturnToList, takeReturnToList, READING_LIST_VIEW_KEY } from "@/lib/reading-list-nav"
+import type { ReadingListSummary } from "@/types/api/reading-lists"
 
 // #253: "Hide read" is a per-viewer convenience, remembered in this browser only (#270: so is Grouped/Flat).
 const HIDE_READ_KEY = 'omnibus-reading-lists-hide-read'
@@ -69,7 +70,7 @@ function ReadingListsContent() {
   const { toast } = useToast()
   
   // #252: `lists` is the overview (names + counts); the open list's items live in `activeListDetail`.
-  const [lists, setLists] = useState<any[]>([])
+  const [lists, setLists] = useState<ReadingListSummary[]>([])
   const [activeListId, setActiveListId] = useState<string | null>(null)
   const [activeListDetail, setActiveListDetail] = useState<ListDetail | null>(null)
   const [detailReload, setDetailReload] = useState(0)
@@ -292,9 +293,9 @@ function ReadingListsContent() {
     try {
       const res = await fetch(`/api/reading-lists?t=${Date.now()}`)
       if (res.ok) {
-        const data = await res.json()
+        const data: ReadingListSummary[] = await res.json()
         setLists(data)
-        if (selectId && data.find((l:any) => l.id === selectId)) {
+        if (selectId && data.find((l) => l.id === selectId)) {
             setActiveListId(selectId)
         } else if (data.length > 0 && !activeListId) {
             setActiveListId(data[0].id)
@@ -401,7 +402,7 @@ function ReadingListsContent() {
       if (!activeList || isRefreshingList) return;
       setIsRefreshingList(true);
       try {
-          const uniqueSeries = new Map<string, any>();
+          const uniqueSeries = new Map<string, ListSeries>();
           if (isAdmin) {
               for (const item of activeList.items) {
                   const s = item.issue?.series;
@@ -445,7 +446,7 @@ function ReadingListsContent() {
   }
 
   // Per-row admin resync for a linked series (one live provider call via refresh-series).
-  const handleResyncSeries = async (series: any) => {
+  const handleResyncSeries = async (series: ListSeries) => {
       if (!series?.metadataId || resyncingSeriesIds.has(series.id)) return;
       setResyncingSeriesIds(prev => new Set(prev).add(series.id));
       try {
@@ -651,7 +652,7 @@ function ReadingListsContent() {
       }
   }
 
-  const handleRequestMissing = async (item: any, coverUrl: string | null = null) => {
+  const handleRequestMissing = async (item: ListItem, coverUrl: string | null = null) => {
       setRequestingIds(prev => new Set(prev).add(item.id));
       
       try {
@@ -732,7 +733,7 @@ function ReadingListsContent() {
       }
   }
 
-  const handleDownloadAllMissing = async (missingItems: any[]) => {
+  const handleDownloadAllMissing = async (missingItems: ListItem[]) => {
       if (missingItems.length === 0) return;
       setIsBulkDownloading(true);
       toast({ title: "Bulk Request Started", description: `Queuing ${missingItems.length} issues...` });
@@ -750,7 +751,7 @@ function ReadingListsContent() {
       setIsBulkDownloading(false);
   }
 
-  const onDragEnd = async (result: any) => {
+  const onDragEnd = async (result: DropResult) => {
       if (!result.destination || !activeListId || activeListDetail?.id !== activeListId) return;
 
       const items = Array.from(activeListDetail.items);
@@ -759,7 +760,7 @@ function ReadingListsContent() {
 
       setActiveListDetail({ ...activeListDetail, items });
 
-      const updatedOrder = items.map((item: any, index: number) => ({
+      const updatedOrder = items.map((item, index) => ({
           id: item.id,
           order: index
       }));
@@ -785,7 +786,7 @@ function ReadingListsContent() {
   }
 
   const activeList = activeListDetail && activeListDetail.id === activeListId ? activeListDetail : null;
-  const missingItems = activeList ? activeList.items.filter((i: any) => !i.issueId) : [];
+  const missingItems = activeList ? activeList.items.filter((i) => !i.issueId) : [];
   // #253: where you are in the open list.
   const readCount = activeList ? activeList.items.filter(i => i.progress?.isRead).length : 0;
   const ownedCount = activeList ? activeList.items.filter(isOwned).length : 0;
@@ -930,8 +931,8 @@ function ReadingListsContent() {
                                       variant="outline"
                                       className="h-10 sm:h-auto font-bold border-border"
                                       onClick={async () => {
-                                          if ((activeList as any).shareId) {
-                                              const url = `${window.location.origin}/reading-lists/shared/${(activeList as any).shareId}`;
+                                          if (activeList.shareId) {
+                                              const url = `${window.location.origin}/reading-lists/shared/${activeList.shareId}`;
                                               if (await copyText(url)) toast({ title: "Link Copied!" });
                                               else toast({ title: "Copy failed", description: url, variant: "destructive" });
                                           } else {
@@ -939,7 +940,7 @@ function ReadingListsContent() {
                                           }
                                       }}
                                   >
-                                      <Share2 className="w-4 h-4 mr-2" /> {(activeList as any).shareId ? "Copy Link" : "Share"}
+                                      <Share2 className="w-4 h-4 mr-2" /> {activeList.shareId ? "Copy Link" : "Share"}
                                   </Button>
 
                                   {missingItems.length > 0 && (
@@ -1086,7 +1087,7 @@ function ReadingListsContent() {
                           <Droppable droppableId="reading-list">
                               {(provided) => (
                                   <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-3 pb-20">
-                                      {activeList.items.map((item: any, index: number) => {
+                                      {activeList.items.map((item, index) => {
                                           const issue = item.issue;
                                           const series = issue?.series;
                                           const coverUrl = activeList.coverUrl || issue?.coverUrl || (series?.folderPath ? `/api/library/cover?path=${encodeURIComponent(series.folderPath)}` : '/api/library/cover?path=missing');
@@ -1140,6 +1141,7 @@ function ReadingListsContent() {
                                               );
                                           }
 
+                                          // A linked item: its issue always comes with its series (series! below).
                                           return (
                                               <Draggable key={item.id} draggableId={item.id} index={index}>
                                                   {(provided, snapshot) => (
@@ -1160,7 +1162,7 @@ function ReadingListsContent() {
                                                           <div className="flex-1 min-w-0">
                                                               <div className="flex items-center gap-2 mb-1">
                                                                   <Badge variant="secondary" className="shrink-0 text-[10px] font-mono h-5 bg-primary/20 text-primary border-primary/30">Part {index + 1}</Badge>
-                                                                  <h4 className={`font-bold text-sm truncate ${item.progress?.isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{series.name}</h4>
+                                                                  <h4 className={`font-bold text-sm truncate ${item.progress?.isRead ? 'text-muted-foreground' : 'text-foreground'}`}>{series!.name}</h4>
                                                               </div>
                                                               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                                                   <span className="font-bold text-foreground shrink-0">Issue #{issue.number}</span>
@@ -1172,8 +1174,8 @@ function ReadingListsContent() {
                                                           <div className="flex items-center gap-2 shrink-0 pr-2">
                                                               <ReadingState progress={item.progress} />
                                                               {isAdmin && (
-                                                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hidden sm:flex" title={`Resync metadata for ${series.name}`} onClick={() => handleResyncSeries(series)} disabled={resyncingSeriesIds.has(series.id)}>
-                                                                      {resyncingSeriesIds.has(series.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary hidden sm:flex" title={`Resync metadata for ${series!.name}`} onClick={() => handleResyncSeries(series!)} disabled={resyncingSeriesIds.has(series!.id)}>
+                                                                      {resyncingSeriesIds.has(series!.id) ?<Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                                                                   </Button>
                                                               )}
                                                               {isOwned(item) && (

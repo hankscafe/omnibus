@@ -8,6 +8,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { HistoryEntryRow } from '@/types/api/history';
 
 export async function GET(_request: Request) {
   try {
@@ -23,10 +24,10 @@ export async function GET(_request: Request) {
         orderBy: { updatedAt: 'desc' }
     });
 
-    const items = history.map((p) => {
+    const items = history.map((p): HistoryEntryRow => {
         const folderPath = p.issue.series.folderPath;
-        
-        let seriesCoverUrl = (p.issue.series as any).coverUrl || null;
+
+        let seriesCoverUrl = p.issue.series.coverUrl || null;
         
         if (!seriesCoverUrl && p.issue.coverUrl) {
             seriesCoverUrl = p.issue.coverUrl;

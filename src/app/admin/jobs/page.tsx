@@ -644,7 +644,7 @@ export default function ScheduledJobsPage() {
                                 {INTERVALS.map(i => <SelectItem key={i.value} value={i.value} className="focus:bg-primary/10 focus:text-primary">{i.label}</SelectItem>)}
                             </SelectContent>
                         </Select>
-                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('cache_cleanup' as any)} disabled={runningJob === 'cache_cleanup'}>
+                        <Button className="w-full font-bold border-border hover:bg-muted" variant="outline" onClick={() => handleRunJob('cache_cleanup')} disabled={runningJob === 'cache_cleanup'}>
                             {runningJob === 'cache_cleanup' ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Play className="w-4 h-4 mr-2"/>} Run Now
                         </Button>
                     </CardContent>

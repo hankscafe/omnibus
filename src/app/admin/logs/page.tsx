@@ -18,24 +18,34 @@ import {
 import Link from "next/link"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import type { AdminConfigResponse } from '@/types/api/config';
+import type { AuditLogEntry, JobLogEntry, LiveLogEntry } from '@/types/api/admin';
+
+// The details dialog and the download take either kind of log, told apart by `action` (audit logs
+// only); each side's missing fields are absent.
+type LogDetails =
+  | (AuditLogEntry & { jobType?: undefined; status?: undefined; relatedItem?: undefined; durationMs?: undefined; message?: undefined })
+  | (JobLogEntry & { action?: undefined; user?: undefined; ipAddress?: undefined; details?: undefined });
+type AuditLogDetails = Extract<LogDetails, { action: string }>;
+// An audit log always names its action; a job log has none.
+const isAuditLog = (log: LogDetails | null): log is AuditLogDetails => !!log?.action;
 
 export default function LogsPage() {
   const { toast } = useToast();
 
   // Live Terminal State
-  const [liveLogs, setLiveLogs] = useState<any[]>([])
+  const [liveLogs, setLiveLogs] = useState<LiveLogEntry[]>([])
   
   // Job History State
-  const [jobLogs, setJobLogs] = useState<any[]>([])
+  const [jobLogs, setJobLogs] = useState<JobLogEntry[]>([])
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [statusFilter, setStatusFilter] = useState("ALL")
   const [typeFilter, setTypeFilter] = useState("ALL")
   
   // Audit Logs State
-  const [auditLogs, setAuditLogs] = useState<any[]>([])
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
   const [loadingAudit, setLoadingAudit] = useState(true)
 
-  const [selectedLogDetails, setSelectedLogDetails] = useState<any>(null)
+  const [selectedLogDetails, setSelectedLogDetails] = useState<LogDetails | null>(null)
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1)
@@ -194,9 +204,9 @@ export default function LogsPage() {
       }
   }
 
-  const downloadLog = (log: any) => {
+  const downloadLog = (log: LogDetails) => {
       let header = "";
-      if (log.action) {
+      if (isAuditLog(log)) {
           // It's an Audit Log
           header = `Omnibus Audit Log\nAction: ${log.action}\nUser: ${log.user?.username || 'System'}\nIP: ${log.ipAddress || 'Unknown'}\nDate: ${new Date(log.createdAt).toLocaleString()}\n\n--- DETAILS ---\n\n`;
       } else {
@@ -489,7 +499,8 @@ export default function LogsPage() {
                                     // Make a quick preview summary from the JSON details
                                     let summary = log.details;
                                     try {
-                                        const parsed = JSON.parse(log.details);
+                                        // null details parse to null; Object.keys then throws into the catch below, as before.
+                                        const parsed = JSON.parse(log.details as string);
                                         // Pick the first couple of keys or values to show
                                         const keys = Object.keys(parsed);
                                         if (keys.length > 0) {
@@ -577,7 +588,7 @@ export default function LogsPage() {
         <DialogContent className="sm:max-w-3xl bg-background border-border rounded-xl">
             <DialogHeader>
                 <DialogTitle className="flex items-center gap-2 text-foreground">
-                    {selectedLogDetails?.action ? (
+                    {isAuditLog(selectedLogDetails) ? (
                         <><Shield className="w-5 h-5 text-primary" /> Audit Record: {selectedLogDetails.action}</>
                     ) : (
                         <>
@@ -595,7 +606,7 @@ export default function LogsPage() {
                 <div className="space-y-4">
                     {/* Dynamic Header Box based on Log Type */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-muted/50 p-4 rounded-md border border-border">
-                        {selectedLogDetails.action ? (
+                        {isAuditLog(selectedLogDetails) ? (
                             // Audit Log Headers
                             <>
                                 <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">User</span><span className="font-semibold text-foreground">{selectedLogDetails.user?.username || 'System'}</span></div>
@@ -608,7 +619,7 @@ export default function LogsPage() {
                                 <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Status</span><span className="font-semibold text-foreground">{selectedLogDetails.status.replace(/_/g, ' ')}</span></div>
                                 <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Target</span><span className="font-semibold truncate text-foreground">{selectedLogDetails.relatedItem || 'Global'}</span></div>
                                 <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Duration</span><span className="font-mono text-foreground">{formatDuration(selectedLogDetails.durationMs)}</span></div>
-                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Trigger</span><span className="font-semibold text-foreground">{selectedLogDetails.durationMs > 0 ? 'Automatic/UI' : 'Heartbeat'}</span></div>
+                                <div className="flex flex-col"><span className="text-[10px] text-muted-foreground uppercase font-black">Trigger</span><span className="font-semibold text-foreground">{(selectedLogDetails.durationMs ?? 0) > 0 ? 'Automatic/UI' : 'Heartbeat'}</span></div>
                             </>
                         )}
                     </div>
@@ -633,7 +644,7 @@ export default function LogsPage() {
                 </div>
             )}
             <DialogFooter className="gap-2">
-                <Button variant="outline" className="border-border hover:bg-muted font-bold" onClick={() => downloadLog(selectedLogDetails)}>
+                <Button variant="outline" className="border-border hover:bg-muted font-bold" onClick={() => downloadLog(selectedLogDetails!)}>
                     <Download className="w-4 h-4 mr-2" /> Download TXT
                 </Button>
                 <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold" onClick={() => setSelectedLogDetails(null)}>Close Details</Button>

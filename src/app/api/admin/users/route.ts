@@ -9,6 +9,7 @@ import { AuditLogger } from '@/lib/audit-logger';
 import { setUserLibraryAccess, grantAllLibraries, getDefaultLibraryIds } from '@/lib/library-access';
 import { TIER_ALL_LIBRARIES, type TierName } from '@/lib/permission-tiers';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { AdminUserRow } from '@/types/api/admin';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
       },
       orderBy: { createdAt: 'desc' }
     });
-    return NextResponse.json(users);
+    return NextResponse.json(users satisfies AdminUserRow[]);
   } catch (error) {
     Logger.log(`[Users API] Fetch Error: ${(error as Error).message}`, 'error');
     return NextResponse.json({ error: 'Failed to fetch users. Check server logs.' }, { status: 500 });

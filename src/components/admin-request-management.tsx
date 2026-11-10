@@ -17,6 +17,12 @@ import {
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
 import { COMPLETABLE_STATUSES, REQUEST_STATUS_FILTERS, requestStatusClass, requestStatusLabel, requestStatusMatches } from "@/lib/request-status"
+import type { AdminRequest } from "@/types/api/admin"
+import type { IssueDetailsReply } from "@/types/api/issue-details"
+import type { SeriesIssuesReply } from "@/types/api/series-issues"
+
+/** The details dialog: the request's volume details, its name and cover as the request knows them. */
+type RequestComicDetails = Partial<IssueDetailsReply> & { overrideName?: string; image?: string | null }
 
 // beta.010: a request still waiting for its issue can be marked completed - what the Smart Matcher and
 // the Series Monitor can't tie to a series (a MyAnimeList import, a request against the other provider,
@@ -31,7 +37,8 @@ const SORT_COLUMNS = [
   { key: 'status', label: 'Status' },
   { key: 'releaseDate', label: 'Release Date' },
   { key: 'updatedAt', label: 'Completed' },
-]
+] as const
+type SortKey = (typeof SORT_COLUMNS)[number]['key']
 
 // An UNRELEASED request's release date is a calendar day ('YYYY-MM-DD'): shown as that day wherever the
 // admin is, not as UTC midnight moved into their time zone. Anything else is shown as it came.
@@ -42,7 +49,7 @@ const releaseDay = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date)
 const REQUEST_POLL_INTERVAL_MS = 15 * 1000; // 15 seconds
 
 export function AdminRequestManagement() {
-  const [requests, setRequests] = useState<any[]>([])
+  const [requests, setRequests] = useState<AdminRequest[]>([])
   const [loading, setLoading] = useState(true)
   
   // Filters
@@ -71,11 +78,11 @@ export function AdminRequestManagement() {
 
   // Details Modal
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const [selectedComicDetails, setSelectedComicDetails] = useState<any>(null)
+  const [selectedComicDetails, setSelectedComicDetails] = useState<RequestComicDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
 
   // Interactive Search Modal
-  const [interactiveSearchReq, setInteractiveSearchReq] = useState<any>(null)
+  const [interactiveSearchReq, setInteractiveSearchReq] = useState<AdminRequest | null>(null)
 
   // Column Resizing State
   const [colWidths, setColWidths] = useState<Record<string, number>>({
@@ -125,8 +132,10 @@ export function AdminRequestManagement() {
     return [...filteredRequests].sort((a, b) => {
       // Only UNRELEASED requests have a release date; the rest go last whichever way it's sorted.
       if (sortConfig.key === 'releaseDate' && !a.releaseDate !== !b.releaseDate) return a.releaseDate ? -1 : 1;
-      let aValue = a[sortConfig.key];
-      let bValue = b[sortConfig.key];
+      // The sort keys are text columns; releaseDate alone can be null (one-sided: handled just above;
+      // both: equal either way).
+      let aValue = a[sortConfig.key as SortKey] ?? '';
+      let bValue = b[sortConfig.key as SortKey] ?? '';
       
       if (typeof aValue === 'string') aValue = aValue.toLowerCase();
       if (typeof bValue === 'string') bValue = bValue.toLowerCase();
@@ -239,7 +248,7 @@ export function AdminRequestManagement() {
   }
 
   // --- Details Fetcher ---
-  const openDetails = async (req: any) => {
+  const openDetails = async (req: AdminRequest) => {
     setDetailsOpen(true);
     setLoadingDetails(true);
     try {
@@ -251,9 +260,9 @@ export function AdminRequestManagement() {
           fetch(`/api/issue-details?id=${req.volumeId}&type=volume&provider=${req.metadataSource || 'COMICVINE'}`),
           fetch(`/api/series-issues?volumeId=${req.volumeId}&provider=${req.metadataSource || 'COMICVINE'}`)
         ]);
-        const volData = await volRes.json();
-        const issuesData = await issuesRes.json();
-        const specificIssue = issuesData.results?.find((i: any) => parseFloat(i.issueNumber) === targetIssueNum);
+        const volData: IssueDetailsReply = await volRes.json();
+        const issuesData: SeriesIssuesReply = await issuesRes.json();
+        const specificIssue = issuesData.results?.find((i) => parseFloat(i.issueNumber) === targetIssueNum);
 
         setSelectedComicDetails({
           overrideName: req.activeDownloadName || req.seriesName?.replace(/Issue #0*(\d+)/i, '#$1'),
@@ -264,7 +273,7 @@ export function AdminRequestManagement() {
         });
       } else {
         const res = await fetch(`/api/issue-details?id=${req.volumeId}&type=volume&provider=${req.metadataSource || 'COMICVINE'}`);
-        const data = await res.json();
+        const data: IssueDetailsReply = await res.json();
         setSelectedComicDetails({ 
           ...data, 
           overrideName: req.activeDownloadName || req.seriesName?.replace(/Issue #0*(\d+)/i, '#$1'),
@@ -663,7 +672,7 @@ export function AdminRequestManagement() {
           ) : selectedComicDetails && (
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-6 p-2 sm:p-0">
                <div className="aspect-[2/3] w-3/4 sm:w-full mx-auto rounded-lg overflow-hidden border border-border shadow-md bg-muted sm:self-start">
-                  <img src={selectedComicDetails.image} alt="Cover" className="w-full h-full object-cover" />
+                  <img src={selectedComicDetails.image ?? undefined} alt="Cover" className="w-full h-full object-cover" />
                </div>
                <div className="space-y-4">
                   <div className="text-center sm:text-left">

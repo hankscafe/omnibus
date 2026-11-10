@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import packageJson from '../../../../../package.json';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { GitHubRelease, UpdateCheckReply } from '@/types/api/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,9 +72,10 @@ export async function GET() {
     
     if (!res.ok) throw new Error("Failed to fetch from GitHub");
     
-    const releases = await res.json();
+    // GitHub's release list (only the fields the pages read are typed).
+    const releases: GitHubRelease[] = await res.json();
     if (!releases || releases.length === 0) {
-        return NextResponse.json({ updateAvailable: false, currentVersion, latestVersion: currentVersion, releases: [] });
+        return NextResponse.json({ updateAvailable: false, currentVersion, latestVersion: currentVersion, releases: [] } satisfies UpdateCheckReply);
     }
 
     const latestVersion = releases[0].tag_name.replace(/^v/, '');
@@ -84,10 +86,10 @@ export async function GET() {
       currentVersion,
       latestVersion,
       releases 
-    });
+    } satisfies UpdateCheckReply);
 
   } catch (error: unknown) {
     Logger.log(`[Update Check API] Error: ${getErrorMessage(error)}`, 'error');
-    return NextResponse.json({ updateAvailable: false, currentVersion: packageJson.version || "1.0.0", releases: [], error: "Could not check for updates" }, { status: 200 });
+    return NextResponse.json({ updateAvailable: false, currentVersion: packageJson.version || "1.0.0", releases: [], error: "Could not check for updates" } satisfies UpdateCheckReply, { status: 200 });
   }
 }

@@ -10,6 +10,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { markRequestsCompleted } from '@/lib/request-fulfilment';
 import { requestedIssueRows } from '@/lib/requested-release';
+import type { AdminRequestRow } from '@/types/api/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +42,7 @@ export async function GET(request: Request) {
     // The release date an UNRELEASED request waits for: the one the Series Monitor moves it on by.
     const waitingRows = await requestedIssueRows(requests.filter(r => r.status === 'UNRELEASED'));
 
-    const formattedRequests = requests.map(req => {
+    const formattedRequests = requests.map((req): AdminRequestRow => {
       const series = seriesMap.get(`${req.metadataSource || 'COMICVINE'}:${req.volumeId}`);
       let issueNumberStr = "";
       if (req.activeDownloadName) {

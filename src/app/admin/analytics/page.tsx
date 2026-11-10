@@ -15,6 +15,7 @@ import {
     PieChart, Pie, Cell, LineChart, Line, Legend 
 } from "recharts"
 import { getErrorMessage } from '@/lib/utils/error';
+import type { AnalyticsPayload } from '@/types/api/admin';
 
 // Use theme-aware colors for the charts
 const COLORS = [
@@ -27,7 +28,7 @@ const COLORS = [
 ];
 
 export default function AnalyticsPage() {
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<AnalyticsPayload | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     
@@ -44,7 +45,7 @@ export default function AnalyticsPage() {
 
         try {
             const res = await fetch('/api/admin/analytics');
-            const d = await res.json();
+            const d: AnalyticsPayload = await res.json();
             setData(d);
             if (isManual) {
                 toast({ title: "Analytics Updated", description: "All metrics have been recalculated." });
@@ -70,7 +71,7 @@ export default function AnalyticsPage() {
         setIsPurging(true);
         
         try {
-            const seriesIds = data.inactiveSeries.map((s: any) => s.id);
+            const seriesIds = data.inactiveSeries.map((s) => s.id);
             const res = await fetch('/api/library/series', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
@@ -152,7 +153,7 @@ export default function AnalyticsPage() {
                         dataKey="value"
                         animationDuration={1000}
                     >
-                        {(data?.storageData || []).map((entry: any, index: number) => (
+                        {(data?.storageData || []).map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="var(--background)" />
                         ))}
                     </Pie>
@@ -247,7 +248,7 @@ export default function AnalyticsPage() {
                     <CardContent>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {(data?.inactiveSeries || []).length > 0 ? (
-                                data.inactiveSeries.map((s: any, i: number) => (
+                                data.inactiveSeries.map((s, i) => (
                                     <div key={i} className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/30 transition-colors hover:bg-muted/50">
                                         <div className="overflow-hidden">
                                             <p className="font-bold text-sm truncate text-foreground">{s.name}</p>

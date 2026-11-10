@@ -5,6 +5,7 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getToken } from 'next-auth/jwt';
+import type { AdminLibraryOption } from '@/types/api/admin';
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -14,5 +15,5 @@ export async function GET(req: NextRequest) {
     select: { id: true, name: true, isManga: true, isDefault: true },
     orderBy: [{ isManga: 'asc' }, { name: 'asc' }],
   });
-  return NextResponse.json(libraries);
+  return NextResponse.json(libraries satisfies AdminLibraryOption[]);
 }

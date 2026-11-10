@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { getErrorMessage } from '@/lib/utils/error';
+import type { IssueReportEntry } from '@/types/api/admin';
 
 export default function AdminReportsPage() {
   // SET PAGE TITLE
@@ -18,11 +19,11 @@ export default function AdminReportsPage() {
     document.title = "Omnibus - Issues";
   }, []);
 
-  const [reports, setReports] = useState<any[]>([])
+  const [reports, setReports] = useState<IssueReportEntry[]>([])
   const [loading, setLoading] = useState(true)
   
   const [resolveModalOpen, setResolveModalOpen] = useState(false)
-  const [selectedReport, setSelectedReport] = useState<any>(null)
+  const [selectedReport, setSelectedReport] = useState<IssueReportEntry | null>(null)
   const [adminComment, setAdminComment] = useState("")
   const [resolving, setResolving] = useState(false)
   
@@ -75,7 +76,7 @@ export default function AdminReportsPage() {
     }
   }
 
-  const openResolveModal = (report: any) => {
+  const openResolveModal = (report: IssueReportEntry) => {
     setSelectedReport(report);
     setAdminComment("");
     setResolveModalOpen(true);

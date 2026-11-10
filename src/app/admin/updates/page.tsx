@@ -8,9 +8,10 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
+import type { UpdateCheckReply } from "@/types/api/admin"
 
 export default function SystemUpdatesPage() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<UpdateCheckReply | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Pagination State
@@ -94,7 +95,7 @@ export default function SystemUpdatesPage() {
             </div>
           ) : (
             <>
-              {paginatedReleases.map((release: any, index: number) => {
+              {paginatedReleases.map((release, index) => {
                  // Calculate the absolute index across all pages to correctly identify the very latest release
                  const absoluteIndex = (currentPage - 1) * pageSize + index;
                  const isLatest = absoluteIndex === 0;

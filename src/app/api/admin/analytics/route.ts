@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { AnalyticsPayload } from '@/types/api/admin';
 
 export async function GET() {
     try {
@@ -50,7 +51,7 @@ export async function GET() {
             }
         });
 
-        const healthData = logs.reduce((acc: any, log) => {
+        const healthData = logs.reduce((acc: Record<string, AnalyticsPayload['healthData'][number]>, log) => {
             const date = log.createdAt.toISOString().split('T')[0];
             if (!acc[date]) acc[date] = { date, success: 0, fail: 0 };
             if (log.status === 'COMPLETED') acc[date].success++;
@@ -83,7 +84,7 @@ export async function GET() {
             popularSeriesData: popularSeries.map(s => ({ name: s.name, completedCount: s._count.favorites })),
             inactiveSeries: inactiveSeries.map(s => ({ id: s.id, name: s.name, publisher: s.publisher || "Unknown" })), // <-- ADDED ID TO RESPONSE
             timestamp: new Date().toISOString()
-        });
+        } satisfies AnalyticsPayload);
 
     } catch (error: unknown) {
         Logger.log(`Analytics Error Details: ${getErrorMessage(error)}`, 'error');

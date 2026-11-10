@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 import { formatBytes } from "@/lib/utils/format"
+import type { StorageReply, StorageSeriesEntry } from "@/types/api/admin"
 
 function timeAgo(timestampStr: string | null) {
     if (!timestampStr) return "Never";
@@ -28,7 +29,7 @@ export default function StorageDeepDivePage() {
 
   const [loading, setLoading] = useState(true)
   const [isScanning, setIsScanning] = useState(false)
-  const [storageData, setStorageData] = useState<any[]>([])
+  const [storageData, setStorageData] = useState<StorageSeriesEntry[]>([])
   const [totalBytes, setTotalBytes] = useState(0)
   const [lastRun, setLastRun] = useState<string | null>(null)
 
@@ -37,10 +38,10 @@ export default function StorageDeepDivePage() {
     
     fetch('/api/admin/storage')
       .then(res => res.json())
-      .then(data => {
+      .then((data: StorageReply) => {
         if (data.series) {
             setStorageData(data.series);
-            const total = data.series.reduce((acc: number, curr: any) => acc + curr.sizeBytes, 0);
+            const total = data.series.reduce((acc: number, curr) => acc + curr.sizeBytes, 0);
             setTotalBytes(total);
             setLastRun(data.lastRun);
             

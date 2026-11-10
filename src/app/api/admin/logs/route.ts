@@ -4,6 +4,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { LiveLogEntry } from '@/types/api/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,7 @@ export async function GET() {
   // Defense-in-depth behind the middleware /api/admin/* gate.
   const session = await getServerSession(await getAuthOptions());
   if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  return NextResponse.json(Logger.getLogs());
+  return NextResponse.json(Logger.getLogs() satisfies LiveLogEntry[]);
 }
 
 export async function DELETE() {

@@ -10,16 +10,24 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Trophy, Plus, Edit, Trash2, ArrowLeft, Loader2, Upload } from "lucide-react"
 import Link from "next/link"
 import { useToast } from "@/components/ui/use-toast"
+import type { TrophyEntry } from "@/types/api/admin"
+
+// What the trophy dialog edits: a new trophy, or a saved one (it has an id). The target is the
+// number input's text; an uploaded icon is a data URL (readAsDataURL).
+type TrophyDraft = Omit<Partial<TrophyEntry>, 'name' | 'description' | 'actionType' | 'targetValue'> & {
+    name: string; description: string; actionType: string; targetValue: string | number;
+    iconBase64?: string | null; _previewUrl?: string | null;
+}
 
 export default function AdminTrophies() {
     if (typeof document !== 'undefined') {
         document.title = "Omnibus - Trophies";
     }
 
-    const [trophies, setTrophies] = useState<any[]>([])
+    const [trophies, setTrophies] = useState<TrophyEntry[]>([])
     const [loading, setLoading] = useState(true)
     const [modalOpen, setModalOpen] = useState(false)
-    const [editing, setEditing] = useState<any>({ name: "", description: "", actionType: "READ_COUNT", targetValue: "", iconBase64: null })
+    const [editing, setEditing] = useState<TrophyDraft>({ name: "", description: "", actionType: "READ_COUNT", targetValue: "", iconBase64: null })
     const { toast } = useToast()
 
     // The handlers live at /api/trophies (admin-only). This page used to ask /api/admin/trophies, a
@@ -52,7 +60,7 @@ export default function AdminTrophies() {
         const file = e.target.files?.[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onloadend = () => setEditing({ ...editing, iconBase64: reader.result, _previewUrl: reader.result });
+        reader.onloadend = () => setEditing({ ...editing, iconBase64: reader.result as string, _previewUrl: reader.result as string });
         reader.readAsDataURL(file);
     }
 
@@ -149,7 +157,7 @@ export default function AdminTrophies() {
                         <div className="flex flex-col items-center justify-center gap-2">
                             <div className="w-20 h-20 rounded-full border-2 border-dashed border-border flex items-center justify-center relative overflow-hidden bg-muted group cursor-pointer transition-colors hover:border-primary">
                                 {editing._previewUrl || editing.iconUrl ? (
-                                    <img src={editing._previewUrl || editing.iconUrl} alt="Trophy icon preview" className="object-contain w-14 h-14" />
+                                    <img src={(editing._previewUrl || editing.iconUrl) ?? undefined} alt="Trophy icon preview" className="object-contain w-14 h-14" />
                                 ) : (
                                     <Upload className="w-6 h-6 text-muted-foreground group-hover:text-primary transition-colors" />
                                 )}

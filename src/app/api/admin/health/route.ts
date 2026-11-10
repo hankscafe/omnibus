@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { HealthReport } from '@/types/api/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
 
         if (force) {
             const freshData = await runSystemHealthCheck();
-            return NextResponse.json(freshData);
+            return NextResponse.json(freshData satisfies HealthReport);
         }
 
         const cache = await prisma.systemSetting.findUnique({ where: { key: 'system_health_cache' } });
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
 
         // Run if no cache exists yet
         const freshData = await runSystemHealthCheck();
-        return NextResponse.json(freshData);
+        return NextResponse.json(freshData satisfies HealthReport);
 
     } catch (error: unknown) {
         Logger.log(`Health Check API Error: ${getErrorMessage(error)}`, 'error');

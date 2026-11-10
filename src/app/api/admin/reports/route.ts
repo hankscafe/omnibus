@@ -5,6 +5,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { IssueReportRow } from '@/types/api/admin';
 
 export async function GET() {
     const authOptions = await getAuthOptions();
@@ -19,7 +20,7 @@ export async function GET() {
             },
             orderBy: { createdAt: 'desc' }
         });
-        return NextResponse.json(reports);
+        return NextResponse.json(reports satisfies IssueReportRow[]);
     } catch (e) {
         // --- SECURITY FIX 1b: Log real error, hide from client ---
         Logger.log(`[Reports API] Fetch Error: ${getErrorMessage(e)}`, 'error');

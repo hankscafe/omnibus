@@ -9,6 +9,7 @@ import { qbitAuthHeaders } from '@/lib/download-clients';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { createTransmissionRpc, getTransmissionTorrents, mapTransmissionDownloads } from '@/lib/transmission';
+import type { ActiveDownloadRow, ActiveDownloadsReply } from '@/types/api/admin';
 
 export async function GET() {
   // NOTE: the per-client polling below duplicates DownloadService.getAllActiveDownloads()
@@ -24,7 +25,7 @@ export async function GET() {
         return NextResponse.json({ success: true, activeDownloads: [] });
     }
 
-    const allDownloads: any[] = [];
+    const allDownloads: ActiveDownloadRow[] = [];
     
     const customHeaders = await prisma.customHeader.findMany();
     const headers: any = { 'User-Agent': 'Omnibus/1.0' };
@@ -155,7 +156,7 @@ export async function GET() {
 
     const filteredDownloads = allDownloads.filter(d => !ignoredIds.includes(d.id) || linkedHashes.includes(d.id));
 
-    return NextResponse.json({ success: true, activeDownloads: filteredDownloads });
+    return NextResponse.json({ success: true, activeDownloads: filteredDownloads } satisfies ActiveDownloadsReply);
 
   } catch (error: unknown) {
     Logger.log(`[Active Downloads API] Error: ${getErrorMessage(error)}`, 'error');

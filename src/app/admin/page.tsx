@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { InteractiveSearchModal } from "@/components/interactive-search-modal"
 import { ManualUploadDialog } from "@/components/manual-upload-dialog"
 import { MetronLimitsRow } from "@/components/metron-limits-row"
+import type { ActiveDownloadRow, AdminRequest, HealthReport, UpdateCheckReply } from "@/types/api/admin"
 
 // Skeleton for individual Stat Cards
 function StatSkeleton() {
@@ -69,8 +70,8 @@ export default function AdminPage() {
     document.title = "Omnibus - Admin";
   }
 
-  const [torrents, setTorrents] = useState<any[]>([])
-  const [requests, setRequests] = useState<any[]>([])
+  const [torrents, setTorrents] = useState<ActiveDownloadRow[]>([])
+  const [requests, setRequests] = useState<AdminRequest[]>([])
   
   const [stats, setStats] = useState({ 
     totalRequests: 0, 
@@ -85,13 +86,13 @@ export default function AdminPage() {
   const [reqsLoading, setReqsLoading] = useState(true)
   const [downloadsLoading, setDownloadsLoading] = useState(true)
 
-  const [updateData, setUpdateData] = useState<any>(null)
+  const [updateData, setUpdateData] = useState<UpdateCheckReply | null>(null)
 
   const [importing, setImporting] = useState<string | null>(null)
   const [ignoringId, setIgnoringId] = useState<string | null>(null) 
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  const [healthData, setHealthData] = useState<any>(null);
+  const [healthData, setHealthData] = useState<HealthReport | null>(null);
   const [healthModalOpen, setHealthModalOpen] = useState(false);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const [snoozingHealth, setSnoozingHealth] = useState(false);
@@ -130,8 +131,8 @@ export default function AdminPage() {
   const [selectedRequests, setSelectedRequests] = useState<Set<string>>(new Set())
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   
-  const [interactiveSearchReq, setInteractiveSearchReq] = useState<any>(null)
-  const [uploadReq, setUploadReq] = useState<any>(null)
+  const [interactiveSearchReq, setInteractiveSearchReq] = useState<AdminRequest | null>(null)
+  const [uploadReq, setUploadReq] = useState<AdminRequest | null>(null)
 
   const [selectedQueueItems, setSelectedQueueItems] = useState<Set<string>>(new Set());
   const [isBulkQueueProcessing, setIsBulkQueueProcessing] = useState(false);
@@ -438,16 +439,17 @@ const mappedRequests = requests.map(req => {
           let match = null;
           
           if (req.downloadLink && !req.downloadLink.startsWith('http')) {
-              match = torrents.find((d: any) => d.id?.toLowerCase() === req.downloadLink?.toLowerCase());
+              match = torrents.find((d) => d.id?.toLowerCase() === req.downloadLink?.toLowerCase());
           }
           if (!match && req.activeDownloadName) {
-              match = torrents.find((d: any) => d.name === req.activeDownloadName);
+              match = torrents.find((d) => d.name === req.activeDownloadName);
           }
           
           if (!match && req.activeDownloadName) {
-              match = torrents.find((d: any) => {
-                  const reqNameLower = req.activeDownloadName.toLowerCase();
-                  const torNameLower = d.name.toLowerCase();
+              // Checked just above; and a client always names a download (Transmission's type leaves it optional).
+              match = torrents.find((d) => {
+                  const reqNameLower = req.activeDownloadName!.toLowerCase();
+                  const torNameLower = d.name!.toLowerCase();
 
                   const extractNum = (str: string) => {
                       const clean = str.replace(/\.\w+$/, '').replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, '');
@@ -1015,7 +1017,7 @@ const mappedRequests = requests.map(req => {
                                       // From md, beside the title, the pair takes only the width it needs.
                                       <div className="grid grid-cols-2 gap-1.5 w-full md:w-auto lg:flex">
                                           <Button size="sm" variant="outline" asChild title="Open the GetComics download link in your browser to clear the Cloudflare check and download the file" className="h-10 sm:h-8 text-xs font-bold flex-1 border-border hover:bg-muted text-foreground" onClick={(e) => e.stopPropagation()}>
-                                              <a href={req.downloadLink} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Download Manually</a>
+                                              <a href={req.downloadLink ?? undefined} target="_blank" rel="noopener noreferrer"><ExternalLink className="w-3 h-3 mr-1" /> Download Manually</a>
                                           </Button>
                                           <Button
                                               size="sm"
@@ -1135,7 +1137,7 @@ const mappedRequests = requests.map(req => {
                                         disabled={importing === torrent.name}
                                         onClick={() => {
                                             const select = document.getElementById(`select-${torrent.id}`) as HTMLSelectElement;
-                                            if (select && select.value) handleManualImport(select.value, torrent.name, torrent.id);
+                                            if (select && select.value) handleManualImport(select.value, torrent.name!, torrent.id);
                                             else toast({ title: "Select a request", description: "You must choose which comic this file belongs to." });
                                         }}
                                     >
@@ -1151,7 +1153,7 @@ const mappedRequests = requests.map(req => {
                                         variant="secondary" 
                                         className="h-12 sm:h-9 text-xs font-bold shadow-sm flex-1 sm:flex-none hover:bg-muted text-foreground" 
                                         disabled={importing === torrent.name} 
-                                        onClick={() => handleAutoImport(torrent.name, torrent.id)}
+                                        onClick={() => handleAutoImport(torrent.name!, torrent.id)}
                                         title="Create a new folder and import automatically"
                                     >
                                         Auto-Import
@@ -1205,7 +1207,7 @@ const mappedRequests = requests.map(req => {
             {!healthData ? (
                 <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
             ) : (
-                healthData.checks.map((check: any) => {
+                healthData.checks.map((check) => {
                     // Metron's limits get their own row: tier, daily and per-minute windows, live countdowns.
                     if (check.id === 'metron_limit') return <MetronLimitsRow key={check.id} check={check} />;
                     const isUpdateAvailable = check.id === 'system_update' && check.status === 'warning';
@@ -1245,7 +1247,7 @@ const mappedRequests = requests.map(req => {
                                         <Button
                                             variant="link" size="sm" disabled={snoozingHealth}
                                             className="h-6 px-0 mt-1 text-[10px] uppercase font-bold tracking-wider text-muted-foreground hover:text-foreground"
-                                            onClick={() => handleSnoozeHealth(check.items.map((i: { id: string }) => i.id), { days: 30 })}
+                                            onClick={() => handleSnoozeHealth(check.items!.map((i: { id: string }) => i.id), { days: 30 })}
                                         >
                                             Snooze all {check.items.length} for 30 days
                                         </Button>
@@ -1294,7 +1296,7 @@ const mappedRequests = requests.map(req => {
         <InteractiveSearchModal 
           isOpen={!!interactiveSearchReq} 
           onClose={() => { setInteractiveSearchReq(null); fetchAll(); }} 
-          initialQuery={interactiveSearchReq.exactSearchTitle || interactiveSearchReq.activeDownloadName || interactiveSearchReq.seriesName || ""}
+          initialQuery={interactiveSearchReq.activeDownloadName || interactiveSearchReq.seriesName || ""}
           comicData={{
             cvId: parseInt(interactiveSearchReq.volumeId) || 0,
             year: "2024",

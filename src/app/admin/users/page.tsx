@@ -21,6 +21,7 @@ import { PERMISSION_TIERS, tierFlags, tierFromUser, type TierName } from "@/lib/
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu"
 import { TIER_BADGE_CLASS } from "@/components/tier-badge"
 import type { AdminConfigResponse } from '@/types/api/config';
+import type { AdminLibraryOption, AdminUser } from '@/types/api/admin';
 
 export default function AdminUsersPage() {
   useEffect(() => {
@@ -28,8 +29,8 @@ export default function AdminUsersPage() {
   }, []);
 
   const { data: session } = useSession()
-  const [users, setUsers] = useState<any[]>([])
-  const [libraries, setLibraries] = useState<any[]>([])
+  const [users, setUsers] = useState<AdminUser[]>([])
+  const [libraries, setLibraries] = useState<AdminLibraryOption[]>([])
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState<string | null>(null)
 
@@ -89,7 +90,7 @@ export default function AdminUsersPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchUsers() }, [])
 
-  const handleUpdateUser = async (id: string, field: string, value: any) => {
+  const handleUpdateUser = async (id: string, field: string, value: string | boolean) => {
     setUpdating(id)
     try {
       const res = await fetch('/api/admin/users', {
@@ -133,8 +134,8 @@ export default function AdminUsersPage() {
   }
 
   // Toggle a single library grant for a user (admins bypass library access entirely).
-  const handleToggleLibrary = async (user: any, libraryId: string, checked: boolean) => {
-    const current: string[] = (user.libraryAccess || []).map((a: any) => a.libraryId)
+  const handleToggleLibrary = async (user: AdminUser, libraryId: string, checked: boolean) => {
+    const current: string[] = (user.libraryAccess || []).map((a) => a.libraryId)
     const next = checked ? Array.from(new Set([...current, libraryId])) : current.filter(x => x !== libraryId)
     setUpdating(user.id)
     try {
@@ -360,7 +361,7 @@ export default function AdminUsersPage() {
                               <DropdownMenuLabel>Library access</DropdownMenuLabel>
                               <DropdownMenuSeparator />
                               {libraries.map(lib => {
-                                const granted = new Set((user.libraryAccess || []).map((a: any) => a.libraryId))
+                                const granted = new Set((user.libraryAccess || []).map((a) => a.libraryId))
                                 return (
                                   <DropdownMenuCheckboxItem key={lib.id} checked={granted.has(lib.id)} onCheckedChange={(c) => handleToggleLibrary(user, lib.id, !!c)} onSelect={(e) => e.preventDefault()}>
                                     {lib.name}{lib.isManga ? ' (Manga)' : ''}
@@ -478,7 +479,7 @@ export default function AdminUsersPage() {
                         <DropdownMenuLabel>Library access</DropdownMenuLabel>
                         <DropdownMenuSeparator />
                         {libraries.map(lib => {
-                          const granted = new Set((user.libraryAccess || []).map((a: any) => a.libraryId))
+                          const granted = new Set((user.libraryAccess || []).map((a) => a.libraryId))
                           return (
                             <DropdownMenuCheckboxItem key={lib.id} checked={granted.has(lib.id)} onCheckedChange={(c) => handleToggleLibrary(user, lib.id, !!c)} onSelect={(e) => e.preventDefault()}>
                               {lib.name}{lib.isManga ? ' (Manga)' : ''}

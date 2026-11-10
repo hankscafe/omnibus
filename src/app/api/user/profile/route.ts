@@ -20,13 +20,11 @@ export async function GET(req: Request) {
 
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
 
-    // Identify if the user is managed via SSO
-    const isSsoUser = !user.password || user.password === '';
-    
-    // Strip the password before sending the payload to the frontend
+    // The password column is read only to tell an SSO account (no local password: null or '') from a
+    // local one. The hash itself never leaves the server: the reply sends safeUser + the flag.
     const { password, ...safeUser } = user;
-    (safeUser as any).isSsoUser = isSsoUser;
-    
+    const isSsoUser = !password;
+
     const requests = await prisma.request.findMany({
         where: { userId: token.id as string },
         orderBy: { createdAt: 'desc' }
@@ -98,9 +96,9 @@ export async function GET(req: Request) {
         earnedAt: userTrophies.find(ut => ut.trophyId === t.id)?.earnedAt || null
     }));
 
-    return NextResponse.json({ 
-        user, 
-        stats, 
+    return NextResponse.json({
+        user: { ...safeUser, isSsoUser },
+        stats,
         recentRequests: requests.slice(0, 5), 
         recentHistory, 
         trophies: mappedTrophies 

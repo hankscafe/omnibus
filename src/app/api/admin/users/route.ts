@@ -10,6 +10,18 @@ import { setUserLibraryAccess, grantAllLibraries, getDefaultLibraryIds } from '@
 import { TIER_ALL_LIBRARIES, type TierName } from '@/lib/permission-tiers';
 import { getErrorMessage } from '@/lib/utils/error';
 import type { AdminUserRow } from '@/types/api/admin';
+import type { Prisma } from '@prisma/client';
+
+// What the Users page shows for one account: the GET lists these, and PATCH / POST answer with the changed
+// user in the same shape. Never the password hash, the (encrypted) TOTP secret or sessionVersion.
+const ADMIN_USER_SELECT = {
+  id: true, username: true, email: true, role: true,
+  isApproved: true, autoApproveRequests: true, canRequest: true, canDownload: true, canCreateGlobalLists: true,
+  createdAt: true, twoFactorEnabled: true,
+  libraryAccess: { select: { libraryId: true } }
+} satisfies Prisma.UserSelect;
+
+const userNotFound = () => NextResponse.json({ error: 'User not found.' }, { status: 404 });
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req });
@@ -17,12 +29,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const users = await prisma.user.findMany({
-      select: { 
-          id: true, username: true, email: true, role: true, 
-          isApproved: true, autoApproveRequests: true, canRequest: true, canDownload: true, canCreateGlobalLists: true,
-          createdAt: true, twoFactorEnabled: true,
-          libraryAccess: { select: { libraryId: true } }
-      },
+      select: ADMIN_USER_SELECT,
       orderBy: { createdAt: 'desc' }
     });
     return NextResponse.json(users satisfies AdminUserRow[]);
@@ -98,12 +105,10 @@ export async function PATCH(req: NextRequest) {
         await grantAllLibraries(id);
     }
 
-    const finalUser = await prisma.user.findUnique({
-        where: { id },
-        include: { libraryAccess: { select: { libraryId: true } } }
-    });
-    const { password: _pw, ...safeUser } = (finalUser ?? updatedUser) as any;
-    return NextResponse.json({ success: true, user: safeUser });
+    const finalUser = await prisma.user.findUnique({ where: { id }, select: ADMIN_USER_SELECT });
+    // Deleted between the update and this read (another admin's DELETE): nothing to show.
+    if (!finalUser) return userNotFound();
+    return NextResponse.json({ success: true, user: finalUser satisfies AdminUserRow });
   } catch (error) {
     Logger.log(`[Users API] Update Error: ${(error as Error).message}`, 'error');
     return NextResponse.json({ error: 'Failed to update user. Check server logs.' }, { status: 500 });
@@ -191,12 +196,9 @@ export async function POST(req: NextRequest) {
           role: newUser.role
       }, token.id as string);
 
-      const created = await prisma.user.findUnique({
-          where: { id: newUser.id },
-          include: { libraryAccess: { select: { libraryId: true } } }
-      });
-      const { password: _, ...safeUser } = (created ?? newUser) as any;
-      return NextResponse.json(safeUser);
+      const created = await prisma.user.findUnique({ where: { id: newUser.id }, select: ADMIN_USER_SELECT });
+      if (!created) return userNotFound();
+      return NextResponse.json(created satisfies AdminUserRow);
 
   } catch (e) {
       Logger.log(`[Users API] Create Error: ${getErrorMessage(e)}`, 'error');

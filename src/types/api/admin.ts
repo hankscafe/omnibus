@@ -153,6 +153,8 @@ export type TrophyEntry = Jsonified<Trophy>;
 
 // --- GET /api/admin/users, /api/admin/libraries ------------------------------------------------------
 
+/** One account on the Users page: GET /api/admin/users lists these; PATCH answers `{ success, user }` and
+ *  POST the new account, in this shape. Never the password hash, TOTP secret or sessionVersion. */
 export interface AdminUserRow {
     id: string;
     username: string;

@@ -261,6 +261,8 @@ Manual comic uploads are large requests, and proxies commonly cap request bodies
 
 Omnibus' own upload limit is 2GB per file, adjustable with the `OMNIBUS_MAX_UPLOAD_MB` environment variable on the web container.
 
+Omnibus pages send a Content-Security-Policy that only lets the app's own scripts run. A script a proxy adds to pages — an analytics snippet, or Cloudflare's Rocket Loader, which takes over loading the app's own scripts — is blocked by it, and with Rocket Loader the pages stop working. Turn such features off for Omnibus, or set `OMNIBUS_CSP=report-only` on the web container (the browser console then lists what the policy would block, without blocking it). `OMNIBUS_CSP=off` removes the policy.
+
 ## Support & Community
 
 If you run into issues, have suggestions, or want to contribute, please join the community:

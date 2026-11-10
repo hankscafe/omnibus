@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import { Logger } from '@/lib/logger'
 import { isInactivityExpired, windowRole } from '@/lib/session-timeout'
+import { buildCsp, cspHeaderName, cspMode, makeNonce } from '@/lib/csp'
 export async function middleware(req: NextRequest) {
   const token = await getToken({ req })
   // A token flagged { error: "SessionExpired" } by the jwt callback is still a truthy object, and
@@ -85,11 +86,28 @@ export async function middleware(req: NextRequest) {
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set('x-pathname', pathname);
 
-  return NextResponse.next({
+  // --- 3. CONTENT-SECURITY-POLICY (pages only; src/lib/csp.ts) ---
+  // A nonce or policy the browser sent is never passed on. The render reads ours: x-nonce for the root
+  // layout's inline scripts, and the policy header itself, which Next reads to nonce its own scripts.
+  requestHeaders.delete('x-nonce');
+  requestHeaders.delete('content-security-policy');
+  requestHeaders.delete('content-security-policy-report-only');
+  const cspHeader = isApiRoute ? null : cspHeaderName(cspMode(process.env.OMNIBUS_CSP));
+  let policy: string | null = null;
+  if (cspHeader) {
+    const nonce = makeNonce();
+    policy = buildCsp(nonce, { dev: process.env.NODE_ENV === 'development' });
+    requestHeaders.set('x-nonce', nonce);
+    requestHeaders.set(cspHeader, policy);
+  }
+
+  const res = NextResponse.next({
     request: {
       headers: requestHeaders,
     }
   })
+  if (cspHeader && policy) res.headers.set(cspHeader, policy);
+  return res
 }
 
 // The middleware now guards everything except static assets

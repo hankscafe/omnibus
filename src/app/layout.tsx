@@ -55,6 +55,9 @@ export default async function RootLayout({
   // --- INSTANT SERVER-SIDE SETUP GUARD ---
   const headersList = await headers();
   const pathname = headersList.get("x-pathname") || "";
+  // The request's Content-Security-Policy nonce (middleware; src/lib/csp.ts): the inline scripts below
+  // run only with it. Absent when OMNIBUS_CSP=off.
+  const nonce = headersList.get("x-nonce") ?? undefined;
   
   let requiresSetup = false;
 
@@ -98,7 +101,11 @@ export default async function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         
         {/* EXACT ANTI-FOUC SCRIPT: Perfectly matches your ThemeProvider & globals.css */}
+        {/* suppressHydrationWarning: browsers hide a nonce from the DOM once the page loads, so the
+            client always sees nonce="" (next-themes' own script does the same). */}
         <script
+          nonce={nonce}
+          suppressHydrationWarning
           dangerouslySetInnerHTML={{
             __html: `
               try {
@@ -139,7 +146,7 @@ export default async function RootLayout({
         {/* --- MAIN APP CONTENT --- */}
         <div className="min-h-screen flex flex-col relative z-0">
           <AuthProvider>
-            <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+            <ThemeProvider attribute="class" defaultTheme="system" enableSystem nonce={nonce}>
               
               <TitleManager />
               

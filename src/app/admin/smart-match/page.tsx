@@ -17,8 +17,8 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage, errorMessageOr } from "@/lib/utils/error";
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion, closedRequestsNote } from "@/lib/utils/smart-match-search"
-import SmartMatchMetadataDialog, { type SmartMatchOverride, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
+import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion, closedRequestsNote, realSuggestion, type ManualSuggestion, type MatchSuggestion, type SuggestionState } from "@/lib/utils/smart-match-search"
+import SmartMatchMetadataDialog, { type SmartMatchOverride, type SmartMatchSeed, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import { FolderCollisionDialog, type FolderCollision, type CollisionResolution } from "@/components/folder-collision-dialog"
 import { AttachLocalCollectedDialog } from "@/components/attach-local-collected-dialog"
 import { BookMarked } from "lucide-react"
@@ -26,6 +26,15 @@ import SmartMatchBoundIssue from "@/components/smart-match-bound-issue"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
 import type { AdminConfigResponse } from '@/types/api/config';
+import type { SeriesResponse } from '@/types/api/series';
+import type { SearchReply, SearchResult } from '@/types/api/search';
+import type { IssueCoversReply, IssueDetailsReply, VolumeIssueStub } from '@/types/api/issue-details';
+import type { ArchivePreviewInfo, BulkMatchReply, BulkMatchResult, MatchSeriesFailure, MatchSeriesOk, PrefillReply, SweepInfo, UnmatchedItem } from '@/types/api/smart-match';
+import type { MatchPrefill } from '@/lib/utils/match-prefill';
+
+/** What the metadata editor opens with: the item's suggestion, plus what its "Refresh from number"
+ *  and "fill from provider" need. */
+type MetaEditorSeed = SmartMatchSeed & { metadataId?: string | number; metadataSource?: string; credits?: Record<string, string> };
 
 // Auto-scan results (the ComicVine/Metron match suggestions) are kept in sessionStorage so a page
 // refresh or navigate-away-and-back restores them instead of re-running the scan. The cache is
@@ -35,7 +44,7 @@ import type { AdminConfigResponse } from '@/types/api/config';
 const SCAN_CACHE_PREFIX = 'omnibus-smartmatch-suggestions';
 const SCAN_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
-function readScanCache(provider: string): Record<string, any> {
+function readScanCache(provider: string): Record<string, SuggestionState> {
     try {
         const raw = sessionStorage.getItem(`${SCAN_CACHE_PREFIX}-${provider}`);
         if (!raw) return {};
@@ -50,7 +59,7 @@ function readScanCache(provider: string): Record<string, any> {
     }
 }
 
-function writeScanCache(provider: string, data: Record<string, any>) {
+function writeScanCache(provider: string, data: Record<string, SuggestionState>) {
     try {
         if (!data || Object.keys(data).length === 0) {
             sessionStorage.removeItem(`${SCAN_CACHE_PREFIX}-${provider}`);
@@ -71,7 +80,7 @@ function timeAgo(ms: number): string {
 }
 
 // One-line status of the background unmatched sweep (discussion #177), from /api/admin/sweep.
-function describeSweep(info: any): string {
+function describeSweep(info: SweepInfo): string {
     const r = info?.lastResult;
     if (!r) {
         const triggered = Number(info?.lastTriggered);
@@ -97,29 +106,29 @@ export default function SmartMatchPage() {
     // toggle is instant and the count is honest on first paint — an admin can see that ignored
     // entries exist without having to go looking for them. Everything that acts on rows uses
     // visibleUnmatched below.
-    const [unmatched, setUnmatched] = useState<any[]>([]);
+    const [unmatched, setUnmatched] = useState<UnmatchedItem[]>([]);
     const [showIgnored, setShowIgnored] = useState(false);
     // Provider cover per bound issue id, for the bulk mapping table. Filled from the volume payload
     // where the provider already gave us covers (Metron), otherwise in ONE batch call (ComicVine).
     const [issueCovers, setIssueCovers] = useState<Record<string, string>>({});
-    const [suggestions, setSuggestions] = useState<Record<string, any>>({});
+    const [suggestions, setSuggestions] = useState<Record<string, SuggestionState>>({});
     const [isScanning, setIsScanning] = useState(false);
     const [processingId, setProcessingId] = useState<string | null>(null);
     // A match whose folder another series already owns (409 from match-series): the admin chooses
     // attach-as-collected or a folder name of its own, and the accept is re-sent with that choice.
-    const [collisionPrompt, setCollisionPrompt] = useState<{ series: any; suggestion: any; collision: FolderCollision } | null>(null);
+    const [collisionPrompt, setCollisionPrompt] = useState<{ series: UnmatchedItem; suggestion: MatchSuggestion; collision: FolderCollision } | null>(null);
     const [collisionBusy, setCollisionBusy] = useState(false);
     // A trade the provider has no volume for: attach it to a series of yours by name, as a LOCAL collected edition.
-    const [localAttachItem, setLocalAttachItem] = useState<any | null>(null);
+    const [localAttachItem, setLocalAttachItem] = useState<UnmatchedItem | null>(null);
     const [loading, setLoading] = useState(true);
 
     const [manualMatchOpen, setManualMatchOpen] = useState(false);
-    const [manualMatchTarget, setManualMatchTarget] = useState<any>(null);
+    const [manualMatchTarget, setManualMatchTarget] = useState<UnmatchedItem | null>(null);
     // Search-by-name is the PRIMARY manual-match flow (#199 round 2, concept by CapitanoNemo78):
     // same /api/search the request flow uses, pick a result, done. The exact-ID lookup below stays
     // as the advanced fallback for admins who already have the provider id.
     const [manualSearchQuery, setManualSearchQuery] = useState("");
-    const [manualSearchResults, setManualSearchResults] = useState<any[]>([]);
+    const [manualSearchResults, setManualSearchResults] = useState<SearchResult[]>([]);
     const [manualSearchPage, setManualSearchPage] = useState(1);
     const [hasMoreManualSearch, setHasMoreManualSearch] = useState(false);
     const [isManualSearching, setIsManualSearching] = useState(false);
@@ -137,20 +146,20 @@ export default function SmartMatchPage() {
     const [issueOverrides, setIssueOverrides] = useState<Record<string, { issueId: string, issueNumber: string, coverImageBase64?: string, coverFromArchive?: boolean }>>({});
     // #199 round 4: per-item "local evidence" (ComicInfo.xml / series.json / scan-banked row),
     // fetched lazily and cached for the session. null = fetched, nothing found.
-    const [prefills, setPrefills] = useState<Record<string, any>>({});
-    const prefillFetches = useRef<Record<string, Promise<any>>>({});
+    const [prefills, setPrefills] = useState<Record<string, MatchPrefill | null>>({});
+    const prefillFetches = useRef<Record<string, Promise<MatchPrefill | null>>>({});
     // One id-assist attempt per item per session — a failed lookup falls back to normal search
     // without retry loops.
     const attemptedIdAssist = useRef<Set<string>>(new Set());
 
-    const fetchPrefill = (item: any): Promise<any> => {
+    const fetchPrefill = (item: UnmatchedItem): Promise<MatchPrefill | null> => {
         if (!item?.folderPath) return Promise.resolve(null);
         if (item.id in prefills) return Promise.resolve(prefills[item.id]);
         if (!prefillFetches.current[item.id]) {
             prefillFetches.current[item.id] = (async () => {
                 try {
                     const res = await fetch(`/api/admin/match-prefill?path=${encodeURIComponent(item.folderPath)}`);
-                    const data = await res.json().catch(() => null);
+                    const data: PrefillReply | null = await res.json().catch(() => null);
                     const p = res.ok && data?.hasContent ? data.prefill : null;
                     setPrefills(prev => ({ ...prev, [item.id]: p }));
                     return p;
@@ -172,7 +181,7 @@ export default function SmartMatchPage() {
         setEmbedIssueCovers(v);
         try { localStorage.setItem('omnibus-embed-issue-cover', v ? '1' : '0'); } catch { /* private mode */ }
     };
-    const [manualMatchResult, setManualMatchResult] = useState<any>(null);
+    const [manualMatchResult, setManualMatchResult] = useState<ManualSuggestion | null>(null);
     
     // --- NEW: Multi-Select & Bulk Processing State ---
     const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -191,8 +200,8 @@ export default function SmartMatchPage() {
     // --- NEW: Per-item metadata overrides (Series Group / Universe / identity) applied at match time ---
     const [metadataOverrides, setMetadataOverrides] = useState<Record<string, SmartMatchOverride>>({});
     const [metaEditorOpen, setMetaEditorOpen] = useState(false);
-    const [metaEditorTarget, setMetaEditorTarget] = useState<any>(null);
-    const [metaEditorSeed, setMetaEditorSeed] = useState<any>(null);
+    const [metaEditorTarget, setMetaEditorTarget] = useState<UnmatchedItem | null>(null);
+    const [metaEditorSeed, setMetaEditorSeed] = useState<MetaEditorSeed | null>(null);
     const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
     const [writeToFileDefault, setWriteToFileDefault] = useState(true);
     // Bulk Custom-ID: a shared Series Group / Universe applied to every selected item.
@@ -209,13 +218,13 @@ export default function SmartMatchPage() {
     // Resolves matcher cards (series folders or loose files) to their FILE-BACKED issue rows —
     // the Page Manager needs issue ids for the progress/bookmark fixups, so pre-import loose
     // files (no DB row yet) are skipped with a note.
-    const expandCardsToPageTargets = async (cards: any[]): Promise<PageManagerTarget[]> => {
+    const expandCardsToPageTargets = async (cards: UnmatchedItem[]): Promise<PageManagerTarget[]> => {
         const targets: PageManagerTarget[] = [];
         for (const card of cards) {
             try {
                 const res = await fetch(`/api/library/series?path=${encodeURIComponent(card.folderPath)}`);
                 if (!res.ok) continue;
-                const data = await res.json();
+                const data: SeriesResponse = await res.json();
                 const issues = Array.isArray(data.downloadedIssues) ? data.downloadedIssues : [];
                 for (const iss of issues) {
                     if (!iss.id || !iss.fullPath) continue;
@@ -227,7 +236,7 @@ export default function SmartMatchPage() {
         return targets;
     };
 
-    const openPageManager = async (cards: any[]) => {
+    const openPageManager = async (cards: UnmatchedItem[]) => {
         setPageManagerLoading(true);
         try {
             const targets = await expandCardsToPageTargets(cards);
@@ -248,7 +257,7 @@ export default function SmartMatchPage() {
 
     // --- Page preview: flip through an unmatched file's pages to identify it before matching ---
     const [previewOpen, setPreviewOpen] = useState(false);
-    const [previewTarget, setPreviewTarget] = useState<any>(null);
+    const [previewTarget, setPreviewTarget] = useState<UnmatchedItem | null>(null);
     const [previewFile, setPreviewFile] = useState<string | null>(null);
     const [previewCount, setPreviewCount] = useState(0);
     const [previewIndex, setPreviewIndex] = useState(0);
@@ -257,7 +266,7 @@ export default function SmartMatchPage() {
     // RAR-family archives can't be page-listed (zip-only) — fall back to the single-page archive cover.
     const previewIsRar = !!previewFile && /\.(cbr|rar|cb7)$/i.test(previewFile) && previewCount === 0;
 
-    const openPreview = async (series: any) => {
+    const openPreview = async (series: UnmatchedItem) => {
         setPreviewTarget(series);
         setPreviewOpen(true);
         setPreviewLoading(true);
@@ -271,7 +280,7 @@ export default function SmartMatchPage() {
                 const data = await res.json().catch(() => null);
                 throw new Error(data?.error || 'Preview unavailable');
             }
-            const data = await res.json();
+            const data: ArchivePreviewInfo = await res.json();
             if (!data.file) {
                 setPreviewError('No comic archive found in this folder.');
                 return;
@@ -291,15 +300,15 @@ export default function SmartMatchPage() {
     const { toast } = useToast();
 
     // --- Background sweep status (discussion #177): what the scheduled retry sweep did last ---
-    const [sweepInfo, setSweepInfo] = useState<any>(null);
+    const [sweepInfo, setSweepInfo] = useState<SweepInfo | null>(null);
     const [sweepQueued, setSweepQueued] = useState(false);
     const sweepPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    const fetchSweepInfo = async (): Promise<any | null> => {
+    const fetchSweepInfo = async (): Promise<SweepInfo | null> => {
         try {
             const res = await fetch('/api/admin/sweep', { cache: 'no-store' });
             if (!res.ok) return null;
-            const data = await res.json();
+            const data: SweepInfo = await res.json();
             setSweepInfo(data);
             return data;
         } catch {
@@ -435,7 +444,8 @@ export default function SmartMatchPage() {
                 // kept aside for ranking and never sent — the search route would only turn it into a
                 // boolean sort that pulls every same-year volume ahead of the exact name.
                 const { query: cleanName, year: nameYear } = seriesQueryFromName(series.name);
-                const wantedYear = series.year > 0 ? series.year : nameYear;
+                // A loose file has no year of its own (undefined), so its name's year is used.
+                const wantedYear = series.year != null && series.year > 0 ? series.year : nameYear;
                 const query = `${cleanName} ${wantedYear ?? ''}`.trim();
 
                 Logger.log(`[Smart Match Debug] Auto-scanning for "${query}" using provider: ${searchProvider}`, 'debug');
@@ -458,13 +468,13 @@ export default function SmartMatchPage() {
                     throw new Error(`Search request failed with status ${res.status}`);
                 }
 
-                const data = await res.json();
+                const data: SearchReply = await res.json();
 
                 // Score every candidate — name similarity first, the year as a tiebreaker — instead of
                 // trusting results[0]. A best candidate that barely resembles the name becomes
                 // NOT_FOUND on purpose: Accept All takes any row with a suggestion, and a confident-
                 // looking wrong answer there costs a folder move to undo.
-                const results: { id: string | number; name?: string; year?: string | number | null; image?: string | null; metadataSource?: string }[] = data.results || [];
+                const results: SearchResult[] = data.results || [];
                 const picked = pickSuggestion(cleanName, wantedYear, results);
                 if (picked) {
                     setSuggestions(prev => ({ ...prev, [series.id]: picked }));
@@ -510,7 +520,7 @@ export default function SmartMatchPage() {
     // All — so every path carries the same admin overrides and issue-exact fields. Async since
     // #199 round 4 Beta B: keep-mode reads the item's local evidence at Accept time so curation
     // carries (and locks) even when the admin never opened the editor.
-    const buildMatchPayload = async (series: any, suggestion: any) => {
+    const buildMatchPayload = async (series: UnmatchedItem, suggestion: MatchSuggestion) => {
         const issueOv = issueOverrides[series.id] || {};
         const meta = metadataOverrides[series.id];
         const dataMode = meta?.dataMode ?? 'keep';
@@ -564,7 +574,7 @@ export default function SmartMatchPage() {
         };
     };
 
-    const handleAcceptMatch = async (series: any, suggestion: any, opts?: { resolution?: CollisionResolution; promptOnCollision?: boolean }) => {
+    const handleAcceptMatch = async (series: UnmatchedItem, suggestion: MatchSuggestion, opts?: { resolution?: CollisionResolution; promptOnCollision?: boolean }) => {
         setProcessingId(series.id);
         try {
             Logger.log(`[Smart Match Debug] Accepting match for "${series.name}". Linking to ${suggestion.metadataSource || 'COMICVINE'} ID: ${suggestion.id}`, 'debug');
@@ -576,7 +586,7 @@ export default function SmartMatchPage() {
             });
 
             if (res.ok) {
-                const result = await res.json().catch(() => ({}));
+                const result: MatchSeriesOk = await res.json().catch(() => ({}));
                 if (result.attachedTo) {
                     // The collision's usual answer: the volume went UNDER the series that owns the folder.
                     toast({
@@ -592,7 +602,7 @@ export default function SmartMatchPage() {
                 setUnmatched(prev => prev.filter(s => s.id !== series.id));
                 return true;
             } else {
-                const err = await res.json().catch(() => ({}));
+                const err: Partial<MatchSeriesFailure> = await res.json().catch(() => ({}));
                 // The folder another series owns: ask, unless this is a bulk pass (then it's a failure
                 // the summary names, and the row stays for a single accept).
                 if (res.status === 409 && err.collision && opts?.promptOnCollision !== false) {
@@ -664,14 +674,15 @@ export default function SmartMatchPage() {
         try {
             for (let i = 0; i < targets.length; i += ACCEPT_ALL_CHUNK) {
                 const chunk = targets.slice(i, i + ACCEPT_ALL_CHUNK);
-                let results: Array<{ ok: boolean; requestsClosed?: number; error?: string }> = [];
+                let results: BulkMatchResult[] = [];
                 try {
                     const res = await fetch('/api/library/match-series/bulk', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ items: await Promise.all(chunk.map(s => buildMatchPayload(s, suggestions[s.id]))) })
+                        // acceptableForBulk kept only rows with a real suggestion.
+                        body: JSON.stringify({ items: await Promise.all(chunk.map(s => buildMatchPayload(s, suggestions[s.id] as MatchSuggestion))) })
                     });
-                    const data = await res.json().catch(() => ({}));
+                    const data: BulkMatchReply = await res.json().catch(() => ({}));
                     results = res.ok && Array.isArray(data.results)
                         ? data.results
                         : chunk.map(() => ({ ok: false, error: data.error || `HTTP ${res.status}` }));
@@ -711,7 +722,7 @@ export default function SmartMatchPage() {
         setIsManualMatching(true);
         try {
             const res = await fetch(`/api/issue-details?id=${volumeId}&type=volume&provider=${provider}`);
-            const data = await res.json();
+            const data: IssueDetailsReply = await res.json();
 
             if (res.ok && data && !data.error) {
                 const suggestionData = buildManualSuggestion(data, provider);
@@ -790,7 +801,7 @@ export default function SmartMatchPage() {
                 if (!vid && issueId) {
                     // Only an issue id — one detail call resolves its volume, then the normal path runs.
                     const r = await fetch(`/api/issue-details?id=${issueId}&type=issue&provider=${issueProvider}`);
-                    const d = await r.json().catch(() => null);
+                    const d: IssueDetailsReply | null = await r.json().catch(() => null);
                     if (r.ok && d?.volumeId) vid = String(d.volumeId);
                 }
                 if (!vid) return;
@@ -833,7 +844,7 @@ export default function SmartMatchPage() {
             Logger.log(`[Smart Match Debug] Manual search initiated for "${manualSearchQuery}" via ${searchProvider}`, 'debug');
 
             const res = await fetch(`/api/search?q=${encodeURIComponent(manualSearchQuery)}&page=${nextPage}&provider=${searchProvider}`);
-            const data = await res.json();
+            const data: SearchReply = await res.json();
             if (!res.ok) throw new Error(data.error || "Search failed");
 
             setManualSearchResults(prev => loadMore ? [...prev, ...(data.results || [])] : (data.results || []));
@@ -853,7 +864,7 @@ export default function SmartMatchPage() {
 
     // A result row was picked — resolve it under ITS OWN provider (results keep their source, so a
     // list searched on one provider stays selectable after the source dropdown changes).
-    const handleSelectSearchResult = (item: any) => {
+    const handleSelectSearchResult = (item: SearchResult) => {
         if (isManualMatching) return;
         resolveVolumeSelection(String(item.id), item.metadataSource || searchProvider);
     };
@@ -1009,10 +1020,12 @@ export default function SmartMatchPage() {
      * 30-file selection costs one provider call rather than thirty. Failure is silent — a missing
      * thumbnail must never block a match.
      */
-    const loadIssueCovers = async (issueIds: string[], rawIssues: any[] | undefined, provider: string) => {
+    const loadIssueCovers = async (issueIds: string[], rawIssues: VolumeIssueStub[] | undefined, provider: string) => {
         const fromVolume: Record<string, string> = {};
         for (const raw of rawIssues || []) {
-            const url = raw?.image?.thumb_url || raw?.image?.small_url || (typeof raw?.image === 'string' ? raw.image : null);
+            // Metron's stubs carry the cover URL as a string; an image object's thumbnail counts too.
+            const image = raw?.image;
+            const url = typeof image === 'string' ? image : (image?.thumb_url || image?.small_url || null);
             if (raw?.id != null && url) fromVolume[String(raw.id)] = url;
         }
         if (Object.keys(fromVolume).length > 0) setIssueCovers(prev => ({ ...prev, ...fromVolume }));
@@ -1026,7 +1039,7 @@ export default function SmartMatchPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ids: missing, provider }),
             });
-            const data = await res.json();
+            const data: IssueCoversReply = await res.json();
             if (res.ok && data?.covers) setIssueCovers(prev => ({ ...prev, ...data.covers }));
         } catch (e: unknown) {
             Logger.log(`[Smart Match] Couldn't load issue cover thumbnails: ${getErrorMessage(e)}`, 'debug');
@@ -1061,22 +1074,24 @@ export default function SmartMatchPage() {
     // Open the per-item metadata editor, seeding from the item's current suggestion / lookup result.
     // Awaits the item's file-side prefill first (#199 round 4) so the dialog opens with the
     // library's own metadata already in the fields — a local read, so the wait is imperceptible.
-    const openMetaEditor = async (target: any, seedSource: any) => {
+    const openMetaEditor = async (target: UnmatchedItem, seedSource: SuggestionState | null | undefined) => {
         await fetchPrefill(target).catch(() => null);
         setMetaEditorTarget(target);
+        // A NOT_FOUND / ERROR row still opens with a (blank) seed, so the dialog keeps the active provider.
+        const picked = realSuggestion(seedSource);
         setMetaEditorSeed(seedSource ? {
-            name: seedSource.name,
-            year: seedSource.year,
-            publisher: seedSource.publisher,
-            description: seedSource.description,
-            image: seedSource.image,
+            name: picked?.name,
+            year: picked?.year,
+            publisher: picked?.publisher,
+            description: picked?.description,
+            image: picked?.image ?? undefined,
             // #199 round 2: carried so the dialog's own "Refresh from number" can re-resolve this
             // issue's exact provider ID without a Search Match round-trip.
-            metadataId: seedSource.id,
-            metadataSource: seedSource.metadataSource || searchProvider,
+            metadataId: picked?.id,
+            metadataSource: picked?.metadataSource || searchProvider,
             // #199 round 4: the volume's aggregated credits ride the seed so the dialog's
             // "fill empty fields from provider" always uses THIS item's match, never a stale one.
-            credits: seedSource.credits,
+            credits: picked?.credits,
         } : null);
         setMetaEditorOpen(true);
     };
@@ -1236,9 +1251,10 @@ export default function SmartMatchPage() {
                 <div className="flex flex-col gap-4 pb-20 mt-6">
                     {visibleUnmatched.map((series) => {
                         const suggestion = suggestions[series.id];
+                        const picked = realSuggestion(suggestion);
                         const isProcessing = processingId === series.id;
                         const isSelected = selectedItems.has(series.id);
-                        const providerLabel = suggestion?.metadataSource === 'METRON' ? 'Metron' : (suggestion?.metadataSource === 'COMICVINE' ? 'ComicVine' : (searchProvider === 'METRON' ? 'Metron' : 'ComicVine'));
+                        const providerLabel = picked?.metadataSource === 'METRON' ? 'Metron' : (picked?.metadataSource === 'COMICVINE' ? 'ComicVine' : (searchProvider === 'METRON' ? 'Metron' : 'ComicVine'));
 
                         return (
                             <Card 
@@ -1344,9 +1360,9 @@ export default function SmartMatchPage() {
                                             <FolderTree className="w-3.5 h-3.5 mt-px shrink-0" />
                                             <span className="font-mono break-all leading-snug">
                                                 {buildFolderPreview(folderPattern, {
-                                                    name: metadataOverrides[series.id].name || suggestion?.name,
-                                                    year: metadataOverrides[series.id].year || suggestion?.year,
-                                                    publisher: metadataOverrides[series.id].publisher || suggestion?.publisher,
+                                                    name: metadataOverrides[series.id].name || picked?.name,
+                                                    year: metadataOverrides[series.id].year || picked?.year,
+                                                    publisher: metadataOverrides[series.id].publisher || picked?.publisher,
                                                     universe: metadataOverrides[series.id].universe,
                                                     seriesGroup: metadataOverrides[series.id].seriesGroup,
                                                     imprint: metadataOverrides[series.id].imprint ?? series.imprint,
@@ -1362,7 +1378,8 @@ export default function SmartMatchPage() {
                                         size="sm" 
                                         className="flex-1 md:flex-none bg-green-600 hover:bg-green-700 text-white font-bold disabled:opacity-50 border-0"
                                         disabled={!suggestion || suggestion === 'NOT_FOUND' || suggestion === 'ERROR' || isSelectionMode}
-                                        onClick={(e) => { e.stopPropagation(); handleAcceptMatch(series, suggestion); }}
+                                        // Disabled unless the row has a real suggestion.
+                                        onClick={(e) => { e.stopPropagation(); handleAcceptMatch(series, suggestion as MatchSuggestion); }}
                                     >
                                         <Check className="w-5 h-5 md:mr-2" /> <span className="hidden md:inline">Accept</span>
                                     </Button>
@@ -1962,7 +1979,7 @@ export default function SmartMatchPage() {
                 // #199 round 4: the library's own metadata seeds the fields (file-first), and the
                 // matched volume's credits back the explicit "fill empty fields" action.
                 prefill={metaEditorTarget ? (prefills[metaEditorTarget.id] || undefined) : undefined}
-                providerFields={metaEditorSeed?.credits ?? (metaEditorTarget ? suggestions[metaEditorTarget.id]?.credits : undefined)}
+                providerFields={metaEditorSeed?.credits ?? (metaEditorTarget ? realSuggestion(suggestions[metaEditorTarget.id])?.credits : undefined)}
             />
 
             {/* --- PAGE PREVIEW DIALOG: flip through an unmatched file before matching it --- */}

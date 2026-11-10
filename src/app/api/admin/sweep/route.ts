@@ -11,6 +11,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { prisma } from '@/lib/db';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { SweepPayload, SweepResult } from '@/types/api/smart-match';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +33,7 @@ export async function GET() {
     ]);
     const config = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
-    let lastResult: any = null;
+    let lastResult: SweepResult | null = null;
     if (config.last_unmatched_sweep_result) {
       try { lastResult = JSON.parse(config.last_unmatched_sweep_result); } catch { /* pre-upgrade or corrupt value — treat as no result */ }
     }
@@ -43,7 +44,7 @@ export async function GET() {
       matcherMode: config.matcher_mode || 'confirm',
       scheduleHours: config.unmatched_sweep_schedule || '1',
       history
-    });
+    } satisfies SweepPayload);
   } catch (error: unknown) {
     Logger.log(`[Sweep API] Fetch Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

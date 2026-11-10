@@ -13,19 +13,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { FolderCollision } from "@/types/api/smart-match";
 
-export interface FolderCollision {
-    seriesId: string;
-    seriesName: string;
-    year: number | null;
-    publisher?: string | null;
-    metadataSource?: string;
-    metadataId?: string | null;
-    folderPath: string;
-    suggestedFolderName: string;
-    volumeName: string;
-    volumeYear?: number | null;
-}
+// The 409 body's `collision` (match-series builds it); its home is the route's payload types.
+export type { FolderCollision };
 
 export type CollisionResolution = { mode: 'attach' } | { mode: 'rename'; folderName: string };
 

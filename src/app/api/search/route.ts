@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
+import type { SearchPayload, SearchResultRow } from '@/types/api/search';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
 
@@ -95,7 +96,7 @@ export async function GET(request: Request) {
         ? config.filter_foreign_publishers.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean) 
         : [];
 
-    let finalResults: any[] = [];
+    let finalResults: SearchResultRow[] = [];
     let hasMore = false;
     // A page whose covers were skipped (Metron busy) isn't cached, so the next look fills them in.
     let cacheable = true;
@@ -106,7 +107,7 @@ export async function GET(request: Request) {
         const mdResults = await metron.searchSeries(query, page, { covers: wantCovers });
         cacheable = !mdResults.some(r => r.coverPending);
 
-        let results = mdResults.map((r: any) => ({
+        let results = mdResults.map((r): SearchResultRow => ({
             id: r.sourceId,
             name: r.name,
             year: r.year,
@@ -119,7 +120,7 @@ export async function GET(request: Request) {
         }));
 
         if (blockedForeignPublishers.length > 0) {
-            results = results.filter((r: any) => {
+            results = results.filter((r) => {
                 const pub = (r.publisher || "").toLowerCase();
                 return !blockedForeignPublishers.some((bp: string) => pub.includes(bp));
             });
@@ -153,7 +154,7 @@ export async function GET(request: Request) {
         const fill = await fillStrippedVolumes(response.data.results, CV_API_KEY);
         cacheable = fill.filled;
 
-        let results = fill.volumes.map((vol: ComicVineVolume) => {
+        let results = fill.volumes.map((vol: ComicVineVolume): SearchResultRow => {
           let desc = vol.deck;
           if (!desc && vol.description) {
              desc = vol.description.replace(/<[^>]*>?/gm, '').trim();
@@ -202,7 +203,7 @@ export async function GET(request: Request) {
         });
     }
 
-    return NextResponse.json({ results: finalResults, hasMore });
+    return NextResponse.json({ results: finalResults, hasMore } satisfies SearchPayload);
 
   } catch (error) {
     Logger.log(`API Error: ${getErrorMessage(error)}`, 'error');

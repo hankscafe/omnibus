@@ -16,6 +16,7 @@ import { getToken } from 'next-auth/jwt';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { POST as applySingleMatch } from '../route';
+import type { BulkMatchReply, BulkMatchResult, MatchSeriesFailure, MatchSeriesOk } from '@/types/api/smart-match';
 
 const MAX_ITEMS_PER_CALL = 10;
 
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
     }
 
     const cookie = request.headers.get('cookie') || '';
-    const results: Array<{ ok: boolean; conflicts?: number; requestsClosed?: number; error?: string }> = [];
+    const results: BulkMatchResult[] = [];
 
     // Sequential on purpose: each accept moves folders and writes the same tables; parallel accepts
     // would race folder relocation and library-level conflict checks for no real wall-clock win
@@ -49,8 +50,9 @@ export async function POST(request: NextRequest) {
                 headers: { 'Content-Type': 'application/json', cookie },
                 body: JSON.stringify(item),
             });
-            const res = await applySingleMatch(inner as any);
-            const body = await res.json().catch(() => ({} as any));
+            const res = await applySingleMatch(inner);
+            // The single handler's reply; {} when its body isn't JSON (the status then speaks).
+            const body: Partial<MatchSeriesOk & MatchSeriesFailure> = await res.json().catch(() => ({}));
             if (res.ok) {
                 // beta.010: the requests each accept closed, for Accept All's summary.
                 results.push({ ok: true, conflicts: body.conflicts || 0, requestsClosed: body.requestsClosed || 0 });
@@ -63,5 +65,5 @@ export async function POST(request: NextRequest) {
         }
     }
 
-    return NextResponse.json({ results });
+    return NextResponse.json({ results } satisfies BulkMatchReply);
 }

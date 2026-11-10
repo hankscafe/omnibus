@@ -4,23 +4,39 @@
 // the same volume-details resolution, so the shapes here are the single source of truth
 // for what the page holds as a "manual match result".
 import { normalizeFractionNumbers } from '@/lib/utils/issue-parser'
+import type { IssueDetailsReply, VolumeIssueStub } from '@/types/api/issue-details'
 
-/** The suggestion shape the matcher stores for a manually-resolved volume/series. */
-export interface ManualSuggestion {
-    id: any
+/** What the matcher stores per item once a series is picked: an auto-scan /api/search result as it
+ *  came, or a manual match's resolved volume (ManualSuggestion). */
+export interface MatchSuggestion {
+    /** The provider's volume (ComicVine) / series (Metron) id. */
+    id: string | number
     name: string
-    year: any
+    year: string | number | null
     publisher: string
     image: string | null
     count: number | string
     description: string
     metadataSource: string
     /** The volume's per-issue stubs ({id, issue_number, name}) for Issue Mapping cross-reference. */
-    rawIssues: any[]
+    rawIssues?: VolumeIssueStub[]
     /** #199 round 4: the volume's aggregated credits as dialog-key CSV strings — the metadata
      *  editor's "fill empty fields from provider" source. Absent when the payload carried none
      *  (e.g. auto-scan's lightweight suggestions). */
     credits?: Record<string, string>
+}
+
+/** The suggestion shape the matcher stores for a manually-resolved volume/series. */
+export interface ManualSuggestion extends MatchSuggestion {
+    rawIssues: VolumeIssueStub[]
+}
+
+/** Per item: the pick, or the auto-scan's verdict when it found nothing confident / failed. */
+export type SuggestionState = MatchSuggestion | 'NOT_FOUND' | 'ERROR'
+
+/** The picked suggestion, or undefined while there is none (not scanned yet, NOT_FOUND, ERROR). */
+export function realSuggestion(s: SuggestionState | null | undefined): MatchSuggestion | undefined {
+    return s && s !== 'NOT_FOUND' && s !== 'ERROR' ? s : undefined
 }
 
 /** Strips the ComicVine 4050- prefix and anything that can't be part of a provider id/slug. */
@@ -39,7 +55,7 @@ export function normalizeIssueNumber(n: unknown): string {
  * provider's exact issue id ("" when nothing matches). Accepts both the ComicVine stub field
  * (issue_number) and the generic `number` fallback.
  */
-export function findIssueIdByNumber(rawIssues: any[] | undefined, issueNumber: string): string {
+export function findIssueIdByNumber(rawIssues: VolumeIssueStub[] | undefined, issueNumber: string): string {
     const target = normalizeIssueNumber(issueNumber)
     if (!target) return ''
     const hit = (rawIssues || []).find(i => normalizeIssueNumber(i?.issue_number ?? i?.number) === target)
@@ -57,7 +73,7 @@ export function findIssueIdByNumber(rawIssues: any[] | undefined, issueNumber: s
  */
 export async function resolveIssueIdByNumber(opts: {
     issueNumber: string
-    rawIssues?: any[]
+    rawIssues?: VolumeIssueStub[]
     seriesMetadataId?: string | number
     provider?: string
 }): Promise<string> {
@@ -67,7 +83,7 @@ export async function resolveIssueIdByNumber(opts: {
     if (!opts.seriesMetadataId) return ''
     const provider = opts.provider || 'COMICVINE'
     const res = await fetch(`/api/issue-details?id=${opts.seriesMetadataId}&type=volume&provider=${provider}`)
-    const data = await res.json()
+    const data: IssueDetailsReply = await res.json()
     if (!res.ok || data.error) throw new Error(data.error || "Couldn't load the series' issue list")
     return findIssueIdByNumber(data.issues, opts.issueNumber)
 }
@@ -91,9 +107,9 @@ const KEEP_CARRY_KEYS = [
 export function buildKeepCarry(prefill: {
     fields?: Record<string, { value: string; source: string }>
     blackAndWhite?: { value: boolean; source: string }
-} | null | undefined): Record<string, any> | null {
+} | null | undefined): Record<string, string | boolean> | null {
     if (!prefill?.fields) return null
-    const carry: Record<string, any> = {}
+    const carry: Record<string, string | boolean> = {}
     for (const k of KEEP_CARRY_KEYS) {
         const v = prefill.fields[k]?.value
         if (v && v.trim()) carry[k] = v
@@ -104,12 +120,16 @@ export function buildKeepCarry(prefill: {
     return carry
 }
 
-/** Builds the stored suggestion from an /api/issue-details volume payload. */
-export function buildManualSuggestion(data: any, provider: string): ManualSuggestion {
+/** Builds the stored suggestion from an /api/issue-details volume payload. The count also takes the
+ *  provider-side spellings (count_of_issues / issue_count) a payload may carry instead. */
+export function buildManualSuggestion(
+    data: IssueDetailsReply & { count_of_issues?: number; issue_count?: number },
+    provider: string,
+): ManualSuggestion {
     // Volume-level credit arrays → dialog-key CSVs (#199 round 4). Only non-empty groups are
     // kept, and a payload with none at all yields no credits field (the fill button hides).
     const joined: Record<string, string> = {}
-    const addCredit = (dialogKey: string, arr: any) => {
+    const addCredit = (dialogKey: string, arr: string[] | undefined) => {
         if (Array.isArray(arr) && arr.length) joined[dialogKey] = arr.filter(Boolean).join(', ')
     }
     addCredit('writer', data.writers); addCredit('penciller', data.artists); addCredit('inker', data.inkers)
@@ -119,7 +139,8 @@ export function buildManualSuggestion(data: any, provider: string): ManualSugges
     addCredit('storyArc', data.storyArcs)
 
     return {
-        id: data.id || data.volumeId,
+        // A details reply carries one or the other (the route fills both from the same lookup).
+        id: (data.id || data.volumeId) as string | number,
         name: data.name,
         year: data.year,
         publisher: data.publisher,

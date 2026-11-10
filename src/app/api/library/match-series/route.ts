@@ -29,6 +29,7 @@ import { parseComicVineCredits } from '@/lib/utils';
 import { folderOwner, suggestFreeFolderName, attachAsCollected } from '@/lib/match-collision';
 import { issueFileName, issuePaddingFromSetting, issueTitleForName, seriesFolderSegments, type NamingInput } from '@/lib/utils/naming';
 import { ANNUAL_FILE_PATTERN } from '@/lib/utils/file-pattern';
+import type { MatchSeriesFailure, MatchSeriesOk } from '@/types/api/smart-match';
 
 // #199 round 4 Beta B: only non-empty credit groups become columns (never write a literal '[]' —
 // issue #179), stringified to the Issue JSON-array convention.
@@ -286,7 +287,7 @@ export async function POST(request: Request) {
             attachedTo: { id: owner.id, name: owner.name, folderPath: owner.folderPath },
             attachmentId: attached.attachmentId, moved: attached.moved, absorbed: attached.absorbed, claimed: attached.claimed,
             skeletonsReplaced: attached.skeletonsReplaced, conflicts: attached.conflicts,
-        });
+        } satisfies MatchSeriesOk);
     }
     if (owner) {
         const suggestedFolderName = await suggestFreeFolderName(newFolderPath, excludeIds);
@@ -298,7 +299,7 @@ export async function POST(request: Request) {
                 metadataSource: owner.metadataSource, metadataId: owner.metadataId, folderPath: owner.folderPath,
                 suggestedFolderName, volumeName: realName, volumeYear: realYear || null,
             },
-        }, { status: 409 });
+        } satisfies MatchSeriesFailure, { status: 409 });
     }
 
     const pubDir = path.dirname(newFolderPath);
@@ -822,7 +823,7 @@ export async function POST(request: Request) {
     }
 
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
-    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts, requestsClosed });
+    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts, requestsClosed } satisfies MatchSeriesOk);
 
   } catch (error: unknown) {
     Logger.log(`[Match Series API] Error: ${getErrorMessage(error)}`, 'error');

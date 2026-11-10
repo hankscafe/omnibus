@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
     buildKeepCarry, buildManualSuggestion, cleanProviderId, findIssueIdByNumber, normalizeIssueNumber,
-    resolveIssueIdByNumber,
+    realSuggestion, resolveIssueIdByNumber,
 } from '../../src/lib/utils/smart-match-search';
 
 // #205 (BeepbopbeepityBop): ComicVine numbers half-issues with a vulgar fraction — Bone (1991)
@@ -59,6 +59,24 @@ describe('buildKeepCarry', () => {
         expect(buildKeepCarry(null)).toBe(null);
         expect(buildKeepCarry({ fields: {} })).toBe(null);
         expect(buildKeepCarry({ fields: { name: { value: 'Identity Only', source: 'scan' } } })).toBe(null);
+    });
+});
+
+// beta.027: a row's suggestion is the pick or the scan's NOT_FOUND / ERROR marker; the page reads a
+// pick's fields through this (a marker has none).
+describe('realSuggestion', () => {
+    const pick = {
+        id: 16180, name: 'Conan & Dragonero', year: 2026, publisher: 'SBE', image: null,
+        count: 5, description: 'crossover', metadataSource: 'METRON',
+    };
+    it('passes a real suggestion through as it is', () => {
+        expect(realSuggestion(pick)).toBe(pick);
+    });
+    it('is undefined for no suggestion yet and for the scan markers', () => {
+        expect(realSuggestion(undefined)).toBeUndefined();
+        expect(realSuggestion(null)).toBeUndefined();
+        expect(realSuggestion('NOT_FOUND')).toBeUndefined();
+        expect(realSuggestion('ERROR')).toBeUndefined();
     });
 });
 

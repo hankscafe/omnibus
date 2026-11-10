@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { UNMATCHED_DIR } from '@/lib/utils/paths';
 import { AuditLogger } from '@/lib/audit-logger';
+import type { UnmatchedPayload, UnmatchedRawFileRow } from '@/types/api/smart-match';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
 
         // 2. Append loose files from the unmatched drop directory
         const unmatchedDir = UNMATCHED_DIR;
-        const rawFiles: any[] = [];
+        const rawFiles: UnmatchedRawFileRow[] = [];
         
         try {
             const fs = await import('fs-extra');
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
         } catch (e) {}
 
         const flagged = unmatched.map(s => ({ ...s, isIgnored: s.matchState === 'IGNORED' }));
-        return NextResponse.json([...flagged, ...rawFiles]);
+        return NextResponse.json([...flagged, ...rawFiles] satisfies UnmatchedPayload);
     } catch (error: unknown) {
         Logger.log(`[Unmatched API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

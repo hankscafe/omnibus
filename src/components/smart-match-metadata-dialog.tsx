@@ -52,9 +52,9 @@ export interface SmartMatchOverride extends ComicInfoDefaults {
   issueTitle?: string
 }
 
-interface Seed {
+export interface SmartMatchSeed {
   name?: string
-  year?: string | number
+  year?: string | number | null
   publisher?: string
   description?: string
   /** The provider's cover thumbnail (suggestion.image), shown as the current cover. */
@@ -102,7 +102,7 @@ interface Props {
   /** Folder/file name shown in the header so the admin knows which item they're editing. */
   targetLabel?: string
   /** Seed values from the current suggestion / Custom ID lookup. */
-  seed?: Seed
+  seed?: SmartMatchSeed | null
   /** The active folder_naming_pattern, used to render the live folder-path preview. */
   folderPattern: string
   /** An existing override to re-edit. */
@@ -149,7 +149,7 @@ interface Props {
 // gives no folder inside the library (the match is refused then).
 export function buildFolderPreview(
   pattern: string,
-  v: { name?: string; year?: string | number; publisher?: string; universe?: string; seriesGroup?: string; imprint?: string }
+  v: { name?: string | null; year?: string | number | null; publisher?: string | null; universe?: string | null; seriesGroup?: string | null; imprint?: string | null }
 ): string {
   const segments = seriesFolderSegments(pattern || "{Publisher}/{Series} ({Year})", {
     publisher: v.publisher, series: v.name, seriesYear: v.year,

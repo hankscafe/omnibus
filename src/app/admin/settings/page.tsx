@@ -31,7 +31,7 @@ import { NotificationsTab } from "./tabs/notifications-tab"
 import { AccessSecurityTab } from "./tabs/access-security-tab"
 import { SystemTab } from "./tabs/system-tab"
 
-import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, WebhookConfig, HosterAccountConfig } from "./tabs/shared"
+import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, ClientType, WebhookConfig, HosterAccountConfig } from "./tabs/shared"
 import { primarySourceFallback, sourceHasCredentials } from "./tabs/primary-source"
 import { getErrorMessage, errorMessageOr } from '@/lib/utils/error';
 import type { AdminConfigResponse } from '@/types/api/config';
@@ -262,12 +262,10 @@ export default function SettingsPage() {
   useEffect(() => {
     fetch('/api/admin/config').then(res => res.json()).then((data: AdminConfigResponse) => {
         setConfiguredLibraries(data.libraries || []);
-        // The rows can hold null where the form types say string / undefined (user, pass, username, the
-        // webhook bot fields) and a client `type` is any string: asserted here, typed properly later.
-        setConfiguredClients((data.downloadClients || []) as unknown as ClientConfig[]);
-        setConfiguredWebhooks((data.discordWebhooks || []) as unknown as WebhookConfig[]);
+        setConfiguredClients(data.downloadClients || []);
+        setConfiguredWebhooks(data.discordWebhooks || []);
         setConfiguredIndexers(data.indexers || []);
-        setConfiguredHosters((data.hosterAccounts || []) as unknown as HosterAccountConfig[]);
+        setConfiguredHosters(data.hosterAccounts || []);
         setEnvPaths(data.envPaths || {});
         
         const parsedHeaders = (data.customHeaders || []).map((h) => ({ ...h, id: h.id || `tmp_${Math.random()}` }));
@@ -777,7 +775,7 @@ export default function SettingsPage() {
     }
   }
 
-  const openClientSetup = (type: ClientConfig['type']) => {
+  const openClientSetup = (type: ClientType) => {
     const protocols: Record<string, 'Torrent' | 'Usenet'> = { qbit: 'Torrent', deluge: 'Torrent', transmission: 'Torrent', sab: 'Usenet', nzbget: 'Usenet' };
     const names: Record<string, string> = { qbit: 'qBittorrent', deluge: 'Deluge', transmission: 'Transmission', sab: 'SABnzbd', nzbget: 'NZBGet' };
     setTestResults(prev => ({ ...prev, clients: null }));
@@ -1105,8 +1103,8 @@ export default function SettingsPage() {
 
                     {['qbit', 'deluge', 'transmission', 'nzbget'].includes(editingClient.type) && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 border-t border-border pt-4">
-                            <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user} onChange={e => updateEditingClient('user', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
-                            <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass} onChange={e => updateEditingClient('pass', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label className="text-foreground font-semibold">User</Label><Input value={editingClient.user ?? ''} onChange={e => updateEditingClient('user', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
+                            <div className="grid gap-2"><Label className="text-foreground font-semibold">Pass</Label><Input type="password" value={editingClient.pass ?? ''} onChange={e => updateEditingClient('pass', e.target.value)} className="h-12 sm:h-10 bg-muted/20 border-border text-foreground" /></div>
                         </div>
                     )}
                       {editingClient.type === 'transmission' && <p className="text-[11px] text-muted-foreground">Username and password are only needed when RPC authentication is enabled in Transmission. Omnibus applies per-torrent seed ratio limits when provided; Transmission has no equivalent for a total seeding-time limit.</p>}

@@ -58,18 +58,26 @@ export interface IndexerConfig { id: number; name: string; priority: number; see
 export interface CustomHeader { id?: string; key: string; value: string; }
 export interface AcronymConfig { id?: string; key: string; value: string; }
 export interface ScoringRule { id: string; term: string; score: number; }
+/** The download clients the setup dialog offers. */
+export type ClientType = 'qbit' | 'sab' | 'deluge' | 'transmission' | 'nzbget';
+// The three below are the rows /api/admin/config sends (src/types/api/config.ts) as the page edits
+// them: an optional field the database leaves empty arrives as null, so it's typed that way (and an
+// input shows it as '').
 export interface ClientConfig {
     id: string;
     name: string;
-    type: 'qbit' | 'sab' | 'deluge' | 'transmission' | 'nzbget';
-    protocol: 'Torrent' | 'Usenet';
+    /** A ClientType for a client set up here; the stored column is plain text. */
+    type: string;
+    /** 'Torrent' | 'Usenet' */
+    protocol: string;
     url: string;
-    user: string;
-    pass: string;
-    apiKey?: string;
-    category?: string;
-    remotePath?: string;
-    localPath?: string;
+    /** A login is optional (Transmission without RPC authentication, SABnzbd's API key instead). */
+    user: string | null;
+    pass: string | null;
+    apiKey?: string | null;
+    category?: string | null;
+    remotePath?: string | null;
+    localPath?: string | null;
 }
 export interface WebhookConfig {
     id: string;
@@ -77,16 +85,16 @@ export interface WebhookConfig {
     url: string;
     events: string[];
     isActive: boolean;
-    botUsername?: string;
-    botAvatarUrl?: string;
+    botUsername?: string | null;
+    botAvatarUrl?: string | null;
 }
 export interface HosterAccountConfig {
     id: string;
     name: string;
     hoster: string;
-    username?: string;
-    password?: string;
-    apiKey?: string;
+    username?: string | null;
+    password?: string | null;
+    apiKey?: string | null;
     isActive: boolean;
 }
 

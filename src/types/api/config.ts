@@ -8,8 +8,8 @@ import type {
 } from '@prisma/client';
 import type { Jsonified } from './json';
 
-/** A discord webhook row, its `events` column parsed from JSON text. */
-export type DiscordWebhookRow = Omit<DiscordWebhook, 'events'> & { events: unknown };
+/** A discord webhook row, its `events` column (a JSON array of event names) parsed. */
+export type DiscordWebhookRow = Omit<DiscordWebhook, 'events'> & { events: string[] };
 
 /** What the route builds. */
 export interface AdminConfigPayload {

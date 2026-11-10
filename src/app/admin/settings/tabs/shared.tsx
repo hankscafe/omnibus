@@ -5,8 +5,11 @@
 // that page.tsx assembles — all state and handlers live there, one owner per setting.
 "use client"
 
+import type { Dispatch, SetStateAction } from "react"
 import { CheckCircle, XCircle } from "lucide-react"
-import type { LibraryConfig, IndexerConfig, ClientType, ClientConfig, WebhookConfig, HosterAccountConfig } from "@/types/api/config"
+import type { useToast } from "@/components/ui/use-toast"
+import type { LibraryConfig, IndexerConfig, ProwlarrIndexerOption, ClientType, ClientConfig, WebhookConfig, HosterAccountConfig } from "@/types/api/config"
+import type { AdminApiKey, AdminUser } from "@/types/api/admin"
 
 export const hosterDisplayNames: Record<string, string> = {
     'mediafire': 'MediaFire',
@@ -61,27 +64,120 @@ export interface CustomHeader { id?: string; key: string; value: string; }
 export interface AcronymConfig { id?: string; key: string; value: string; }
 export interface ScoringRule { id: string; term: string; score: number; }
 
-// The state bag page.tsx assembles for the tab components. Collections carry their real
-// element types so .map/.filter callbacks stay contextually typed; everything else is loose.
+/** The settings the page edits, by key. Every value is a string, as the database stores it ("true" /
+ *  "false" for switches, JSON text for the *_events lists); a key that was never saved is absent. */
+export type SettingsValues = Record<string, string>;
+
+/** A connection test's answer, as the StatusBox under each test button shows it. */
+export interface TestResult { success: boolean; text: string; }
+/** Test answers by test name (comicvine, metron, prowlarr, clients, webhooks, smtp, ...); null = none yet. */
+export type TestResults = { [test: string]: TestResult | null };
+
+export interface HosterPriorityEntry { hoster: string; enabled: boolean; }
+export interface SearchSourceEntry { source: string; enabled: boolean; }
+
+type Setter<T> = Dispatch<SetStateAction<T>>;
+
+// The state bag page.tsx assembles for the tab components: every piece of state and every handler the
+// tabs use, typed, so a tab can only read what the page actually passes (page.tsx builds it as a
+// SettingsBag, so the two can't drift apart).
 export interface SettingsBag {
+    // Settings values + connection tests (every tab)
+    config: SettingsValues;
+    setConfig: Setter<SettingsValues>;
+    isSourceAvailable: (source: string) => boolean;
+    /** Runs /api/admin/test with the current settings, `overrideConfig` laid over them. */
+    handleTest: (type: string, overrideConfig?: Record<string, unknown>) => Promise<void>;
+    testing: string | null;
+    testResults: TestResults;
+    setTestResults: Setter<TestResults>;
+    toast: ReturnType<typeof useToast>['toast'];
+
+    // Metadata
+    cacheStats: { entries: number; bytes: number } | null;
+    clearMetadataCache: () => Promise<void>;
+    clearingCache: boolean;
+
+    // Library & Files
     configuredLibraries: LibraryConfig[];
+    addLibrary: () => void;
+    removeLibrary: (id: string) => void;
+    updateLibrary: <K extends keyof LibraryConfig>(id: string, field: K, value: LibraryConfig[K]) => void;
+    setLibraryDefault: (id: string, isMangaType: boolean) => void;
+    handleRestoreNamingDefaults: () => void;
+    /** The server's configured folders and database URL (password masked), for display. */
+    envPaths: Record<string, string>;
+
+    // Search & Indexers
+    updateProwlarrCategories: (toggledId?: string, isChecked?: boolean, newCustom?: string) => void;
+    customProwlarrCategories: string;
+    refreshIndexers: () => Promise<void>;
+    refreshing: boolean;
+    hasRefreshed: boolean;
+    availableIndexers: ProwlarrIndexerOption[];
     configuredIndexers: IndexerConfig[];
-    configuredClients: ClientConfig[];
-    configuredWebhooks: WebhookConfig[];
-    configuredHosters: HosterAccountConfig[];
-    customHeaders: CustomHeader[];
-    customAcronyms: AcronymConfig[];
+    /** Opens the indexer dialog: for one Prowlarr offers (new) or one already configured (isEdit). */
+    openIndexerModal: (indexer: ProwlarrIndexerOption | IndexerConfig, isEdit?: boolean) => void;
+    deleteIndexer: (id: number) => void;
     scoringRules: ScoringRule[];
-    hosterPriority: { hoster: string, enabled: boolean }[];
-    searchSourcePriority: { source: string, enabled: boolean }[];
-    availableIndexers: any[];
-    users: any[];
-    apiKeys: any[];
-    setTestResults: (updater: (prev: any) => any) => void;
-    [key: string]: any;
+    setScoringRules: Setter<ScoringRule[]>;
+    customAcronyms: AcronymConfig[];
+    setCustomAcronyms: Setter<AcronymConfig[]>;
+
+    // Downloads
+    configuredClients: ClientConfig[];
+    openClientSetup: (type: ClientType) => void;
+    deleteClient: (id: string) => void;
+    setEditingClient: Setter<ClientConfig | null>;
+    setClientModalOpen: Setter<boolean>;
+    searchSourcePriority: SearchSourceEntry[];
+    moveSearchSource: (index: number, direction: -1 | 1) => void;
+    toggleSearchSourceEnabled: (index: number) => void;
+    hosterPriority: HosterPriorityEntry[];
+    moveHosterPriority: (index: number, direction: -1 | 1) => void;
+    toggleHosterEnabled: (index: number) => void;
+    configuredHosters: HosterAccountConfig[];
+    setAnnasKey: (value: string) => void;
+    openHosterSetup: (hosterName: string) => void;
+    deleteHoster: (id: string) => void;
+
+    // Discovery & Filtering
+    applyRecommendedFilters: () => void;
+    applyForeignFilters: () => void;
+
+    // Notifications
+    configuredWebhooks: WebhookConfig[];
+    openWebhookModal: (webhook?: WebhookConfig) => void;
+    handleTestWebhook: (webhook: WebhookConfig) => Promise<void>;
+    testingWebhookId: string | null;
+    toggleWebhookActive: (id: string) => void;
+    deleteWebhook: (id: string) => void;
+    toggleProviderEvent: (providerKey: string, eventId: string) => void;
+
+    // Access & Security
+    users: AdminUser[];
+    apiKeys: AdminApiKey[];
+    newKeyName: string;
+    setNewKeyName: Setter<string>;
+    newKeyUserId: string;
+    setNewKeyUserId: Setter<string>;
+    newKeyExpiration: string;
+    setNewKeyExpiration: Setter<string>;
+    handleGenerateKey: () => Promise<void>;
+    isGeneratingKey: boolean;
+    generatedKey: string | null;
+    setGeneratedKey: Setter<string | null>;
+    generateError: string | null;
+    setGenerateError: Setter<string | null>;
+    handleRevokeKey: (id: string) => Promise<void>;
+    copyToClipboard: (text: string) => Promise<void>;
+    customHeaders: CustomHeader[];
+    addHeader: (k?: string) => void;
+    updateHeader: (i: number, f: 'key' | 'value', v: string) => void;
+    removeHeader: (id: string) => void;
 }
 
-export function StatusBox({ result }: { result: { success: boolean, text: string } | null }) {
+export function StatusBox({ result }: { result: TestResult | null }) {
     if (!result) return null;
     const isFailure = !result.success || result.text.includes('❌') || result.text.includes('Error') || result.text.includes('Not Found') || result.text.toLowerCase().includes('failed');
 

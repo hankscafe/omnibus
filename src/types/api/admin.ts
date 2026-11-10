@@ -180,3 +180,24 @@ export interface AdminLibraryOption {
     isManga: boolean;
     isDefault: boolean;
 }
+
+// --- GET /api/admin/api-keys (Settings → Access & Security) -----------------------------------------
+
+/** An API key as the admin key list shows it; never its hashes. POST answers `{ success, rawKey, apiKey }`
+ *  with the new key in this shape (plus its user / creator ids). */
+export interface AdminApiKeyRow {
+    id: string;
+    name: string;
+    /** The key's first characters, for recognising it ("omn_a1b2c3d4..."). */
+    prefix: string;
+    lastUsedAt: Date | null;
+    expiresAt: Date | null;
+    createdAt: Date;
+    /** The account the key acts as. */
+    user: { username: string; role: string };
+    createdBy: { username: string };
+    /** Made since KOReader sync keys existed (it has a sync hash). */
+    koreaderCompatible: boolean;
+}
+
+export type AdminApiKey = Jsonified<AdminApiKeyRow>;

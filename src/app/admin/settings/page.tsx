@@ -31,10 +31,11 @@ import { NotificationsTab } from "./tabs/notifications-tab"
 import { AccessSecurityTab } from "./tabs/access-security-tab"
 import { SystemTab } from "./tabs/system-tab"
 
-import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, ClientType, WebhookConfig, HosterAccountConfig } from "./tabs/shared"
+import type { LibraryConfig, IndexerConfig, CustomHeader, AcronymConfig, ScoringRule, ClientConfig, ClientType, WebhookConfig, HosterAccountConfig, SettingsBag, SettingsValues, TestResults, HosterPriorityEntry, SearchSourceEntry } from "./tabs/shared"
 import { primarySourceFallback, sourceHasCredentials } from "./tabs/primary-source"
 import { getErrorMessage, errorMessageOr } from '@/lib/utils/error';
-import type { AdminConfigResponse } from '@/types/api/config';
+import type { AdminConfigResponse, ProwlarrIndexerOption } from '@/types/api/config';
+import type { AdminApiKey, AdminUser } from '@/types/api/admin';
 
 // --- Constants & Global Mappings ---
 // RECOMMENDED_PUBLISHERS / RECOMMENDED_KEYWORDS now live in @/lib/filter-defaults (shared with the setup wizard).
@@ -48,13 +49,13 @@ export default function SettingsPage() {
   
   const [activeTab, setActiveTab] = useState("metadata")
   
-  const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean, text: string } | null }>({
+  const [testResults, setTestResults] = useState<TestResults>({
     comicvine: null, metron: null, prowlarr: null, clients: null, paths: null, mapping: null, webhooks: null, smtp: null, smtp_digest: null, flaresolverr: null,
     pushover: null, telegram: null, apprise: null
   })
   
   const [refreshing, setRefreshing] = useState(false)
-  const [availableIndexers, setAvailableIndexers] = useState<any[]>([])
+  const [availableIndexers, setAvailableIndexers] = useState<ProwlarrIndexerOption[]>([])
   const [hasRefreshed, setHasRefreshed] = useState(false)
 
   // DB Array States
@@ -65,11 +66,11 @@ export default function SettingsPage() {
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([])
   const [customAcronyms, setCustomAcronyms] = useState<AcronymConfig[]>([]) 
   const [scoringRules, setScoringRules] = useState<ScoringRule[]>([])
-  const [envPaths, setEnvPaths] = useState<any>({})
+  const [envPaths, setEnvPaths] = useState<Record<string, string>>({})
   
   // Hoster States
   const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([])
-  const [hosterPriority, setHosterPriority] = useState<{hoster: string, enabled: boolean}[]>([
+  const [hosterPriority, setHosterPriority] = useState<HosterPriorityEntry[]>([
       { hoster: 'getcomics_direct', enabled: true },
       { hoster: 'getcomics_main', enabled: true },
       { hoster: 'mediafire', enabled: true },
@@ -80,7 +81,7 @@ export default function SettingsPage() {
       { hoster: 'terabox', enabled: false }
   ])
   // Automation search-source order (which source is tried first; separate from hoster-mirror priority).
-  const [searchSourcePriority, setSearchSourcePriority] = useState<{source: string, enabled: boolean}[]>([
+  const [searchSourcePriority, setSearchSourcePriority] = useState<SearchSourceEntry[]>([
       { source: 'getcomics', enabled: true },
       { source: 'annas_archive', enabled: false },
       { source: 'prowlarr', enabled: true }
@@ -89,8 +90,8 @@ export default function SettingsPage() {
   const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null)
 
   // API Keys / Users States
-  const [apiKeys, setApiKeys] = useState<any[]>([])
-  const [users, setUsers] = useState<any[]>([])
+  const [apiKeys, setApiKeys] = useState<AdminApiKey[]>([])
+  const [users, setUsers] = useState<AdminUser[]>([])
   const [newKeyName, setNewKeyName] = useState("")
   const [newKeyUserId, setNewKeyUserId] = useState("")
   const [newKeyExpiration, setNewKeyExpiration] = useState("0")
@@ -104,14 +105,14 @@ export default function SettingsPage() {
   })
 
   const [clientModalOpen, setClientModalOpen] = useState(false)
-  const [editingClient, setEditingClient] = useState<any>(null)
+  const [editingClient, setEditingClient] = useState<ClientConfig | null>(null)
 
   const [webhookModalOpen, setWebhookModalOpen] = useState(false)
   const [editingWebhook, setEditingWebhook] = useState<WebhookConfig | null>(null)
 
   const { toast } = useToast()
   
-  const [config, setConfig] = useState<any>({
+  const [config, setConfig] = useState<SettingsValues>({
     primary_metadata_source: "COMICVINE",
     prowlarr_url: "", prowlarr_key: "", prowlarr_categories: "7030", download_path: "", cv_api_key: "",
     metron_api_token: "", metron_user: "", metron_pass: "",
@@ -252,8 +253,9 @@ export default function SettingsPage() {
       return () => document.removeEventListener('click', handleClick, { capture: true });
   }, [hasUnsavedChanges]);
 
-  const updateEditingClient = (key: string, value: any) => {
-    setEditingClient((prev: any) => ({ ...prev, [key]: value }));
+  const updateEditingClient = <K extends keyof ClientConfig>(key: K, value: ClientConfig[K]) => {
+    // The dialog's inputs only render while a client is open, so there's always one to update.
+    setEditingClient((prev) => prev ? { ...prev, [key]: value } : prev);
     if (testResults['clients'] !== null) {
         setTestResults(prev => ({ ...prev, clients: null }));
     }
@@ -287,7 +289,7 @@ export default function SettingsPage() {
             ]);
         }
 
-        const newConfig: any = { ...config };
+        const newConfig: SettingsValues = { ...config };
         if (Array.isArray(data.settings)) {
             data.settings.forEach((item) => { 
                 if (item.key !== 'omnibus_api_key' && item.key !== 'hoster_priority' && item.key !== 'release_scoring_rules' && item.key !== 'search_source_priority') {
@@ -321,7 +323,7 @@ export default function SettingsPage() {
             if (hpSetting?.value) {
                 try {
                     const savedHosters = JSON.parse(hpSetting.value);
-                    let mergedHosters: any[] = [];
+                    let mergedHosters: HosterPriorityEntry[] = [];
                     if (savedHosters.length > 0 && typeof savedHosters[0] === 'string') {
                         mergedHosters = savedHosters.map((h: string) => ({ hoster: h, enabled: true }));
                     } else {
@@ -343,7 +345,7 @@ export default function SettingsPage() {
                     });
                     // Anna's Archive is a search source now, not a hoster mirror — drop any legacy entry
                     // so it no longer shows in the Hoster Priority list (its API key lives in its own section).
-                    mergedHosters = mergedHosters.filter((mh: any) => mh.hoster !== 'annas_archive');
+                    mergedHosters = mergedHosters.filter((mh) => mh.hoster !== 'annas_archive');
                     setHosterPriority(mergedHosters);
                 } catch(e) {
                     setHosterPriority(defaultHosters);
@@ -361,7 +363,7 @@ export default function SettingsPage() {
             if (sspSetting?.value) {
                 try {
                     const saved = JSON.parse(sspSetting.value);
-                    let merged: any[] = (saved.length > 0 && typeof saved[0] === 'string')
+                    let merged: SearchSourceEntry[] = (saved.length > 0 && typeof saved[0] === 'string')
                         ? saved.map((s: string) => ({ source: s, enabled: true }))
                         : [...saved];
                     // Append any newly-added sources missing from a saved config (disabled by default),
@@ -470,7 +472,7 @@ export default function SettingsPage() {
         })
 
         if (res.ok) {
-            const saveData = await res.json().catch(() => ({} as any));
+            const saveData: { warnings?: string[] } = await res.json().catch(() => ({}));
             // The server may have reverted Anna's Archive automation (the API-key + connection-test gate);
             // surface the reason. The toggle re-syncs to the persisted state on the next settings load.
             if (Array.isArray(saveData?.warnings) && saveData.warnings.length > 0) {
@@ -490,7 +492,7 @@ export default function SettingsPage() {
                 toast({ title: "Settings Saved", description: "Configuration persisted to database." })
             }
         } else {
-            const errData = await res.json().catch(() => ({} as any));
+            const errData: { error?: string } = await res.json().catch(() => ({}));
             // A 400 is the server turning the save away before writing anything (a folder path it
             // can't use, Force SSO without a local admin password) - nothing to reload for.
             toast({
@@ -537,7 +539,7 @@ export default function SettingsPage() {
   };
 
   const handleRestoreNamingDefaults = () => {
-    setConfig((prev: any) => ({
+    setConfig((prev) => ({
         ...prev,
         folder_naming_pattern: "{Publisher}/{Series} ({Year})",
         file_naming_pattern: "{Series} #{Issue}",
@@ -564,7 +566,7 @@ export default function SettingsPage() {
     }]);
   }
   const removeLibrary = (id: string) => setConfiguredLibraries(configuredLibraries.filter(l => l.id !== id));
-  const updateLibrary = (id: string, field: keyof LibraryConfig, value: any) => {
+  const updateLibrary = <K extends keyof LibraryConfig>(id: string, field: K, value: LibraryConfig[K]) => {
     setConfiguredLibraries(prev => prev.map(lib => lib.id === id ? { ...lib, [field]: value } : lib));
   }
   const setLibraryDefault = (id: string, isMangaType: boolean) => {
@@ -612,7 +614,7 @@ export default function SettingsPage() {
               next[idx] = { ...next[idx], apiKey: value };
               return next;
           }
-          return [...prev, { id: `tmp_${Math.random().toString(36).slice(2, 11)}`, name: "Anna's Archive", hoster: 'annas_archive', username: '', password: '', apiKey: value, isActive: true } as any];
+          return [...prev, { id: `tmp_${Math.random().toString(36).slice(2, 11)}`, name: "Anna's Archive", hoster: 'annas_archive', username: '', password: '', apiKey: value, isActive: true }];
       });
   };
 
@@ -643,7 +645,7 @@ export default function SettingsPage() {
   }
 
   const applyRecommendedFilters = () => {
-      setConfig((prev: any) => ({
+      setConfig((prev) => ({
           ...prev,
           filter_enabled: "true",
           filter_publishers: RECOMMENDED_PUBLISHERS,
@@ -653,7 +655,7 @@ export default function SettingsPage() {
   }
 
   const applyForeignFilters = () => {
-      setConfig((prev: any) => ({
+      setConfig((prev) => ({
           ...prev,
           filter_foreign_publishers: "panini, panini espana, panini france, panini comics, panini verlag, urban comics, ecc ediciones, editorial televisa, planeta deagostini, ediciones zinco, norma editorial, panini brasil, panini mexico, panini uk, delcourt, glenat, dargaud, soleil, epsilon"
       }));
@@ -672,7 +674,8 @@ export default function SettingsPage() {
     } catch (e) { toast({ title: "Error", description: "Refresh failed.", variant: "destructive" }); } finally { setRefreshing(false); }
   }
 
-  const openIndexerModal = (indexer: any, isEdit = false) => {
+  // A Prowlarr offer (new) or a configured indexer (isEdit; it has a seed ratio).
+  const openIndexerModal = (indexer: ProwlarrIndexerOption & { seedRatio?: number }, isEdit = false) => {
     const protocol = indexer.protocol || "torrent";
     if (isEdit) {
         setEditingIndexer({ ...indexer, seedRatio: indexer.seedRatio || 0 })
@@ -803,7 +806,7 @@ export default function SettingsPage() {
     toast({ title: "Client Removed" });
   }
 
-  const handleTest = async (type: string, overrideConfig?: any) => {
+  const handleTest = async (type: string, overrideConfig?: Record<string, unknown>) => {
     setTesting(type); 
     setTestResults(prev => ({ ...prev, [type]: null }));
     
@@ -827,7 +830,7 @@ export default function SettingsPage() {
   }
 
   const addHeader = (k = "") => setCustomHeaders([...customHeaders, { id: `tmp_${Math.random()}`, key: k, value: "" }])
-  const updateHeader = (i: number, f: 'key' | 'value', v: string) => { const h = [...customHeaders]; (h[i] as any)[f] = v; setCustomHeaders(h); }
+  const updateHeader = (i: number, f: 'key' | 'value', v: string) => { const h = [...customHeaders]; h[i][f] = v; setCustomHeaders(h); }
   const removeHeader = (id: string) => setCustomHeaders(customHeaders.filter(c => c.id !== id))
 
   const handleGenerateKey = async () => {
@@ -880,7 +883,7 @@ export default function SettingsPage() {
 
   // Shared state bag consumed by the tab components (./tabs/*.tsx). Tabs are pure JSX:
   // every piece of state and every handler stays here, so the save pipeline is unchanged.
-  const s = {
+  const s: SettingsBag = {
     config, setConfig, isSourceAvailable, handleTest, testing, testResults, setTestResults,
     cacheStats, clearMetadataCache, clearingCache,
     configuredLibraries, addLibrary, removeLibrary, updateLibrary, setLibraryDefault,

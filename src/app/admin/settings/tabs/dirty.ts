@@ -79,13 +79,14 @@ const TAB_COLLECTIONS: Record<string, string[]> = {
     access: ['customHeaders'],
 };
 
-// Snapshot shape = the object the page already serializes for its unsaved-changes hash.
+// Snapshot shape = the object the page already serializes for its unsaved-changes hash (the settings
+// values plus each collection), read back with JSON.parse - only ever compared, never used.
 export interface SettingsSnapshot {
-    config: Record<string, any>;
-    [collection: string]: any;
+    config: Record<string, unknown>;
+    [collection: string]: unknown;
 }
 
-const differs = (a: any, b: any) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+const differs = (a: unknown, b: unknown) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
 
 export function computeDirtyTabs(current: SettingsSnapshot, initial: SettingsSnapshot): string[] {
     const dirty: string[] = [];

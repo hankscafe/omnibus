@@ -12,7 +12,7 @@ import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Download, Server, Search, ArrowUp, ArrowDown, CheckCircle2, CheckCircle, Plus, Trash2, Loader2, Zap, FolderOpen, Settings, Shield } from "lucide-react"
 import { StatusBox, hosterDisplayNames, sourceDisplayNames } from "./shared"
-import type { SettingsBag } from "./shared"
+import type { ClientType, SettingsBag } from "./shared"
 
 export function DownloadsTab({ s }: { s: SettingsBag }) {
   const {
@@ -34,16 +34,16 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                     <div className="space-y-4">
                         <h3 className="text-lg font-bold border-b border-border pb-2 text-foreground">Add Download Client(s)</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {[
+                            {([
                                 { id: 'qbit', name: 'qBittorrent', protocol: 'Torrent' },
                                 { id: 'transmission', name: 'Transmission', protocol: 'Torrent' },
                                 { id: 'sab', name: 'SABnzbd', protocol: 'Usenet' },
                                 { id: 'deluge', name: 'Deluge', protocol: 'Torrent' },
                                 { id: 'nzbget', name: 'NZBGet', protocol: 'Usenet' }
-                            ].map((client) => {
+                            ] satisfies { id: ClientType; name: string; protocol: string }[]).map((client) => {
                                 const isAdded = configuredClients.some(c => c.type === client.id);
                                 return (
-                                    <div key={client.id} className={`p-4 sm:p-5 border border-border rounded-xl flex flex-col items-center justify-center space-y-3 transition-all ${isAdded ? 'bg-muted opacity-80 cursor-default shadow-none' : 'bg-muted/30 cursor-pointer hover:border-primary hover:shadow-md'}`} onClick={() => !isAdded && openClientSetup(client.id as any)}>
+                                    <div key={client.id} className={`p-4 sm:p-5 border border-border rounded-xl flex flex-col items-center justify-center space-y-3 transition-all ${isAdded ? 'bg-muted opacity-80 cursor-default shadow-none' : 'bg-muted/30 cursor-pointer hover:border-primary hover:shadow-md'}`} onClick={() => !isAdded && openClientSetup(client.id)}>
                                         <span className="font-bold text-lg sm:text-base text-foreground">{client.name}</span>
                                         <Badge variant="secondary" className={client.protocol === 'Torrent' ? "bg-primary/10 text-primary hover:bg-primary/20" : "bg-green-100 text-green-700 hover:bg-green-200"}>{client.protocol}</Badge>
                                         {isAdded ? (

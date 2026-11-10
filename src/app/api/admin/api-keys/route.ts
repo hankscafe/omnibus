@@ -8,6 +8,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { AuditLogger } from '@/lib/audit-logger';
 import { Logger } from '@/lib/logger';
 import { hashRawKeyForKoreader } from '@/lib/koreader-auth';
+import type { AdminApiKeyRow } from '@/types/api/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,7 @@ export async function GET() {
         return NextResponse.json(apiKeys.map(({ syncKeyHash, ...key }) => ({
             ...key,
             koreaderCompatible: Boolean(syncKeyHash)
-        })));
+        })) satisfies AdminApiKeyRow[]);
     } catch (error) {
         Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
         return NextResponse.json({
             success: true,
             rawKey,
-            apiKey: { ...safeKey, koreaderCompatible: Boolean(syncKeyHash) }
+            apiKey: { ...safeKey, koreaderCompatible: Boolean(syncKeyHash) } satisfies AdminApiKeyRow
         });
     } catch (error) {
         Logger.log(`[Admin API Keys] Error: ${getErrorMessage(error)}`, 'error');

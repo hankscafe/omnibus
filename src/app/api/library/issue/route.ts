@@ -45,6 +45,14 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: "You don't have access to this library." }, { status: 403 });
     }
 
+    // EVERY reply below sends the description through this: the series page renders it as HTML
+    // (dangerouslySetInnerHTML), and it's stored as the provider (ComicVine wiki HTML, Metron) or the
+    // file's ComicInfo Summary gave it - sanitized on read, never on write. Until v1.4.11-beta.034 only
+    // the database reply did this, so the first view of a not-yet-deep-synced issue sent it raw.
+    // Provider-relative links resolve against the issue's own source's wiki (else the series').
+    const wikiBase = providerWikiBase(issue.metadataSource || issue.series?.metadataSource);
+    const safeDescription = (html: string | null | undefined) => sanitizeDescription(html, wikiBase);
+
     const parsedWriters = safeParse(issue.writers);
     const parsedArtists = safeParse(issue.artists);
     const parsedCoverArtists = safeParse((issue as any).coverArtists);
@@ -164,7 +172,7 @@ export async function GET(request: Request) {
                         storyArcs: finalStoryArcs,
                         teams: finalTeams,
                         locations: parsedLocations,
-                        description: newDescription
+                        description: safeDescription(newDescription)
                     });
                 }
 
@@ -271,7 +279,7 @@ export async function GET(request: Request) {
                             teams: finalTeams,
                             locations: finalLocations,
                             ...issueComicInfoRest,
-                            description: newDescription,
+                            description: safeDescription(newDescription),
                             hasCustomMetadata: !!issue.hasCustomMetadata
                         });
                     }
@@ -301,10 +309,8 @@ export async function GET(request: Request) {
         teams: parsedTeams,
         locations: parsedLocations,
         ...issueComicInfoRest,
-        // Sanitize provider HTML before it reaches the dangerouslySetInnerHTML synopsis sink (stored
-        // XSS), resolving provider-relative wiki links against the issue's own source (falling back
-        // to the series') so they stop 404ing on the Omnibus origin.
-        description: sanitizeDescription(issue.description, providerWikiBase(issue.metadataSource || issue.series?.metadataSource)),
+        // Sanitized like the deep-fetch replies above (safeDescription).
+        description: safeDescription(issue.description),
         // Manual-edits lock state — the metadata editor shows it and offers the unlock (issue #194 (f)).
         hasCustomMetadata: !!issue.hasCustomMetadata
     });

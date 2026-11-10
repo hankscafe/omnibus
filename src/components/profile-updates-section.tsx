@@ -14,12 +14,13 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { coverSrc } from "@/lib/utils/cover-url";
 import { dayKeyOf, dayLabel } from "@/lib/utils/updates-view";
+import type { UpdateItem, UpdatesResponse } from "@/types/api/updates";
 
 const OPEN_KEY = 'omnibus_profile_updates_open';
 const MAX_SHOWN = 9; // fills the 3-column grid three rows deep at most
 
 export function ProfileUpdatesSection() {
-    const [items, setItems] = useState<any[]>([]);
+    const [items, setItems] = useState<UpdateItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [open, setOpen] = useState(true);
     const router = useRouter();
@@ -27,7 +28,7 @@ export function ProfileUpdatesSection() {
     useEffect(() => {
         fetch('/api/library/updates')
             .then(res => res.ok ? res.json() : { items: [] })
-            .then(data => setItems((data.items || []).slice(0, MAX_SHOWN)))
+            .then((data: Partial<UpdatesResponse>) => setItems((data.items || []).slice(0, MAX_SHOWN)))
             .catch(() => {})
             .finally(() => setLoading(false));
         if (localStorage.getItem(OPEN_KEY) === '0') setOpen(false);
@@ -65,7 +66,7 @@ export function ProfileUpdatesSection() {
                     </p>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {items.map((item: any) => (
+                        {items.map((item) => (
                             <Card
                                 key={item.id}
                                 className="shadow-sm bg-background border-border overflow-hidden hover:border-primary/50 transition-colors cursor-pointer group"

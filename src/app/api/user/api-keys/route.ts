@@ -8,6 +8,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { AuditLogger } from '@/lib/audit-logger';
 import { hashRawKeyForKoreader } from '@/lib/koreader-auth';
+import type { UserApiKeyRow } from '@/types/api/profile';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +34,7 @@ export async function GET() {
             orderBy: { createdAt: 'desc' }
         });
 
-        return NextResponse.json(opdsKeys.map(({ syncKeyHash, ...key }) => ({
+        return NextResponse.json(opdsKeys.map(({ syncKeyHash, ...key }): UserApiKeyRow => ({
             ...key,
             koreaderCompatible: Boolean(syncKeyHash)
         })));

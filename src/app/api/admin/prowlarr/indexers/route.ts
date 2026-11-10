@@ -6,6 +6,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger'; 
 import { getErrorMessage } from '@/lib/utils/error';
+import type { ProwlarrIndexerOption } from '@/types/api/config';
 
 export async function POST(request: Request) {
   try {
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
 
     Logger.log(`[Prowlarr] Mapped count: ${mapped.length}`, 'success'); 
 
-    return NextResponse.json(mapped);
+    return NextResponse.json(mapped satisfies ProwlarrIndexerOption[]);
   } catch (error: unknown) {
     Logger.log(`[Prowlarr] Refresh Error: ${getErrorMessage(error)}`, 'error'); 
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

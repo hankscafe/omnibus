@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { KoreaderDevice } from '@/types/api/profile';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function GET(_request: Request) {
         });
 
         // Group by unique Device ID to just get the latest activity per device
-        const devicesMap = new Map();
+        const devicesMap = new Map<string, KoreaderDevice>();
         for (const sync of syncs) {
             if (!devicesMap.has(sync.deviceId)) {
                 // Clean up the document name to make it look nicer (remove path/extensions)

@@ -7,6 +7,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
 import type { Prisma } from '@prisma/client';
+import type { ReadingListSummaryRow } from '@/types/api/reading-lists';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,7 +73,7 @@ export async function GET(request: Request) {
             countBy({ issue: { readProgresses: { some: { userId, isCompleted: true } } } }),
         ]);
 
-        return NextResponse.json(lists.map(list => ({
+        return NextResponse.json(lists.map((list): ReadingListSummaryRow => ({
             ...list,
             counts: { total: total.get(list.id) ?? 0, owned: owned.get(list.id) ?? 0, read: read.get(list.id) ?? 0 },
         })));

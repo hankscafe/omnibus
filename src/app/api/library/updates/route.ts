@@ -14,6 +14,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { UpdateItemRow, UpdatesPayload } from '@/types/api/updates';
 
 const WINDOW_DAYS = 30;
 const MAX_ITEMS = 500;
@@ -50,7 +51,7 @@ export async function GET() {
     }) : [];
     const readByIssue = new Map(readRows.map(r => [r.issueId, r.isCompleted]));
 
-    const items = issues.map(i => {
+    const items = issues.map((i): UpdateItemRow => {
         // Cover precedence mirrors the issues-browse route: provider art → the issue's own
         // first-page render (file-backed) → the series folder cover.
         let cover = i.coverUrl;
@@ -65,7 +66,8 @@ export async function GET() {
             seriesPath: i.series?.folderPath || '',
             number: i.number,
             name: i.name || null,
-            filePath: i.filePath,
+            // The query takes only issues with a file (filePath not null).
+            filePath: i.filePath as string,
             coverUrl: cover,
             // The feed's date is the arrival; the field keeps its name for the page that groups by it.
             createdAt: i.fileAddedAt ?? i.createdAt,
@@ -73,7 +75,7 @@ export async function GET() {
         };
     });
 
-    return NextResponse.json({ items, windowDays: WINDOW_DAYS, capped: issues.length === MAX_ITEMS });
+    return NextResponse.json({ items, windowDays: WINDOW_DAYS, capped: issues.length === MAX_ITEMS } satisfies UpdatesPayload);
   } catch (error: unknown) {
     Logger.log(`[Updates API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

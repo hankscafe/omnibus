@@ -7,6 +7,7 @@ import path from 'path';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { CONFIG_DIR } from '@/lib/utils/paths';
+import type { ProfilePayload } from '@/types/api/profile';
 
 export async function GET(req: Request) {
   const token = await getToken({ req: req as any });
@@ -61,7 +62,7 @@ export async function GET(req: Request) {
         const progressPct = rp.totalPages > 0 ? Math.round((rp.currentPage / rp.totalPages) * 100) : 0;
         const folderPath = rp.issue?.series?.folderPath;
         
-        let seriesCoverUrl = (rp.issue?.series as any)?.coverUrl || null;
+        let seriesCoverUrl = rp.issue?.series?.coverUrl || null;
 
         if (!seriesCoverUrl && rp.issue?.coverUrl) {
             seriesCoverUrl = rp.issue.coverUrl;
@@ -100,9 +101,9 @@ export async function GET(req: Request) {
         user: { ...safeUser, isSsoUser },
         stats,
         recentRequests: requests.slice(0, 5), 
-        recentHistory, 
-        trophies: mappedTrophies 
-    });
+        recentHistory,
+        trophies: mappedTrophies
+    } satisfies ProfilePayload);
   } catch (error: unknown) {
     Logger.log(`[Profile GET Error]: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

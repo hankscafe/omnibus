@@ -11,25 +11,9 @@ import { MetronProvider } from '@/lib/metadata/providers/metron';
 import { getMetronCover } from '@/lib/metadata/providers/metron-cover';
 import { lazyMetronAuth } from '@/lib/metron/client';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
+import type { SeriesIssueResult } from '@/types/api/series-issues';
 
 const BASE_URL = 'https://comicvine.gamespot.com/api';
-
-interface MappedIssueResult {
-    id: number;
-    volumeId: number;
-    name: string;
-    issueNumber: string;
-    issue_number: string;
-    year: string;
-    publisher: string | null;
-    image: string | null;
-    description: string;
-    siteUrl: string;
-    writers: string[];
-    artists: string[];
-    coverArtists: string[];
-    metadataSource?: string;
-}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -45,7 +29,7 @@ export async function GET(request: Request) {
           const metron = new MetronProvider();
           const issues = await metron.getSeriesIssues(volumeId);
           
-          const mapped = issues.map(item => ({
+          const mapped = issues.map((item): SeriesIssueResult => ({
               id: parseInt(item.sourceId),
               volumeId: parseInt(volumeId),
               name: item.name || `Issue #${item.issueNumber}`,
@@ -82,7 +66,7 @@ export async function GET(request: Request) {
   const metronAuth = lazyMetronAuth();
 
   try {
-    const allResults: MappedIssueResult[] = []; 
+    const allResults: SeriesIssueResult[] = [];
     let offset = 0;
     let totalResults = 1; 
     let loopCount = 0;    
@@ -104,7 +88,7 @@ export async function GET(request: Request) {
       const data = response.data;
       if (offset === 0) totalResults = data.number_of_total_results || 0;
 
-      const pageResults: MappedIssueResult[] = await Promise.all((data.results || []).map(async (item: ComicVineIssue) => {
+      const pageResults: SeriesIssueResult[] = await Promise.all((data.results || []).map(async (item: ComicVineIssue): Promise<SeriesIssueResult> => {
         let desc = item.deck;
         if (!desc && item.description) {
            desc = item.description.replace(/<[^>]*>?/gm, '');

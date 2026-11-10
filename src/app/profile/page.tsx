@@ -26,9 +26,15 @@ import {
   ChevronDown, ChevronUp, Settings, Server, Library
 } from "lucide-react"
 import { getErrorMessage } from '@/lib/utils/error';
+import type { LucideIcon } from "lucide-react"
+import type { IssueDetailsReply } from '@/types/api/issue-details';
+import type { KoreaderDevice, ProfileResponse, UserAnalytics, UserApiKey } from '@/types/api/profile';
+import type { ReadingListSummary } from '@/types/api/reading-lists';
+import type { RequestListItem } from '@/types/api/request';
+import type { SeriesIssuesReply } from '@/types/api/series-issues';
 
 // --- Helper Component: Collapsible Section ---
-function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }: { title: string, icon: any, children: React.ReactNode, defaultOpen?: boolean }) {
+function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }: { title: string, icon: LucideIcon, children: React.ReactNode, defaultOpen?: boolean }) {
     const [isOpen, setIsOpen] = useState(defaultOpen);
     return (
         <div className="space-y-3 pt-6">
@@ -53,7 +59,7 @@ function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }
 }
 
 // --- Helper Component: Individual Activity Card ---
-function ActivityCard({ req, getStatusBadge, onCancel }: { req: any, getStatusBadge: (status: string) => React.ReactNode, onCancel: (id: string) => void }) {
+function ActivityCard({ req, getStatusBadge, onCancel }: { req: RequestListItem, getStatusBadge: (status: string) => React.ReactNode, onCancel: (id: string) => void }) {
   const [desc, setDesc] = useState<string | null>(null)
   const [loadingDesc, setLoadingDesc] = useState(false)
   const [showDesc, setShowDesc] = useState(false)
@@ -75,14 +81,14 @@ function ActivityCard({ req, getStatusBadge, onCancel }: { req: any, getStatusBa
                     fetch(`/api/issue-details?id=${req.volumeId}&type=volume`),
                     fetch(`/api/series-issues?volumeId=${req.volumeId}`)
                 ]);
-                const volData = await volRes.json();
-                const issuesData = await issuesRes.json();
-                const specificIssue = issuesData.results?.find((i: any) => parseFloat(i.issueNumber) === targetIssueNum);
+                const volData: IssueDetailsReply = await volRes.json();
+                const issuesData: SeriesIssuesReply = await issuesRes.json();
+                const specificIssue = issuesData.results?.find((i) => parseFloat(i.issueNumber) === targetIssueNum);
                 const finalDesc = specificIssue?.description || volData.description;
                 setDesc(finalDesc ? finalDesc.trim() : "No synopsis available.");
             } else {
                 const res = await fetch(`/api/issue-details?id=${req.volumeId}&type=volume`);
-                const data = await res.json();
+                const data: IssueDetailsReply = await res.json();
                 setDesc(data.description ? data.description.trim() : "No synopsis available.");
             }
         } catch (e) {
@@ -203,7 +209,7 @@ function ActivityCard({ req, getStatusBadge, onCancel }: { req: any, getStatusBa
 const HEATMAP_DAYS = 180;
 const CELL_PITCH = 16; // 12px cell + 4px gap, used to position month labels
 
-function ActivityHeatmap({ analytics }: { analytics: any }) {
+function ActivityHeatmap({ analytics }: { analytics: UserAnalytics | null }) {
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -215,7 +221,7 @@ function ActivityHeatmap({ analytics }: { analytics: any }) {
     if (!analytics?.heatmap) return null;
 
     const heatmap: Record<string, number> = analytics.heatmap;
-    const details: Record<string, any[]> = analytics.heatmapDetails || {};
+    const details = analytics.heatmapDetails || {};
 
     // Format to YYYY-MM-DD strictly using local time
     const toDateStr = (d: Date) => {
@@ -413,7 +419,7 @@ const getThemeGradient = (theme: string) => {
 
 // --- Helper Component: KOReader Devices Sync ---
 function KoreaderDevices() {
-    const [devices, setDevices] = useState<any[]>([]);
+    const [devices, setDevices] = useState<KoreaderDevice[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -507,10 +513,10 @@ function KoreaderDevices() {
 
 export default function ProfilePage() {
   const { data: session, update } = useSession()
-  const [profile, setProfile] = useState<any>(null)
-  const [recentReqs, setRecentReqs] = useState<any[]>([])
-  const [readingLists, setReadingLists] = useState<any[]>([])
-  const [analytics, setAnalytics] = useState<any>(null)
+  const [profile, setProfile] = useState<ProfileResponse | null>(null)
+  const [recentReqs, setRecentReqs] = useState<RequestListItem[]>([])
+  const [readingLists, setReadingLists] = useState<ReadingListSummary[]>([])
+  const [analytics, setAnalytics] = useState<UserAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   
   // Upload States
@@ -535,7 +541,7 @@ export default function ProfilePage() {
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" })
 
   // User API Keys State
-  const [apiKeys, setApiKeys] = useState<any[]>([])
+  const [apiKeys, setApiKeys] = useState<UserApiKey[]>([])
   const [manageKeysModalOpen, setManageKeysModalOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
   const [generatedKey, setGeneratedKey] = useState<string | null>(null)
@@ -558,7 +564,7 @@ export default function ProfilePage() {
 
       const reqRes = await fetch('/api/request')
       if (reqRes.ok) {
-        const data = await reqRes.json()
+        const data: RequestListItem[] = await reqRes.json()
         setRecentReqs(data.slice(0, 5)); 
       }
 
@@ -765,7 +771,8 @@ export default function ProfilePage() {
             const data = await res.json();
             if (res.ok) {
                 toast({ title: "Avatar Updated" });
-                setProfile((prev: any) => ({ ...prev, user: { ...prev.user, avatar: data.avatarUrl } }));
+                // The profile is loaded before its avatar and banner controls render.
+                setProfile(prev => ({ ...prev!, user: { ...prev!.user, avatar: data.avatarUrl } }));
                 await update({ user: { image: data.avatarUrl } });
             } else throw new Error(data.error);
         } catch (err) { toast({ title: "Upload Failed", description: getErrorMessage(err), variant: "destructive" }); } finally { setUploadingAvatar(false); }
@@ -787,7 +794,7 @@ export default function ProfilePage() {
             const data = await res.json();
             if (res.ok) {
                 toast({ title: "Banner Updated" });
-                setProfile((prev: any) => ({ ...prev, user: { ...prev.user, banner: data.bannerUrl } }));
+                setProfile(prev => ({ ...prev!, user: { ...prev!.user, banner: data.bannerUrl } }));
             } else throw new Error(data.error);
         } catch (err) { toast({ title: "Upload Failed", description: getErrorMessage(err), variant: "destructive" }); } finally { setUploadingBanner(false); }
     };
@@ -798,7 +805,7 @@ export default function ProfilePage() {
     e.stopPropagation(); setUploadingBanner(true);
     try {
         const res = await fetch('/api/user/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeBanner: true }) });
-        if (res.ok) setProfile((prev: any) => ({ ...prev, user: { ...prev.user, banner: null } }));
+        if (res.ok) setProfile(prev => ({ ...prev!, user: { ...prev!.user, banner: null } }));
     } finally { setUploadingBanner(false); }
   }
 
@@ -872,8 +879,8 @@ export default function ProfilePage() {
                 <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-foreground sm:text-white drop-shadow-lg">{profile?.user?.username}</h1>
                 <div className="flex items-center justify-center sm:justify-start gap-2 bg-background/80 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none py-1 sm:py-0 px-3 sm:px-0 rounded-full w-fit mx-auto sm:mx-0">
                     <Badge className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold uppercase tracking-wider text-[10px]">{profile?.user?.role}</Badge>
-                    {session?.user && <TierBadge user={session.user as any} />}
-                    <span className="text-xs text-muted-foreground sm:text-slate-200 font-medium sm:drop-shadow-md">Member since {new Date(profile?.user?.createdAt).getFullYear()}</span>
+                    {session?.user && <TierBadge user={session.user} />}
+                    <span className="text-xs text-muted-foreground sm:text-slate-200 font-medium sm:drop-shadow-md">Member since {new Date(profile?.user?.createdAt ?? NaN).getFullYear()}</span>
                 </div>
             </div>
         </div>
@@ -962,7 +969,7 @@ export default function ProfilePage() {
                             </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {displayedHistory.map((item: any) => (
+                            {displayedHistory.map((item) => (
                                 <Link key={item.id} href={`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.folderPath)}`} className="block group">
                                     <Card className="shadow-sm bg-background border-border overflow-hidden group-hover:border-primary/50 transition-colors h-full">
                                         <CardContent className="p-4 flex items-center gap-4">
@@ -1063,7 +1070,7 @@ export default function ProfilePage() {
                             {recentReqs.length === 0 ? (
                                 <div className="p-10 text-center text-muted-foreground italic">No requests made yet.</div>
                             ) : (
-                                recentReqs.map((req: any) => (
+                                recentReqs.map((req) => (
                                     <ActivityCard key={req.id} req={req} getStatusBadge={getStatusBadge} onCancel={handleCancelRequest} />
                                 ))
                             )}
@@ -1077,7 +1084,7 @@ export default function ProfilePage() {
         <CollapsibleSection title="Achievements" icon={Trophy}>
             {profile?.trophies && profile.trophies.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                    {profile.trophies.map((trophy: any) => (
+                    {profile.trophies.map((trophy) => (
                         <Card key={trophy.id} className={`shadow-sm border-2 transition-all ${trophy.earned ? 'border-yellow-400 dark:border-yellow-500/50 bg-yellow-50/10 dark:bg-yellow-900/10 scale-105 z-10' : 'border-border bg-background opacity-60 grayscale hover:grayscale-0 hover:opacity-100'}`}>
                             <CardContent className="p-4 flex flex-col items-center justify-center text-center space-y-2">
                                 <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-inner border ${trophy.earned ? 'bg-yellow-100 border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-700' : 'bg-muted border-border'}`}>

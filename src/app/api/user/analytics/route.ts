@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { HeatmapEntry, UserAnalyticsPayload } from '@/types/api/profile';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,14 +42,6 @@ export async function GET() {
             orderBy: { date: 'asc' }
         });
 
-        type HeatmapEntry = {
-            seriesName: string;
-            seriesPath: string | null;
-            issueNumber: string;
-            issueName: string | null;
-            coverUrl: string | null;
-            pagesRead: number | null;
-        };
         const heatmapDetails: Record<string, HeatmapEntry[]> = {};
 
         issueReads.forEach(read => {
@@ -105,8 +98,8 @@ export async function GET() {
 
             // Genre weighting (Stored as JSON array strings in Issue)
             try {
-                if ((prog.issue as any).genres) {
-                    const genres = JSON.parse((prog.issue as any).genres);
+                if (prog.issue.genres) {
+                    const genres = JSON.parse(prog.issue.genres);
                     if (Array.isArray(genres)) {
                         genres.forEach(g => {
                             if (g !== "NONE") genreCounts[g] = (genreCounts[g] || 0) + 1;
@@ -140,7 +133,7 @@ export async function GET() {
             topPublisher: getTop(publisherCounts),
             topGenre: getTop(genreCounts),
             topCharacter: getTop(characterCounts)
-        });
+        } satisfies UserAnalyticsPayload);
 
     } catch (error: unknown) {
         Logger.log(`[User Analytics API] Error: ${getErrorMessage(error)}`, 'error');

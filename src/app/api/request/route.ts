@@ -21,6 +21,7 @@ import { ownedCoverageBySeries } from '@/lib/coverage-ownership';
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { followSeries, followSeriesByCatalogId } from '@/lib/follows';
 import { seriesFolderSegments } from '@/lib/utils/naming';
+import type { RequestRow } from '@/types/api/request';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
 
     const metronAuth = lazyMetronAuth();
 
-    const formattedRequests = await Promise.all(requests.map(async req => {
+    const formattedRequests = await Promise.all(requests.map(async (req): Promise<RequestRow> => {
       const series = seriesList.find(s => 
         s.metadataId === req.volumeId && 
         s.metadataSource === (req.metadataSource || 'COMICVINE')
@@ -87,7 +88,7 @@ export async function GET(request: NextRequest) {
         status: req.status,
         progress: req.progress, 
         downloadLink: req.downloadLink,
-        indexer: (req as any).indexer,
+        indexer: req.indexer,
         imageUrl: finalImageUrl && finalImageUrl.startsWith('http') ? `/api/library/cover?path=${encodeURIComponent(finalImageUrl)}` : finalImageUrl,
         retryCount: req.retryCount || 0 
       };

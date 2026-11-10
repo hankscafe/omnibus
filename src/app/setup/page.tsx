@@ -24,6 +24,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { RECOMMENDED_PUBLISHERS, RECOMMENDED_KEYWORDS } from "@/lib/filter-defaults"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
 import { errorMessageOr } from '@/lib/utils/error';
+import type { ClientConfig, HosterAccountConfig, IndexerConfig, LibraryConfig, ProwlarrIndexerOption, WebhookConfig } from '@/types/api/config';
+
+// The wizard's drafts of the rows it POSTs to /api/admin/config: a new library has no
+// default-access choice yet, and a client set up here always has (possibly empty) login text.
+type LibraryDraft = Omit<LibraryConfig, 'defaultAccess'> & { defaultAccess?: boolean };
+type ClientDraft = ClientConfig & { user: string; pass: string };
+/** An account to create after setup (POST /api/auth/register). */
+interface ExtraUserDraft { username: string; email: string; password: string; canDownload: boolean; autoApproveRequests: boolean; role: string; isApproved: boolean }
 
 const DISCORD_EVENTS = [
   { id: "pending_request", label: "Pending Request", desc: "Includes requester username, cover image, and synopsis." },
@@ -91,33 +99,33 @@ export default function SetupWizard() {
   const [customProwlarrCategories, setCustomProwlarrCategories] = useState("");
 
   // Relational States
-  const [libraries, setLibraries] = useState<any[]>([{ id: 'tmp_1', name: 'Standard Comics', path: '', isManga: false, isDefault: true }]);
-  const [configuredClients, setConfiguredClients] = useState<any[]>([]);
-  const [configuredIndexers, setConfiguredIndexers] = useState<any[]>([]);
-  const [configuredHosters, setConfiguredHosters] = useState<any[]>([]);
-  const [webhooks, setWebhooks] = useState<any[]>([]);
-  const [extraUsers, setExtraUsers] = useState<any[]>([]);
+  const [libraries, setLibraries] = useState<LibraryDraft[]>([{ id: 'tmp_1', name: 'Standard Comics', path: '', isManga: false, isDefault: true }]);
+  const [configuredClients, setConfiguredClients] = useState<ClientDraft[]>([]);
+  const [configuredIndexers, setConfiguredIndexers] = useState<IndexerConfig[]>([]);
+  const [configuredHosters, setConfiguredHosters] = useState<HosterAccountConfig[]>([]);
+  const [webhooks, setWebhooks] = useState<WebhookConfig[]>([]);
+  const [extraUsers, setExtraUsers] = useState<ExtraUserDraft[]>([]);
 
   // Local helper states for modals/forms
-  const [availableIndexers, setAvailableIndexers] = useState<any[]>([]);
-  
+  const [availableIndexers, setAvailableIndexers] = useState<ProwlarrIndexerOption[]>([]);
+
   // Download Client Modal States
   const [clientModalOpen, setClientModalOpen] = useState(false);
-  const [editingClient, setEditingClient] = useState<any>(null);
+  const [editingClient, setEditingClient] = useState<ClientDraft | null>(null);
 
   // Hoster Modal States
   const [hosterModalOpen, setHosterModalOpen] = useState(false);
-  const [editingHoster, setEditingHoster] = useState<any>(null);
+  const [editingHoster, setEditingHoster] = useState<HosterAccountConfig | null>(null);
 
   // Indexer Modal States
   const [indexerModalOpen, setIndexerModalOpen] = useState(false);
-  const [editingIndexer, setEditingIndexer] = useState<any>({ 
-    id: 0, name: "", priority: 25, seedTime: 0, seedRatio: 0, rss: false, protocol: "torrent" 
+  const [editingIndexer, setEditingIndexer] = useState<IndexerConfig>({
+    id: 0, name: "", priority: 25, seedTime: 0, seedRatio: 0, rss: false, protocol: "torrent"
   });
 
   // Webhook Modal States
   const [webhookModalOpen, setWebhookModalOpen] = useState(false);
-  const [editingWebhook, setEditingWebhook] = useState<any>(null);
+  const [editingWebhook, setEditingWebhook] = useState<WebhookConfig | null>(null);
   const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -130,7 +138,7 @@ export default function SetupWizard() {
       .catch(() => setIsLoading(false));
   }, [router]);
 
-  const updateForm = (key: string, value: any) => {
+  const updateForm = <K extends keyof typeof formData>(key: K, value: (typeof formData)[K]) => {
     setFormData(prev => ({ ...prev, [key]: value }));
     if (testStates[key] !== undefined) {
         setTestStates(prev => ({ ...prev, [key]: 'idle' }));
@@ -162,8 +170,9 @@ export default function SetupWizard() {
       updateForm('prowlarr_categories', finalCategories);
   };
 
-  const updateEditingClient = (key: string, value: any) => {
-      setEditingClient((prev: any) => ({ ...prev, [key]: value }));
+  // Only the client dialog's fields call this, and the dialog is open only with a client in it.
+  const updateEditingClient = (key: keyof ClientDraft, value: string) => {
+      setEditingClient(prev => ({ ...prev!, [key]: value }));
       if (testStates['clients'] !== 'idle') {
           setTestStates(prev => ({ ...prev, clients: 'idle' }));
       }
@@ -214,7 +223,7 @@ export default function SetupWizard() {
       }
   };
 
-  const handleTestConnection = async (type: string, payload: any, stateKey: string) => {
+  const handleTestConnection = async (type: string, payload: object, stateKey: string) => {
       setIsTesting(stateKey);
       try {
           const res = await fetch('/api/admin/test', {
@@ -310,7 +319,8 @@ export default function SetupWizard() {
       }
   };
 
-  const openIndexerModal = (indexer: any, isEdit = false) => {
+  // An indexer Prowlarr offers (Add), or one already configured here (edit: it has a seed ratio).
+  const openIndexerModal = (indexer: ProwlarrIndexerOption & { seedRatio?: number }, isEdit = false) => {
     const protocol = indexer.protocol || "torrent";
     if (isEdit) {
         setEditingIndexer({ ...indexer, seedRatio: indexer.seedRatio || 0 });
@@ -336,7 +346,7 @@ export default function SetupWizard() {
     toast({ title: "Indexer Removed" });
   };
 
-  const openWebhookModal = (webhook?: any) => {
+  const openWebhookModal = (webhook?: WebhookConfig) => {
     if (webhook) {
       setEditingWebhook({ ...webhook });
     } else {
@@ -382,7 +392,7 @@ export default function SetupWizard() {
     });
   };
 
-  const handleTestWebhook = async (webhook: any) => {
+  const handleTestWebhook = async (webhook: WebhookConfig) => {
     setTestingWebhookId(webhook.id);
     try {
       const res = await fetch('/api/admin/test', {

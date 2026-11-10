@@ -6,6 +6,7 @@
 "use client"
 
 import { CheckCircle, XCircle } from "lucide-react"
+import type { LibraryConfig, IndexerConfig, ClientType, ClientConfig, WebhookConfig, HosterAccountConfig } from "@/types/api/config"
 
 export const hosterDisplayNames: Record<string, string> = {
     'mediafire': 'MediaFire',
@@ -53,50 +54,12 @@ export const SYSTEM_EVENTS = [
 
 
 // --- Types (shared by page.tsx state and the tab components) ---
-export interface LibraryConfig { id: string; name: string; path: string; isManga: boolean; isDefault: boolean; defaultAccess: boolean; }
-export interface IndexerConfig { id: number; name: string; priority: number; seedTime: number; seedRatio: number; rss: boolean; protocol: string; }
+// The rows /api/admin/config sends, as the Settings page and the setup wizard edit them, live with
+// the route's payload types; re-exported here for the tabs.
+export type { LibraryConfig, IndexerConfig, ClientType, ClientConfig, WebhookConfig, HosterAccountConfig }
 export interface CustomHeader { id?: string; key: string; value: string; }
 export interface AcronymConfig { id?: string; key: string; value: string; }
 export interface ScoringRule { id: string; term: string; score: number; }
-/** The download clients the setup dialog offers. */
-export type ClientType = 'qbit' | 'sab' | 'deluge' | 'transmission' | 'nzbget';
-// The three below are the rows /api/admin/config sends (src/types/api/config.ts) as the page edits
-// them: an optional field the database leaves empty arrives as null, so it's typed that way (and an
-// input shows it as '').
-export interface ClientConfig {
-    id: string;
-    name: string;
-    /** A ClientType for a client set up here; the stored column is plain text. */
-    type: string;
-    /** 'Torrent' | 'Usenet' */
-    protocol: string;
-    url: string;
-    /** A login is optional (Transmission without RPC authentication, SABnzbd's API key instead). */
-    user: string | null;
-    pass: string | null;
-    apiKey?: string | null;
-    category?: string | null;
-    remotePath?: string | null;
-    localPath?: string | null;
-}
-export interface WebhookConfig {
-    id: string;
-    name: string;
-    url: string;
-    events: string[];
-    isActive: boolean;
-    botUsername?: string | null;
-    botAvatarUrl?: string | null;
-}
-export interface HosterAccountConfig {
-    id: string;
-    name: string;
-    hoster: string;
-    username?: string | null;
-    password?: string | null;
-    apiKey?: string | null;
-    isActive: boolean;
-}
 
 // The state bag page.tsx assembles for the tab components. Collections carry their real
 // element types so .map/.filter callbacks stay contextually typed; everything else is loose.

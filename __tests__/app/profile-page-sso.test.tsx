@@ -61,4 +61,9 @@ describe('Profile page - SSO accounts', () => {
         expect(button(/Enable 2FA/).disabled).toBe(false);
         expect(button(/Change Password/).disabled).toBe(false);
     });
+
+    it('shows the year the account was created', async () => {
+        await renderWith(false);
+        expect(screen.getByText('Member since 2026')).toBeTruthy();
+    });
 });

@@ -24,6 +24,11 @@ export function editionNameFromFile(fileName: string): string {
     return s || stem.trim();
 }
 
+/** A book's volume number as the attach accepts it: positive ("1", "2.5", "3a"). A negative one
+ *  names back as a different number after a wipe ("Vol. -001" parses as 1). The dialog and the
+ *  attachments route share it, so the dialog stops what the server would refuse. */
+export const BOOK_NUMBER = /^\d+(?:\.\d+)?[a-zA-Z]?$/;
+
 /** A book's number within its edition: the volume number parsed with the edition's name as the
  *  series hint, so title digits ("Kaiju No. 8 v03") stay out of it. */
 export function bookNumberFromFile(fileName: string, editionName?: string): string {

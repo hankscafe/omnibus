@@ -7,6 +7,7 @@
 // "two series never share a folder" rule), but without any file of its own: the provider sync that
 // follows brings its description, credits, cover and issue list.
 import path from 'path';
+import type { Series } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { detectManga } from '@/lib/manga-detector';
 import { folderOwner } from '@/lib/match-collision';
@@ -53,7 +54,7 @@ export interface ProviderSeriesRef {
 }
 
 export type ProviderSeriesResult =
-    | { series: any; created: boolean; error?: undefined }
+    | { series: Series; created: boolean; error?: undefined }
     | { error: string; status: number; series?: undefined };
 
 export async function findOrCreateProviderSeries(ref: ProviderSeriesRef): Promise<ProviderSeriesResult> {

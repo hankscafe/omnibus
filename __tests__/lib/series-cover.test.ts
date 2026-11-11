@@ -2,6 +2,7 @@
 // series cover saved as the locked custom cover — shared by archive-cover, cover-upload and the
 // collected-edition attach.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import path from 'path';
 
 const mocks = vi.hoisted(() => ({
     seriesUpdate: vi.fn(), pathExists: vi.fn(), remove: vi.fn(), writeFile: vi.fn(), toBuffer: vi.fn(),
@@ -27,7 +28,8 @@ describe('archiveCoverJpeg', () => {
         mocks.toBuffer.mockResolvedValue(Buffer.from('small'));
         const r = await archiveCoverJpeg('/data/library/Comics/X/Vol. 001.cbr');
         expect(fetchMock).toHaveBeenCalledWith('http://engine/api/converter/extract-cover', expect.objectContaining({
-            method: 'POST', body: JSON.stringify({ path: '/data/library/Comics/X/Vol. 001.cbr' }),
+            // Built the way the code builds it, so the test holds on Windows too ("C:\\data\\…").
+            method: 'POST', body: JSON.stringify({ path: path.resolve('/data/library/Comics/X/Vol. 001.cbr') }),
         }));
         expect(r).toEqual({ ok: true, body: Buffer.from('small'), contentType: 'image/jpeg' });
     });
@@ -50,10 +52,14 @@ describe('saveCustomSeriesCover', () => {
 
     it('writes cover.jpg, removes the other cover files, and locks it on the series', async () => {
         mocks.pathExists.mockImplementation(async (p: string) => p.endsWith('cover.png'));
-        const url = await saveCustomSeriesCover('s1', '/comics/Saga (2012)', Buffer.from('img'));
-        expect(mocks.remove).toHaveBeenCalledWith('/comics/Saga (2012)/cover.png');
-        expect(mocks.writeFile).toHaveBeenCalledWith('/comics/Saga (2012)/cover.jpg', Buffer.from('img'));
+        const folder = '/comics/Saga (2012)';
+        const url = await saveCustomSeriesCover('s1', folder, Buffer.from('img'));
+        // Built with path.join like the code, so the test holds on Windows too ("\\comics\\…").
+        expect(mocks.remove).toHaveBeenCalledWith(path.join(folder, 'cover.png'));
+        expect(mocks.writeFile).toHaveBeenCalledWith(path.join(folder, 'cover.jpg'), Buffer.from('img'));
         expect(mocks.seriesUpdate).toHaveBeenCalledWith({ where: { id: 's1' }, data: { coverUrl: url, hasCustomCover: true } });
-        expect(url).toMatch(/^\/api\/library\/cover\?path=%2Fcomics%2FSaga%20\(2012\)%2Fcover\.jpg&v=\d+$/);
+        const [base, version] = url.split('&v=');
+        expect(base).toBe(`/api/library/cover?path=${encodeURIComponent(path.join(folder, 'cover.jpg'))}`);
+        expect(version).toMatch(/^\d+$/);
     });
 });

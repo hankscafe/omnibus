@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
     // Volume-level credits (library-aware recommendations, Beta A) land through one transaction.
     transaction: vi.fn(),
     creditDeleteMany: vi.fn(),
-    creditCreateMany: vi.fn()
+    creditCreateMany: vi.fn(),
+    attachedVolumeFindMany: vi.fn()
 }));
 
 // 2. Mock Dependencies
@@ -28,6 +29,7 @@ vi.mock('@/lib/db', () => ({
         // <-- ADDED: findMany wired to our mock
         issue: { findFirst: mocks.issueFindFirst, findMany: mocks.issueFindMany, create: mocks.issueCreate, update: mocks.issueUpdate },
         systemSetting: { findUnique: mocks.systemSettingFindUnique },
+        attachedVolume: { findMany: mocks.attachedVolumeFindMany },
         seriesCredit: { deleteMany: mocks.creditDeleteMany, createMany: mocks.creditCreateMany },
         $transaction: mocks.transaction
     }
@@ -77,6 +79,7 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         mocks.systemSettingFindUnique.mockResolvedValue({ value: 'mock_api_key' });
         mocks.issueFindFirst.mockResolvedValue(null); // Default: assume no issues exist locally
         mocks.issueFindMany.mockResolvedValue([]);    // <-- ADDED: Default return value for duplicate check
+        mocks.attachedVolumeFindMany.mockResolvedValue([]); // no local editions to claim for
     });
 
     afterEach(() => {
@@ -355,6 +358,41 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         // …and never reaches for an attached lane's skeleton (#239): a volume kept as its own series
         // used to take the parent's COLLECTED skeleton here, carrying the parent's attachment id along.
         expect(adoption?.where?.attachedVolumeId).toBeNull();
+    });
+
+    it("claims a LOCAL edition's unbound book by name before the pairing, so it never becomes the run's #1 (#257)", async () => {
+        // "Batman TPB Vol. 001" sits unbound on the series (scanned before its edition existed). Its
+        // "Vol. 1" parses as #1; unclaimed, the pairing would hand it the run's #1 identity.
+        mocks.seriesFindFirst.mockResolvedValue({ id: 'series_1', name: 'Batman', metadataId: '123', folderPath: '/comics/Batman', metadataSource: 'COMICVINE', year: 2016 });
+        mocks.attachedVolumeFindMany.mockResolvedValue([{ id: 'attL', name: 'Batman TPB', kind: 'COLLECTED', metadataSource: 'LOCAL' }]);
+        mocks.issueFindMany.mockImplementation(async (args: any) => args?.select?.filePath
+            ? [{ id: 'tpb1', filePath: '/comics/Batman/Batman TPB Vol. 001 (2016).cbz', name: null }]
+            : []);
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) return { data: { results: { name: 'Batman', start_year: '2016', publisher: { name: 'DC Comics' }, image: null } } };
+            if (url.includes('/issues/')) return { data: { number_of_total_results: 1, results: [{ id: 999, issue_number: '1', name: 'I Am Gotham Part 1', store_date: '2016-06-01' }] } };
+            return { data: Buffer.from('img') };
+        });
+        mocks.existsSync.mockReturnValue(false);
+
+        const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(result.success).toBe(true);
+
+        const claimIdx = mocks.issueUpdate.mock.calls.findIndex(c => c[0]?.where?.id === 'tpb1');
+        expect(mocks.issueUpdate.mock.calls[claimIdx]?.[0]).toEqual({
+            where: { id: 'tpb1' },
+            data: {
+                attachedVolumeId: 'attL', isAnnual: false, matchState: 'MATCHED',
+                metadataId: 'local_attL_1', metadataSource: 'LOCAL', number: '1', name: 'Vol. 1',
+            },
+        });
+        // …and before the pairing snapshot is read, which then leaves this series' lane rows out.
+        const pairingIdx = mocks.issueFindMany.mock.calls.findIndex(c => Array.isArray(c[0]?.where?.OR));
+        expect(pairingIdx).toBeGreaterThanOrEqual(0);
+        expect(mocks.issueUpdate.mock.invocationCallOrder[claimIdx]).toBeLessThan(mocks.issueFindMany.mock.invocationCallOrder[pairingIdx]);
+        // The run's #1 lands on a new row, not on the trade.
+        expect(mocks.issueUpdate.mock.calls.some(c => c[0]?.where?.id === 'tpb1' && c[0]?.data?.metadataId === '999')).toBe(false);
+        expect(mocks.issueCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ number: '1', metadataId: '999' }) }));
     });
 
     // Library-aware recommendations (Beta A): the volume call asks for the VOLUME resource's credit

@@ -386,7 +386,7 @@ export async function GET(request: Request) {
                 isCollected,
                 collectionName: isCollected ? (issue as any).attachedVolume?.name ?? null : null,
                 // #257: the edition a book belongs to — the page gives every edition its own shelf.
-                collectionId: isCollected ? (issue as any).attachedVolumeId ?? null : null,
+                collectionId: isCollected ? issue.attachedVolumeId ?? null : null,
                 // #203 COLLECTED coverage: which run issues this book reprints ("1-6, 8"), books only.
                 coversIssues: isCollected ? ((issue as any).coversIssues ?? null) : null,
                 // Issue #200: normalize vulgar fractions ("½" → 0.5) or parseFloat yields NaN,

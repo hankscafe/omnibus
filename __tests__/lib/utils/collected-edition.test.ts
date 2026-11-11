@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
     editionNameFromFile, bookNumberFromFile, yearFromFileName, editionNameClashesWithSeries,
     distinctEditionName, nameClaimsBook, evenCoverage, suggestIssuesPerBook, collectedFormatFromName,
-    editionShelfTitle, groupCollectedShelves,
+    editionShelfTitle, groupCollectedShelves, BOOK_NUMBER,
 } from '@/lib/utils/collected-edition';
 
 describe('editionNameFromFile', () => {
@@ -24,6 +24,13 @@ describe('editionNameFromFile', () => {
         expect(editionNameFromFile('Marvel Divas (2010) (digital) (Marika-Empire).cbz')).toBe('Marvel Divas');
         expect(editionNameFromFile('Venom v2 (2018).cbz')).toBe('Venom');
         expect(editionNameFromFile('Batman - The Dark Knight Returns - Deluxe Edition (2026) (digital).cbr')).toBe('Batman - The Dark Knight Returns - Deluxe Edition');
+    });
+});
+
+describe('BOOK_NUMBER', () => {
+    it('takes a positive volume number, never a negative one', () => {
+        for (const n of ['1', '12', '2.5', '3a']) expect(BOOK_NUMBER.test(n)).toBe(true);
+        for (const n of ['-1', '-2.5', '', 'one', '1-2']) expect(BOOK_NUMBER.test(n)).toBe(false);
     });
 });
 
@@ -154,5 +161,17 @@ describe('collected shelves — a kept edition', () => {
         ], 'Saga');
         expect(shelves).toHaveLength(1);
         expect(shelves[0].books.map(b => b.id)).toEqual(['p1', 'c1']);
+    });
+    it('keys a shelf by the edition, so two editions with one name never share it', () => {
+        // A LOCAL "Saga TPB" and a ComicVine volume of the same name are two editions, two shelves.
+        const shelves = groupCollectedShelves([
+            { id: 'l1', collectionId: 'attLocal', attachedVolumeId: 'attLocal', collectionName: 'Saga TPB' },
+            { id: 'v1', collectionId: 'attCv', attachedVolumeId: 'attCv', collectionName: 'Saga TPB' },
+            { id: 'l2', collectionId: 'attLocal', attachedVolumeId: 'attLocal', collectionName: 'Saga TPB' },
+        ], 'Saga');
+        expect(shelves.map(s => [s.key, s.books.map(b => b.id)])).toEqual([
+            ['attLocal', ['l1', 'l2']],
+            ['attCv', ['v1']],
+        ]);
     });
 });

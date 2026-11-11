@@ -22,6 +22,8 @@ export interface SeriesIssueRow {
     releaseDate: string | null;
     isCollected: boolean;
     collectionName: string | null;
+    /** #257: the edition a collected book belongs to; every edition gets its own shelf. Books only. */
+    collectionId: string | null;
     /** Which run issues a collected book reprints ("1-6, 8"); books only. */
     coversIssues: string | null;
     /** The number as a float for sorting (NaN serializes to null). */

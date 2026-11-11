@@ -8,6 +8,7 @@
 
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
+import type { Series } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
@@ -27,7 +28,7 @@ import { findOrCreateProviderSeries } from '@/lib/provider-series';
 import { normalizeCoverage } from '@/lib/utils/coverage';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { isSameIssue, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
-import { bookNumberFromFile, distinctEditionName, editionNameClashesWithSeries } from '@/lib/utils/collected-edition';
+import { BOOK_NUMBER, bookNumberFromFile, distinctEditionName, editionNameClashesWithSeries } from '@/lib/utils/collected-edition';
 import { archiveCoverJpeg, saveCustomSeriesCover } from '@/lib/series-cover';
 
 // LOCAL: a collected edition (or annual run) the provider has no volume for — attached by name,
@@ -37,9 +38,6 @@ const VALID_SOURCES = ['COMICVINE', 'METRON', 'LOCAL'];
 const VALID_KINDS = ['ANNUAL', 'COLLECTED', 'SPECIAL'];
 /** #257: how many loose books one attach may pick — a drop folder, not a whole library. */
 const MAX_PICKED_FILES = 200;
-// A book's volume number: positive ("1", "2.5", "3a"). A negative one names back as a different
-// number after a wipe ("Vol. -001" parses as 1).
-const BOOK_NUMBER = /^\d+(?:\.\d+)?[a-zA-Z]?$/;
 
 /**
  * #257: the loose books an admin picked in the Attach dialog — each a plain comic FILE directly in
@@ -133,6 +131,8 @@ async function requireAdmin() {
     return session;
 }
 
+type AdminSession = NonNullable<Awaited<ReturnType<typeof requireAdmin>>>;
+
 /**
  * #257: several loose books picked at once go under the series as ONE local collected edition —
  * each with the number and coverage the admin confirmed, moved by the collision helper (never
@@ -143,7 +143,7 @@ async function requireAdmin() {
  * the caller queues a new series' provider sync, so that sync never replaces it.
  */
 async function attachLocalFiles(
-    session: any, series: any, kind: string, name: string, volumeId: string, startYear: number | null,
+    session: AdminSession, series: Series, kind: string, name: string, volumeId: string, startYear: number | null,
     rawFiles: unknown, seriesCreated: boolean, existingAttachmentId: string | null, coverFromBook: boolean,
 ) {
     if (kind !== 'COLLECTED') return NextResponse.json({ error: 'Only a collected edition takes picked files.' }, { status: 400 });
@@ -163,10 +163,10 @@ async function attachLocalFiles(
     }
 
     const libraries = await prisma.library.findMany();
-    const roots = [...libraries.map((l: any) => l.path), UNMATCHED_DIR];
+    const roots = [...libraries.map(l => l.path), UNMATCHED_DIR];
     // The books are named here, so the naming settings apply (collected pattern, issue padding).
     const settings = await prisma.systemSetting.findMany();
-    const config: Record<string, string> = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
+    const config: Record<string, string> = Object.fromEntries(settings.map(s => [s.key, s.value]));
 
     const result = await attachAsCollected({
         owner: {
@@ -217,6 +217,9 @@ async function attachLocalFiles(
     });
 }
 
+/** The POST body's fields a LOCAL attach reads — as sent, so each is checked before use. */
+interface LocalAttachBody { name?: unknown; startYear?: unknown; files?: unknown; coverFromBook?: unknown; sourcePath?: unknown }
+
 /**
  * A LOCAL attachment: named by the admin, keyed by a generated local id, reused by name on the same
  * series. Without a sourcePath the engine claims the folder's files whose names carry it (the same
@@ -224,10 +227,10 @@ async function attachLocalFiles(
  * — the collision helper moves it under the series and makes its rows the lane's books outright.
  * With `files` (#257), several picked loose books go under it at once (attachLocalFiles).
  */
-async function attachLocal(session: any, series: any, kind: string, body: any, seriesCreated = false) {
+async function attachLocal(session: AdminSession, series: Series, kind: string, body: LocalAttachBody, seriesCreated = false) {
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     if (!name) return NextResponse.json({ error: 'A local collected edition needs a name.' }, { status: 400 });
-    const startYear = body?.startYear ? parseInt(body.startYear) || null : null;
+    const startYear = body?.startYear ? parseInt(String(body.startYear)) || null : null;
 
     const existing = await prisma.attachedVolume.findFirst({ where: { seriesId: series.id, metadataSource: 'LOCAL', name } });
     const volumeId = existing?.volumeId || `local_${randomUUID()}`;

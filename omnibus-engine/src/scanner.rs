@@ -4623,6 +4623,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    // #257: an Annual token never hides an edition's name. "X-Men Annual Collection Vol. 001"
+    // dropped into a series with an "X-Men Annual Collection" edition carries the Annual token, so it
+    // parses as an annual, yet its name says whose book it is: it joins the edition. A real annual
+    // ("X-Men Annual 001") is still an annual. ("Annuals" is no token: the s glues it to a word.)
+    #[tokio::test]
+    async fn an_editions_book_with_an_annual_token_joins_the_edition() {
+        let base = std::env::temp_dir().join(format!("omnibus_annlane257_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let series_dir = base.join("Marvel").join("X-Men (2019)");
+        std::fs::create_dir_all(&series_dir).unwrap();
+        let cbz = |name: &str| -> String {
+            use std::io::Write as _;
+            let p = series_dir.join(name);
+            let mut zw = zip::ZipWriter::new(File::create(&p).unwrap());
+            zw.start_file("01.jpg", zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+            p.to_string_lossy().replace('\\', "/")
+        };
+        let run1 = cbz("X-Men #001.cbz");
+        let book1 = cbz("X-Men Annual Collection Vol. 001 (2020).cbz");
+        let annual1 = cbz("X-Men Annual 001 (2020).cbz");
+
+        let db_file = base.join("annlane.db");
+        File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        scan_schema(&db).await;
+        let folder = series_dir.to_string_lossy().replace('\\', "/");
+        sqlx::query(r#"INSERT INTO "Library" (id, name, path) VALUES ('lib', 'Comics', $1)"#)
+            .bind(base.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "libraryId")
+                       VALUES ('xm', $1, 'X-Men', 2019, 'Marvel', '120000', 'COMICVINE', 'MATCHED', 'lib')"#)
+            .bind(&folder).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name)
+                       VALUES ('att_ann', 'xm', 'LOCAL', 'local_y', 'COLLECTED', 'X-Men Annual Collection')"#)
+            .execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, status, "filePath", "metadataId", "metadataSource", "matchState")
+                       VALUES ('issue_1', 'xm', '1', 'DOWNLOADED', $1, '700001', 'COMICVINE', 'MATCHED')"#)
+            .bind(&run1).execute(&db.pool).await.unwrap();
+
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("scan");
+
+        let rows = sqlx::query(r#"SELECT id, number, "filePath", "attachedVolumeId", "metadataId", CAST("isAnnual" AS INTEGER) AS "isAnnual" FROM "Issue""#)
+            .fetch_all(&db.pool).await.unwrap();
+        let by_file = |f: &str| rows.iter().find(|r| r.get::<Option<String>, _>("filePath").as_deref() == Some(f))
+            .unwrap_or_else(|| panic!("no row for {f}"));
+        assert_eq!(rows.len(), 3, "every file has its own row");
+        let book = by_file(&book1);
+        assert_eq!(book.get::<Option<String>, _>("attachedVolumeId").as_deref(), Some("att_ann"), "the edition's book joins the edition");
+        assert_eq!(book.get::<i64, _>("isAnnual"), 0, "a book on a collected edition is not an annual");
+        assert_eq!(book.get::<String, _>("number"), "1");
+        assert_eq!(book.get::<String, _>("metadataId"), "local_att_ann_1");
+        let annual = by_file(&annual1);
+        assert!(annual.get::<Option<String>, _>("attachedVolumeId").is_none(), "a real annual is nobody's book");
+        assert_eq!(annual.get::<i64, _>("isAnnual"), 1);
+        assert_eq!(by_file(&run1).get::<String, _>("id"), "issue_1");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     // ------------------------------------------------------------------
     // Discussion #182 Phase 3 acceptance: the full local-first round trip.
     //

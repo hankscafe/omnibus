@@ -175,6 +175,11 @@ describe('AttachLocalCollectedDialog — picked loose books', () => {
         expect(screen.getByTestId('collected-shelf-title').textContent).toBe('Deluxe');
         expect(screen.getByTestId('collected-format').textContent).toBe('HC');
 
+        // A negative number is refused here, as the server would refuse it.
+        fireEvent.change(screen.getByLabelText('Volume number for Power Rangers Prime v02 (2025) (Digital) (dekabro-Empire).cbz'), { target: { value: '-2' } });
+        expect(attachButton().disabled).toBe(true);
+        expect(screen.getByText('Every ticked book needs a volume number (1, 2.5, 3a).')).toBeTruthy();
+
         fireEvent.change(screen.getByLabelText('Volume number for Power Rangers Prime v02 (2025) (Digital) (dekabro-Empire).cbz'), { target: { value: '1' } });
         expect(attachButton().disabled).toBe(true);
         expect(screen.getByText('Two books are both Vol. 1.')).toBeTruthy();

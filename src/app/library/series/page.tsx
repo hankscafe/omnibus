@@ -1844,7 +1844,7 @@ function SeriesContent() {
                   counted among it (a trade reprints issues you may already own). #257: one shelf per
                   edition (TPB, HC, Omnibus, GN), so two editions' "Vol. 1" never look alike. */}
               {groupCollectedShelves([...collectedEditions, ...missingCollectedEditions], seriesInfo.name || '').map(shelf => {
-                  const ownedCount = shelf.books.filter((b: any) => !!b.fullPath).length;
+                  const ownedCount = shelf.books.filter(b => !!b.fullPath).length;
                   return (
                   <div key={shelf.key} className="space-y-4 mb-8" data-testid="collected-shelf">
                       <div className="flex items-center justify-between border-b-2 border-border pb-4">
@@ -1856,7 +1856,7 @@ function SeriesContent() {
                           </h4>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
-                          {shelf.books.map((book: any) => {
+                          {shelf.books.map(book => {
                               const owned = !!book.fullPath;
                               const isRequesting = requestingIds.has(book.id);
                               const isRequested = requestedIds.has(book.id);

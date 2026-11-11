@@ -22,10 +22,11 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { errorMessageOr } from '@/lib/utils/error';
+import type { SearchReply, SearchResultRow } from '@/types/api/search';
 import { isSameIssue } from "@/lib/utils/issue-parser";
 import { seriesQueryFromName } from "@/lib/utils/smart-match-search";
 import {
-    bookNumberFromFile, collectedFormatFromName, distinctEditionName, editionNameClashesWithSeries, editionNameFromFile, editionShelfTitle,
+    BOOK_NUMBER, bookNumberFromFile, collectedFormatFromName, distinctEditionName, editionNameClashesWithSeries, editionNameFromFile, editionShelfTitle,
     evenCoverage, suggestIssuesPerBook, type CollectedFormat,
 } from "@/lib/utils/collected-edition";
 
@@ -46,7 +47,6 @@ export function localNameFromItem(item: { name?: string; isRawFile?: boolean }):
 /** A loose file's name as the disk spells it — the list's `name` has its extension stripped. */
 const fileNameOf = (item: LocalAttachItem) => item.folderPath.replace(/\\/g, '/').split('/').pop() || item.name || '';
 const editionKey = (fileName: string) => editionNameFromFile(fileName).toLowerCase();
-const BOOK_NUMBER = /^-?\d+(?:\.\d+)?[a-zA-Z]?$/;
 
 type PickedSeries =
     | { from: 'library'; id: string; name: string; year: number | null }
@@ -71,7 +71,7 @@ export function AttachLocalCollectedDialog({ open, item, candidates, provider = 
     const [search, setSearch] = useState("");
     const [results, setResults] = useState<Array<{ id: string; name: string; year: number | null }>>([]);
     const [providerQuery, setProviderQuery] = useState("");
-    const [providerResults, setProviderResults] = useState<any[]>([]);
+    const [providerResults, setProviderResults] = useState<SearchResultRow[]>([]);
     const [providerSearching, setProviderSearching] = useState(false);
     const [selected, setSelected] = useState<PickedSeries | null>(null);
     const [name, setName] = useState("");
@@ -140,19 +140,19 @@ export function AttachLocalCollectedDialog({ open, item, candidates, provider = 
         setProviderSearching(true);
         try {
             const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&provider=${provider}`);
-            const data = await res.json();
+            const data: SearchReply = await res.json();
             if (!res.ok) throw new Error(data.error || 'Search failed');
             setProviderResults(data.results || []);
             if (!data.results?.length) toast({ title: "No results", description: `No series found on ${providerLabel} for "${q}".` });
-        } catch (e: any) {
+        } catch (e) {
             setProviderResults([]);
-            toast({ title: "Search failed", description: e?.message || 'Unknown error', variant: "destructive" });
+            toast({ title: "Search failed", description: errorMessageOr(e, 'Unknown error'), variant: "destructive" });
         } finally {
             setProviderSearching(false);
         }
     };
 
-    const pickProvider = (r: any) => {
+    const pickProvider = (r: SearchResultRow) => {
         const count = Number(r.count) || null;
         setSelected({
             from: 'provider', metadataSource: r.metadataSource || provider, metadataId: String(r.id), name: r.name,
@@ -185,7 +185,7 @@ export function AttachLocalCollectedDialog({ open, item, candidates, provider = 
     const bookProblem = ((): string | null => {
         if (!pickingFiles) return null;
         if (picked.length === 0) return 'Tick at least one book.';
-        if (picked.some(b => !BOOK_NUMBER.test(b.number.trim()))) return 'Every ticked book needs a volume number.';
+        if (picked.some(b => !BOOK_NUMBER.test(b.number.trim()))) return 'Every ticked book needs a volume number (1, 2.5, 3a).';
         for (let i = 0; i < picked.length; i++) {
             for (let j = i + 1; j < picked.length; j++) {
                 if (isSameIssue(picked[i].number.trim(), picked[j].number.trim())) return `Two books are both Vol. ${picked[i].number.trim()}.`;

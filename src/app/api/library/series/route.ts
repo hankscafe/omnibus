@@ -385,6 +385,8 @@ export async function GET(request: Request) {
                 releaseDate: issue.releaseDate ?? null,
                 isCollected,
                 collectionName: isCollected ? (issue as any).attachedVolume?.name ?? null : null,
+                // #257: the edition a book belongs to — the page gives every edition its own shelf.
+                collectionId: isCollected ? issue.attachedVolumeId ?? null : null,
                 // #203 COLLECTED coverage: which run issues this book reprints ("1-6, 8"), books only.
                 coversIssues: isCollected ? ((issue as any).coversIssues ?? null) : null,
                 // Issue #200: normalize vulgar fractions ("½" → 0.5) or parseFloat yields NaN,
@@ -472,6 +474,8 @@ export async function GET(request: Request) {
                         releaseDate: book.releaseDate ?? null,
                         isCollected: !keptSpecial,
                         collectionName: keptSpecial ? null : (attachment.name ?? child.name),
+                        // #257: a kept edition's books share its shelf with the parent's rows of it.
+                        collectionId: keptSpecial ? null : attachment.id,
                         coversIssues: keptSpecial ? null : (book.coversIssues ?? null),
                         parsedNum: parseFloat(normalizeFractionNumbers(book.number)),
                         number: book.number,

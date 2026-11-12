@@ -195,6 +195,15 @@ pub(crate) async fn run_rows(db: &Db, series_id: &str, columns: &str) -> anyhow:
     Ok(sqlx::query(&sql).bind(series_id).fetch_all(&db.pool).await?)
 }
 
+/// #257: the step right before a series' provider fetch. Its LOCAL editions claim their books by
+/// name (no provider call), so the pairing that follows — run_rows, which leaves this series' lane
+/// rows out — never takes an unbound trade's "Vol. 1" for the run's #1. Provider lanes claim after
+/// the fetch (sync_series_attachments). Twin of the Node claim before syncSeriesMetadata's pairing
+/// (src/lib/local-attachment-claim.ts).
+async fn claim_before_pairing(db: &Db, client: &Client, series_id: &str) {
+    crate::attached_volumes::claim_local_attachments(db, client, series_id).await;
+}
+
 /// One ComicVine volume GET through the shared response cache — usage-logged, and 429-flagged,
 /// only on a real upstream call. `field_list` is part of the cache key, so asking for new fields
 /// is a fresh fetch rather than a stale hit.
@@ -526,6 +535,8 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
         let last_sync: Option<String> = series.try_get("lastMetadataSync").unwrap_or(None);
 
         log::info!("Syncing metadata for: {} ({} ID: {})", series_name, metadata_source, metadata_id);
+
+        claim_before_pairing(&db, &client, &series_id).await;
 
         let fetch_result: anyhow::Result<i32> = match metadata_source.as_str() {
             "COMICVINE" => match &cv_api_key {
@@ -3292,6 +3303,53 @@ mod tests {
         // So the resolver, given the parent's #1 from the provider, creates it rather than taking a lane's row.
         let snapshot: Vec<(String, String, Option<String>)> = vec![("run_2".into(), "2".into(), None)];
         assert!(matches!(resolve_pair_target("9100001", "1", &snapshot, None, &std::collections::HashSet::new()), PairTarget::Insert));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #257: the step before the fetch claims a LOCAL edition's unbound book by name, so the pairing
+    // rows no longer hold it. Without the claim its "Vol. 1" is one of the run's rows, and the
+    // number-only pairing would hand it the run's #1.
+    #[tokio::test]
+    async fn a_local_editions_unbound_book_leaves_the_pairing_rows_before_the_fetch() {
+        let base = std::env::temp_dir().join(format!("omnibus_md257_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("md.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        for ddl in [
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, "folderPath" TEXT)"#,
+            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT NOT NULL, number TEXT NOT NULL,
+                "isAnnual" BOOLEAN NOT NULL DEFAULT false, "attachedVolumeId" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
+                "filePath" TEXT, name TEXT, "matchState" TEXT, "coversIssues" TEXT)"#,
+            r#"CREATE TABLE "AttachedVolume" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataSource" TEXT, "volumeId" TEXT,
+                kind TEXT, name TEXT, "issueCount" INTEGER DEFAULT 0, retained BOOLEAN NOT NULL DEFAULT false,
+                "lastSyncedAt" TEXT, "createdAt" TEXT, "updatedAt" TEXT)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.unwrap();
+        }
+        sqlx::query(r#"INSERT INTO "Series" (id, name, "folderPath") VALUES ('saga', 'Saga', '')"#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name)
+                       VALUES ('att_tpb', 'saga', 'LOCAL', 'local_x', 'COLLECTED', 'Saga TPB')"#)
+            .execute(&db.pool).await.unwrap();
+        for (id, file) in [("run_1", "/c/Saga/Saga 001 (2012).cbz"), ("tpb_1", "/c/Saga/Saga TPB Vol. 001 (2013).cbz")] {
+            sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "filePath", "metadataSource") VALUES ($1, 'saga', '1', $2, 'COMICVINE')"#)
+                .bind(id).bind(file).execute(&db.pool).await.unwrap();
+        }
+        let pairing = |db: Db| async move {
+            let mut ids: Vec<String> = run_rows(&db, "saga", "id").await.unwrap().iter().map(|r| r.get::<String, _>("id")).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(pairing(db.clone()).await, vec!["run_1".to_string(), "tpb_1".to_string()], "unclaimed, the trade looks like the run's #1");
+
+        claim_before_pairing(&db, &Client::new(), "saga").await;
+
+        assert_eq!(pairing(db.clone()).await, vec!["run_1".to_string()]);
+        let book = sqlx::query(r#"SELECT "attachedVolumeId", "metadataId", name FROM "Issue" WHERE id = 'tpb_1'"#).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(book.get::<Option<String>, _>("attachedVolumeId").as_deref(), Some("att_tpb"));
+        assert_eq!(book.get::<String, _>("metadataId"), "local_att_tpb_1");
+        assert_eq!(book.get::<Option<String>, _>("name").as_deref(), Some("Vol. 1"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

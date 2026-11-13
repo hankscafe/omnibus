@@ -5,8 +5,8 @@ name: Build, Publish, and Release Docker Image
 #        images only, never releases or announcements. (legacy-* branches are locked archives.)
 on:
   push:
-    branches: ['main', 'dev']
-    tags: ['v*']
+    branches: ["main", "dev"]
+    tags: ["v*"]
 
 env:
   REGISTRY: ghcr.io
@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
       - name: Run Tests
@@ -34,7 +34,7 @@ jobs:
   build-and-push-image:
     needs: test # <-- CRITICAL: This tells Docker to wait for tests to pass!
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: write
       packages: write
@@ -89,7 +89,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }} 
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -116,6 +116,7 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -135,7 +136,7 @@ jobs:
 
       # --- DOCKER DISCORD NOTIFICATION ---
       - name: Send Discord Notification (Docker Published)
-        if: success() 
+        if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
         run: |
@@ -169,7 +170,7 @@ jobs:
               }]
             }' \
           )
-          
+
           curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
 
       # --- SPECIFIC RELEASE NOTIFICATION (PLAIN TEXT FORMAT, main only) ---
@@ -184,16 +185,16 @@ jobs:
           VERSION="v${{ env.VERSION }}"
           WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
-          
+
           # Fetch the release body/notes using GitHub CLI
           RELEASE_NOTES=$(gh release view $VERSION --json body -q ".body")
-          
+
           # Check length and truncate if it exceeds 1500 characters
           if [ ${#RELEASE_NOTES} -gt 1500 ]; then
             # Using $'\n' to ensure Bash passes actual newlines into the variable
             RELEASE_NOTES="${RELEASE_NOTES:0:1500}..."$'\n\n'"*(Notes truncated due to Discord limits. [Click here to view full release notes]($RELEASE_URL))*"
           fi
-          
+
           # Construct the payload using jq's native string interpolation \(var)
           # This guarantees that newlines inside the jq string are properly formatted for JSON
           PAYLOAD=$(jq -n \
@@ -205,7 +206,7 @@ jobs:
               content: "🎉 **Release \($version)**\n\n\($url)\n\n\($notes)\n\n**Upgrade:**\n```bash\ndocker compose pull\ndocker compose down\ndocker compose up -d\n```" 
             }' \
           )
-          
+
           # Send to Discord and fail with body if rejected
           curl --fail-with-body -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_RELEASE_WEBHOOK
 
@@ -319,6 +320,7 @@ jobs:
         with:
           context: ./omnibus-engine
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-engine.outputs.tags }}
           labels: ${{ steps.meta-engine.outputs.labels }}
           # Bake the release version into the image so /health can report it for drift detection.

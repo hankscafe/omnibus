@@ -17,6 +17,7 @@ import { getAccessibleLibraryIds, canAccessLibraryId } from '@/lib/library-acces
 import { cachedCvGet } from '@/lib/metadata/metadata-cache';
 import { issueIdentityMismatch } from '@/lib/metadata/issue-identity';
 import { normalizeCoverage } from '@/lib/utils/coverage';
+import type { LibraryIssueDetail } from '@/types/api/library-issue';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -173,7 +174,7 @@ export async function GET(request: Request) {
                         teams: finalTeams,
                         locations: parsedLocations,
                         description: safeDescription(newDescription)
-                    });
+                    } satisfies LibraryIssueDetail);
                 }
 
             } catch (e) {
@@ -281,7 +282,7 @@ export async function GET(request: Request) {
                             ...issueComicInfoRest,
                             description: safeDescription(newDescription),
                             hasCustomMetadata: !!issue.hasCustomMetadata
-                        });
+                        } satisfies LibraryIssueDetail);
                     }
                 } catch (e) {
                     Logger.log(`Deep fetch failed, falling back to DB data: ${getErrorMessage(e)}`, 'error');
@@ -313,7 +314,7 @@ export async function GET(request: Request) {
         description: safeDescription(issue.description),
         // Manual-edits lock state — the metadata editor shows it and offers the unlock (issue #194 (f)).
         hasCustomMetadata: !!issue.hasCustomMetadata
-    });
+    } satisfies LibraryIssueDetail);
   } catch (error: unknown) {
     Logger.log(`[Library Issue API] Error: ${getErrorMessage(error)}`, 'error');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

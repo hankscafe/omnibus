@@ -9,6 +9,13 @@ import { Badge } from "@/components/ui/badge"
 import { Search, Loader2, Download, Ban, Globe, HardDrive, Users, Database, Library } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { formatBytes } from "@/lib/utils/format"
+import type { InteractiveSearchReply, InteractiveSearchResult } from "@/types/api/interactive-search"
+
+type ReleaseSource = 'prowlarr' | 'getcomics' | 'annas_archive'
+
+// What a request hands /api/request/manual: a release's Download, or Flag for Admin - which has only the
+// query typed in the box, no release ids (it tracks as 'flag_admin').
+type ManualPick = Partial<InteractiveSearchResult> & Pick<InteractiveSearchResult, 'title'>
 
 interface Props {
   isOpen: boolean;
@@ -72,11 +79,11 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   // Initialize synchronously so the input box is formatted instantly
   const [query, setQuery] = useState(() => getOptimizedSearchQuery(initialQuery, comicData?.year));
   const [loading, setLoading] = useState(false)
-  const [results, setResults] = useState<any[]>([])
+  const [results, setResults] = useState<InteractiveSearchResult[]>([])
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
-  
-  const [monitorPrompt, setMonitorPrompt] = useState<{ result: any, source: 'prowlarr' | 'getcomics' | 'annas_archive' } | null>(null)
+
+  const [monitorPrompt, setMonitorPrompt] = useState<{ result: ManualPick, source: ReleaseSource } | null>(null)
   
   const { toast } = useToast()
 
@@ -100,7 +107,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
       if (comicData?.year && /^\d{4}$/.test(comicData.year)) params.set('year', comicData.year);
       if (comicData?.isManga) params.set('isManga', 'true');
       const res = await fetch(`/api/search/interactive?${params.toString()}`)
-      const data = await res.json()
+      const data: InteractiveSearchReply = await res.json()
       const combined = [];
       if (data.prowlarr) combined.push(...data.prowlarr);
       if (data.getcomics) combined.push(...data.getcomics);
@@ -115,21 +122,23 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
 
   // GetComics and Anna's Archive results both arrive as protocol 'ddl'; the indexer label distinguishes
   // them so each routes to the right download branch in /api/request/manual.
-  const sourceOf = (res: any): 'prowlarr' | 'getcomics' | 'annas_archive' =>
+  const sourceOf = (res: InteractiveSearchResult): ReleaseSource =>
       (res?.indexer || '').toLowerCase().includes('anna') ? 'annas_archive'
       : res?.protocol === 'ddl' ? 'getcomics' : 'prowlarr';
 
-  const initiateManualRequest = (searchResult: any, source: 'prowlarr' | 'getcomics' | 'annas_archive' | 'flag_admin') => {
+  const initiateManualRequest = (searchResult: ManualPick, source: ReleaseSource | 'flag_admin') => {
       if (source !== 'flag_admin' && comicData?.type === 'volume') {
-          setMonitorPrompt({ result: searchResult, source: source as 'prowlarr' | 'getcomics' | 'annas_archive' });
+          setMonitorPrompt({ result: searchResult, source: source as ReleaseSource });
       } else {
           handleManualRequest(searchResult, source, false);
       }
   }
 
-  const handleManualRequest = async (searchResult: any, source: 'prowlarr' | 'getcomics' | 'annas_archive' | 'flag_admin', monitored: boolean) => {
+  const handleManualRequest = async (searchResult: ManualPick, source: ReleaseSource | 'flag_admin', monitored: boolean) => {
+    // A release always carries its guid (the engine sets one); only a pick with none of the three ids
+    // would come out undefined, and it then tracks as nothing (null).
     const trackingId = source === 'flag_admin' ? 'flag_admin' : (searchResult.infoHash || searchResult.guid || searchResult.downloadUrl);
-    setDownloadingId(trackingId);
+    setDownloadingId(trackingId ?? null);
     
     try {
       const res = await fetch('/api/request/manual', {

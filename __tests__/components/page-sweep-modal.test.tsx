@@ -27,7 +27,7 @@ global.fetch = fetchMock as any;
 
 const source = { issueId: 'src', filePath: '/c/S 001.cbz', label: 'Series #1', entryName: 'credits.jpg' };
 
-function mockApis({ enqueueOk = true, runStatus = 'RUNNING' } = {}) {
+function mockApis({ enqueueOk = true, runStatus = 'RUNNING', failed = [] as { label: string; error: string }[] } = {}) {
     fetchMock.mockImplementation(async (url: string, init?: any) => {
         if (typeof url === 'string' && url.startsWith('/api/library/issue/pages/sweep/candidates')) {
             return { ok: true, json: async () => ({ seriesName: 'Series', candidates: [
@@ -53,7 +53,7 @@ function mockApis({ enqueueOk = true, runStatus = 'RUNNING' } = {}) {
             return { ok: true, json: async () => ({ result: {
                 runId: 'run-9', status: runStatus, sourceLabel: 'Series #1 — credits.jpg',
                 total: 2, processed: runStatus === 'RUNNING' ? 1 : 2, removed: runStatus === 'RUNNING' ? 1 : 2,
-                failedCount: 0, failed: [], startedAt: 1, heartbeatAt: Date.now(),
+                failedCount: failed.length, failed, startedAt: 1, heartbeatAt: Date.now(),
                 ...(runStatus !== 'RUNNING' ? { finishedAt: Date.now() } : {}),
             }, active: runStatus === 'RUNNING' }) };
         }
@@ -127,5 +127,22 @@ describe('Page sweep modal (issue #189 Phase 3)', () => {
 
         expect(await screen.findByText(/Done — removed 2 page/i)).toBeInTheDocument();
         await waitFor(() => expect(onApplied).toHaveBeenCalled());
+        // Nothing failed: no failure list.
+        expect(screen.queryByText(/file\(s\) failed/)).not.toBeInTheDocument();
+    });
+
+    it('lists the files a finished run failed on', async () => {
+        mockApis({ runStatus: 'COMPLETED', failed: [
+            { label: 'Series #2', error: 'archive is read-only' },
+            { label: 'Series #3', error: 'disk full' },
+        ] });
+        render(<PageSweepModal open onOpenChange={vi.fn()} source={source} />);
+        await screen.findByText(/2 copies found/i);
+        fireEvent.click(screen.getByRole('button', { name: /Remove 2 Pages/i }));
+        fireEvent.click(await screen.findByRole('button', { name: /Start Sweep/i }));
+
+        expect(await screen.findByText('2 file(s) failed:')).toBeInTheDocument();
+        expect(screen.getByText('Series #2: archive is read-only')).toBeInTheDocument();
+        expect(screen.getByText('Series #3: disk full')).toBeInTheDocument();
     });
 });

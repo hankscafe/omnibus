@@ -35,15 +35,17 @@ export function coveredByLabel(b: CoveredBy): string {
     return b.collectionName ? `${b.collectionName} Vol. ${b.number}` : `Vol. ${b.number}`;
 }
 
-interface CoveredIssuesSectionProps {
-    issues: CoveredIssue[];
+// Generic so Request and select hand back the very rows the page passed in (the series page's full
+// shelf rows), not just the fields this section reads.
+interface CoveredIssuesSectionProps<T extends CoveredIssue> {
+    issues: T[];
     seriesName: string;
     seriesCover: string | null;
     canRequest: boolean;
     requestingIds: Set<string>;
     requestedIds: Set<string>;
-    onRequest: (issue: CoveredIssue) => void;
-    onSelect: (issue: CoveredIssue) => void;
+    onRequest: (issue: T) => void;
+    onSelect: (issue: T) => void;
 }
 
 const coverImgError = (fallback: string | null) => (e: SyntheticEvent<HTMLImageElement>) => {
@@ -53,7 +55,7 @@ const coverImgError = (fallback: string | null) => (e: SyntheticEvent<HTMLImageE
     if (fallback) img.src = fallback; else img.style.visibility = 'hidden';
 };
 
-export function CoveredIssuesSection({ issues, seriesName, seriesCover, canRequest, requestingIds, requestedIds, onRequest, onSelect }: CoveredIssuesSectionProps) {
+export function CoveredIssuesSection<T extends CoveredIssue>({ issues, seriesName, seriesCover, canRequest, requestingIds, requestedIds, onRequest, onSelect }: CoveredIssuesSectionProps<T>) {
     if (issues.length === 0) return null;
     return (
         <div className="space-y-6 pt-4 border-t-2 border-border">

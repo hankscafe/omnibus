@@ -14,6 +14,8 @@ import { COMIC_INFO_DEFAULT_KEYS, COLUMN_TO_LIST_FIELD, type ComicInfoDefaults }
 import { ComicInfoGeneralExtras, ComicInfoCreditsFields, ComicInfoStoryFields, ComicInfoDetailsFields } from "@/components/comicinfo-fields"
 import { errorMessageOr } from '@/lib/utils/error';
 import type { AdminConfigResponse } from '@/types/api/config';
+import type { SeriesComicInfo, SeriesResponse } from '@/types/api/series';
+import type { LibraryIssueDetailReply } from '@/types/api/library-issue';
 
 export interface MetadataEditorSeries {
   currentPath: string
@@ -39,14 +41,32 @@ export interface MetadataEditorIssue {
   universe?: string | null
 }
 
+/** What a save or an unlock answered: POST /api/library/update (series) or PATCH /api/library/issue (issue). */
+export interface MetadataSaveResult {
+  success?: boolean
+  /** false: nothing changed, so nothing was written, locked or embedded. */
+  changed?: boolean
+  /** A series save: the series' folder afterwards. */
+  newPath?: string
+  /** An unlock. */
+  unlocked?: boolean
+  /** An issue save: the fields it changed. */
+  changedFields?: string[]
+  wroteToFile?: boolean
+  error?: string
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   mode: "series" | "issue"
   series?: MetadataEditorSeries
   issue?: MetadataEditorIssue
-  onSaved?: (result?: any) => void
+  onSaved?: (result?: MetadataSaveResult) => void
 }
+
+// The series' identity as the authoritative load found it - sent back unchanged on save.
+type SeriesIdentity = Partial<Pick<MetadataEditorSeries, "name" | "publisher" | "year" | "status" | "bookType" | "monitored" | "isManga">>
 
 const ARRAY_FIELDS = ["writers", "artists", "coverArtists", "colorists", "letterers", "inker", "editor", "translator", "characters", "teams", "locations", "genres", "storyArcs", "tags"] as const
 
@@ -61,7 +81,7 @@ const ISSUE_KEY_MAP: Partial<Record<string, string>> = {
 }
 const issueKey = (k: string) => ISSUE_KEY_MAP[k] ?? k
 
-const joinArr = (v: any): string => (Array.isArray(v) ? v.filter(Boolean).join(", ") : (typeof v === "string" ? v : ""))
+const joinArr = (v: unknown): string => (Array.isArray(v) ? v.filter(Boolean).join(", ") : (typeof v === "string" ? v : ""))
 const splitArr = (s: string): string[] => (s || "").split(",").map(t => t.trim()).filter(Boolean)
 
 export default function MetadataEditorModal({ open, onOpenChange, mode, series, issue, onSaved }: Props) {
@@ -71,7 +91,7 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
   const [writeToFile, setWriteToFile] = useState(true)
   const [form, setForm] = useState<Record<string, string>>({})
   // Authoritative series identity (fetched on open) so a metadata save never resets it.
-  const [identity, setIdentity] = useState<Record<string, any>>({})
+  const [identity, setIdentity] = useState<SeriesIdentity>({})
   // True when the current values couldn't be loaded — saving is then blocked so a blank
   // form can't wipe real metadata (e.g. the series folder is missing, or the API errored).
   const [loadFailed, setLoadFailed] = useState(false)
@@ -108,7 +128,8 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
       if (mode === "series" && series) {
         // Pull the authoritative current values so the editor always shows (and preserves) them,
         // regardless of which page opened it.
-        let s: any = {}
+        // {} when the load failed - the identity check below catches that.
+        let s: Partial<SeriesResponse> = {}
         try {
           s = await fetch(`/api/library/series?path=${encodeURIComponent(series.currentPath)}`).then(r => (r.ok ? r.json() : {})).catch(() => ({})) || {}
         } catch { s = {} }
@@ -133,10 +154,11 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
         })
         // #199: seed the ComicInfo defaults — list columns arrive as parsed arrays (joined back to
         // comma text for editing), scalars/numbers as display strings, B&W as the boolean.
-        const ci = s.comicInfo || {}
+        // Read by the column names COLUMN_TO_LIST_FIELD maps (plain strings), and by the known scalar keys.
+        const ci: Partial<SeriesComicInfo> & Record<string, unknown> = s.comicInfo || {}
         const seeded: Record<string, string> = {}
         for (const [column, field] of Object.entries(COLUMN_TO_LIST_FIELD)) seeded[field] = joinArr(ci[column])
-        for (const k of ["imprint", "format", "languageISO", "ageRating", "gtin", "notes", "scanInformation", "review", "mainCharacterOrTeam", "storyArcNumber", "alternateSeries", "alternateNumber"]) {
+        for (const k of ["imprint", "format", "languageISO", "ageRating", "gtin", "notes", "scanInformation", "review", "mainCharacterOrTeam", "storyArcNumber", "alternateSeries", "alternateNumber"] as const) {
           seeded[k] = ci[k] ?? ""
         }
         seeded.alternateCount = ci.alternateCount != null ? String(ci.alternateCount) : ""
@@ -149,7 +171,8 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
 
       if (mode === "issue" && issue) {
         // The credit/character arrays + (possibly deep-fetched) description come from the issue API.
-        let detail: any = {}
+        // {} when the load failed - the writers check below catches that.
+        let detail: Partial<LibraryIssueDetailReply> = {}
         try {
           detail = await fetch(`/api/library/issue?id=${encodeURIComponent(issue.id)}`).then(r => (r.ok ? r.json() : {})).catch(() => ({})) || {}
         } catch { detail = {} }
@@ -236,7 +259,7 @@ export default function MetadataEditorModal({ open, onOpenChange, mode, series, 
           }),
         })
       } else if (mode === "issue" && issue) {
-        const payload: Record<string, any> = {
+        const payload: Record<string, unknown> = {
           issueId: issue.id,
           number: form.number,
           name: form.name,

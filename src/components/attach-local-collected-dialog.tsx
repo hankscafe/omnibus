@@ -16,6 +16,8 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { errorMessageOr } from '@/lib/utils/error';
+import type { LibrarySearchReply } from '@/types/api/library';
+import type { LocalCollectedAttached } from '@/types/api/attachments';
 
 export interface LocalAttachItem {
     id?: string;
@@ -35,7 +37,8 @@ interface AttachLocalCollectedDialogProps {
     open: boolean;
     item: LocalAttachItem | null;
     onClose: () => void;
-    onDone: (result: any) => void;
+    /** After a successful attach, with what it answered. */
+    onDone: (result: LocalCollectedAttached) => void;
 }
 
 export function AttachLocalCollectedDialog({ open, item, onClose, onDone }: AttachLocalCollectedDialogProps) {
@@ -59,8 +62,8 @@ export function AttachLocalCollectedDialog({ open, item, onClose, onDone }: Atta
         const t = setTimeout(async () => {
             try {
                 const res = await fetch(`/api/library?q=${encodeURIComponent(q)}&type=TITLE&limit=15`, { cache: 'no-store' });
-                const data = await res.json();
-                setResults((data.series || []).map((s: any) => ({ id: s.id, name: s.name, year: s.year ?? null })));
+                const data: LibrarySearchReply = await res.json();
+                setResults((data.series || []).map((s) => ({ id: s.id, name: s.name, year: s.year ?? null })));
             } catch { setResults([]); }
         }, 300);
         return () => clearTimeout(t);

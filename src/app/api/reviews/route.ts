@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
+import type { ReviewsPayload } from '@/types/api/reviews';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
             ? reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length 
             : 0;
 
-        return NextResponse.json({ reviews, avgRating: avgRating.toFixed(1), total: reviews.length });
+        return NextResponse.json({ reviews, avgRating: avgRating.toFixed(1), total: reviews.length } satisfies ReviewsPayload);
     } catch (error: unknown) {
         Logger.log(`[Reviews API] Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

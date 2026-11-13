@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { UNMATCHED_DIR, isPathWithinRoots } from '@/lib/utils/paths';
 import { attachAsCollected } from '@/lib/match-collision';
 import { retainedChildren } from '@/lib/retained-attachments';
+import type { LocalCollectedAttached } from '@/types/api/attachments';
 
 // LOCAL: a collected edition (or annual run) the provider has no volume for — attached by name,
 // no sync lane; its books are the files whose names carry it (field report by robotshavehearts2).
@@ -116,7 +117,7 @@ async function attachLocal(session: any, series: any, kind: string, body: any) {
         return NextResponse.json({
             success: true, local: true, attachmentId: result.attachmentId, name, summary: null,
             moved: result.moved, absorbed: result.absorbed, claimed: result.claimed, skeletonsReplaced: result.skeletonsReplaced, conflicts: result.conflicts,
-        });
+        } satisfies LocalCollectedAttached);
     }
 
     const attachment = await prisma.attachedVolume.upsert({

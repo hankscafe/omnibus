@@ -42,6 +42,40 @@ import { dialogBookTypePayload, dialogChoice } from "@/lib/book-type"
 import { RefreshMetadataButton } from "@/components/refresh-metadata-button"
 import type { AdminConfigResponse } from '@/types/api/config';
 import type { SeriesReply, SeriesIssue, OwnedSeriesIssue, CoveredIssue, DuplicateGroup } from '@/types/api/series';
+import type { LibraryIssueDetail, LibraryIssueDetailReply } from '@/types/api/library-issue';
+import type { SearchReply, SearchResult } from '@/types/api/search';
+import type { ReviewsReply, SeriesReview } from '@/types/api/reviews';
+import type { LibrarySearchReply, RenamePreviewReply, RenamePreviewRow } from '@/types/api/library';
+
+// The issue the detail panel shows: a shelf row (any shelf, or a covered issue), topped up from
+// GET /api/library/issue with the credits and the description the shelf rows don't carry, and by the
+// issue-cover actions.
+type ActiveIssue = SeriesIssue
+    & Partial<Pick<LibraryIssueDetail, 'coverArtists' | 'colorists' | 'letterers' | 'teams' | 'locations' | 'description'>>
+    & { hasCustomCover?: boolean };
+
+// The Edit Info dialog's fields; bookType is the dialog's choice - 'AUTO' or a type (src/lib/book-type.ts).
+interface SeriesEditForm {
+  name: string;
+  publisher: string;
+  year: string;
+  cvId: string;
+  monitored: boolean;
+  isManga: boolean;
+  status: string;
+  bookType: string;
+}
+
+// One row of the Bulk Issue Editor, as text fields.
+interface BulkEditRow {
+  id: string;
+  number: string;
+  name: string;
+  releaseDate: string;
+}
+
+// A Match Series result's cover: the cover URL /api/search sends, or a provider image object (sizes).
+type MatchResultImage = string | { medium_url?: string; screen_url?: string; icon_url?: string } | null;
 
 // Loop-safe fallback for cover <img>s: on a broken cover, swap to the series cover; if that also fails,
 // hide the element rather than show the browser's broken-image glyph. (The issue grid had no onError, so
@@ -91,7 +125,7 @@ function SeriesContent() {
 
   const [downloadedIssues, setDownloadedIssues] = useState<OwnedSeriesIssue[]>([]);
   const [missingIssues, setMissingIssues] = useState<SeriesIssue[]>([]);
-  const [activeIssue, setActiveIssue] = useState<any>(null);
+  const [activeIssue, setActiveIssue] = useState<ActiveIssue | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
   // #203 COLLECTED: trades/omnibuses attached to this series — their own shelf, out of the run.
   const [collectedEditions, setCollectedEditions] = useState<OwnedSeriesIssue[]>([]);
@@ -124,22 +158,22 @@ function SeriesContent() {
 
   const [matchModalOpen, setMatchModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isMatching, setIsMatching] = useState(false);
   // A re-match whose folder another series already owns (409 from match-series): attach or rename.
-  const [collisionPrompt, setCollisionPrompt] = useState<{ item: any; collision: FolderCollision } | null>(null);
+  const [collisionPrompt, setCollisionPrompt] = useState<{ item: SearchResult; collision: FolderCollision } | null>(null);
   
   const [searchPage, setSearchPage] = useState(1);
   const [hasMoreSearch, setHasMoreSearch] = useState(false);
   const [isSearchingMore, setIsSearchingMore] = useState(false);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editForm, setEditForm] = useState<any>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "AUTO" });
+  const [editForm, setEditForm] = useState<SeriesEditForm>({ name: "", publisher: "", year: "", cvId: "", monitored: false, isManga: false, status: "Ongoing", bookType: "AUTO" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [metaModalOpen, setMetaModalOpen] = useState(false);
   const [metaMode, setMetaMode] = useState<'series' | 'issue'>('series');
-  const [metaIssue, setMetaIssue] = useState<any>(null);
+  const [metaIssue, setMetaIssue] = useState<ActiveIssue | null>(null);
 
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportDescription, setReportDescription] = useState("");
@@ -160,7 +194,7 @@ function SeriesContent() {
   const [deleteIssueModalOpen, setDeleteIssueModalOpen] = useState(false);
   // Page Manager (issue #189): exploded page view for the selected issue, admin-only.
   const [pageManagerOpen, setPageManagerOpen] = useState(false);
-  const [issueToDelete, setIssueToDelete] = useState<any>(null);
+  const [issueToDelete, setIssueToDelete] = useState<OwnedSeriesIssue | null>(null);
   // Same opt-in rule as the series delete above (#200 follow-up) — one control, one default.
   const [deleteIssueFile, setDeleteIssueFile] = useState(false);
   const [isDeletingIssue, setIsDeletingIssue] = useState(false);
@@ -172,13 +206,13 @@ function SeriesContent() {
   // "Move issues to another series" — re-file mis-matched issues without delete/re-import.
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [moveSearch, setMoveSearch] = useState("");
-  const [moveResults, setMoveResults] = useState<{ id: string; name: string; year?: string | number }[]>([]);
+  const [moveResults, setMoveResults] = useState<{ id: string; name: string; year?: string | number | null }[]>([]);
   const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
   const [moveNewName, setMoveNewName] = useState("");
   const [isMoving, setIsMoving] = useState(false);
 
   const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
-  const [bulkEditData, setBulkEditData] = useState<any[]>([]);
+  const [bulkEditData, setBulkEditData] = useState<BulkEditRow[]>([]);
 
   const [linkingState, setLinkingState] = useState<Record<string, string>>({});
   const [isLinking, setIsLinking] = useState<string | null>(null);
@@ -188,8 +222,9 @@ function SeriesContent() {
   // admin's "Unrecognized Files Detected" panel offers to link each one to a missing issue.
   const unmatchedIssues = downloadedIssues.filter(i => i.isUnmatched);
 
-  const [reviews, setReviews] = useState<any[]>([]);
-  const [communityRating, setCommunityRating] = useState<{avg: number, total: number}>({ avg: 0, total: 0 });
+  const [reviews, setReviews] = useState<SeriesReview[]>([]);
+  // The reply's average is text ("4.5"); it's only shown once there are ratings.
+  const [communityRating, setCommunityRating] = useState<{avg: number | string, total: number}>({ avg: 0, total: 0 });
   const [userReview, setUserReview] = useState({ rating: 0, text: "" });
   const [submittingReview, setSubmittingReview] = useState(false);
 
@@ -202,7 +237,7 @@ function SeriesContent() {
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [folderPattern, setFolderPattern] = useState("{Publisher}/{Series} ({Year})");
   const [filePattern, setFilePattern] = useState("{Series} #{Issue}");
-  const [renamePreviews, setRenamePreviews] = useState<any[]>([]);
+  const [renamePreviews, setRenamePreviews] = useState<RenamePreviewRow[]>([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
   const [matchSort, setMatchSort] = useState("relevance");
@@ -218,7 +253,7 @@ function SeriesContent() {
               body: JSON.stringify({ seriesIds: [seriesInfo.id], folderPattern, filePattern, mangaFilePattern: seriesInfo.isManga ? filePattern : undefined })
           })
           .then(res => res.json())
-          .then(data => { if (data.previews) setRenamePreviews(data.previews); })
+          .then((data: RenamePreviewReply) => { if (data.previews) setRenamePreviews(data.previews); })
           .catch(() => {})
           .finally(() => setIsLoadingPreview(false));
       } else {
@@ -367,7 +402,7 @@ function SeriesContent() {
             });
 
             // --- FIX: Intelligently fallback to the first missing issue if nothing is downloaded yet ---
-            const current = data.downloadedIssues.find((i: any) => !i.isRead && i.readProgress < 100) 
+            const current = data.downloadedIssues.find((i) => !i.isRead && i.readProgress < 100)
                 || data.downloadedIssues[0] 
                 || (data.missingIssues && data.missingIssues.length > 0 ? data.missingIssues[0] : null);
             
@@ -381,11 +416,11 @@ function SeriesContent() {
       if (!seriesInfo.id) return;
       fetch(`/api/reviews?seriesId=${seriesInfo.id}`)
           .then(res => res.json())
-          .then(data => {
+          .then((data: ReviewsReply) => {
               if (data.reviews) {
                   setReviews(data.reviews);
                   setCommunityRating({ avg: data.avgRating, total: data.total });
-                  const myReview = data.reviews.find((r: any) => r.userId === session?.user?.id);
+                  const myReview = data.reviews.find((r) => r.userId === session?.user?.id);
                   if (myReview) setUserReview({ rating: myReview.rating, text: myReview.text || "" });
               }
           });
@@ -398,9 +433,11 @@ function SeriesContent() {
     
     fetch(`/api/library/issue?id=${activeIssue.id}`)
         .then(res => res.json())
-        .then(data => {
+        .then((data: LibraryIssueDetailReply) => {
             if (isMounted && !data.error) {
-                setActiveIssue((prev: any) => ({
+                // A reply for the issue still shown (isMounted); if it was cleared in the same moment
+                // (a series-cover upload), it stays cleared.
+                setActiveIssue((prev) => prev ? ({
                     ...prev,
                     writers: data.writers?.length > 0 ? data.writers : prev.writers,
                     artists: data.artists?.length > 0 ? data.artists : prev.artists,
@@ -413,7 +450,7 @@ function SeriesContent() {
                     teams: data.teams?.length > 0 ? data.teams : prev.teams,
                     locations: data.locations?.length > 0 ? data.locations : prev.locations,
                     description: data.description || prev.description
-                }));
+                }) : prev);
             }
         })
         .catch(() => {});
@@ -465,7 +502,7 @@ function SeriesContent() {
   // The book keeps it locally at once; an owned book's coverage moves issues between missing and
   // covered, so the lists are re-read quietly.
   const handleCoverageSaved = (bookId: string, next: string | null) => {
-      const patch = (list: any[]) => list.map(b => b.id === bookId ? { ...b, coversIssues: next } : b);
+      const patch = <T extends SeriesIssue>(list: T[]) => list.map(b => b.id === bookId ? { ...b, coversIssues: next } : b);
       setCollectedEditions(prev => patch(prev));
       setMissingCollectedEditions(prev => patch(prev));
       void reloadIssues();
@@ -521,10 +558,10 @@ function SeriesContent() {
     const t = setTimeout(async () => {
       try {
         const res = await fetch(`/api/library?q=${encodeURIComponent(q)}&type=TITLE&limit=15`, { cache: 'no-store' });
-        const data = await res.json();
+        const data: LibrarySearchReply = await res.json();
         const rows = (data.series || [])
-          .filter((s: any) => s.id !== seriesInfo.id) // don't offer the series we're already on
-          .map((s: any) => ({ id: s.id, name: s.name, year: s.year }));
+          .filter((s) => s.id !== seriesInfo.id) // don't offer the series we're already on
+          .map((s) => ({ id: s.id, name: s.name, year: s.year }));
         setMoveResults(rows);
       } catch { setMoveResults([]); }
     }, 350);
@@ -573,7 +610,7 @@ function SeriesContent() {
     }
   };
 
-  const handleRequestMissing = async (issue: any) => {
+  const handleRequestMissing = async (issue: SeriesIssue) => {
         if (!canRequest) {
             toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
             return;
@@ -765,7 +802,7 @@ function SeriesContent() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Reset failed');
       const restored = !!data.coverUrl;
-      setActiveIssue((prev: any) => prev ? { ...prev, coverUrl: data.coverUrl ?? null, hasCustomCover: false } : prev);
+      setActiveIssue((prev) => prev ? { ...prev, coverUrl: data.coverUrl ?? null, hasCustomCover: false } : prev);
       toast({
         title: restored ? "Cover reset" : "Custom cover cleared",
         description: restored
@@ -818,7 +855,7 @@ function SeriesContent() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Upload failed');
-      setActiveIssue((prev: any) => prev ? {
+      setActiveIssue((prev) => prev ? {
         ...prev,
         coverUrl: data.coverUrl,
         hasCustomCover: true,
@@ -865,7 +902,7 @@ function SeriesContent() {
 
       try {
           const res = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}&page=${nextPage}&provider=${searchProvider}`);
-          const data = await res.json();
+          const data: SearchReply = await res.json();
           
           if (isLoadMore) setSearchResults(prev => [...prev, ...(data.results || [])]);
           else setSearchResults(data.results || []);
@@ -880,7 +917,7 @@ function SeriesContent() {
       }
   }
 
-  const handleMatch = async (item: any, resolution?: CollisionResolution) => {
+  const handleMatch = async (item: SearchResult, resolution?: CollisionResolution) => {
       setIsMatching(true);
       try {
           const safeYear = item.year ? item.year.toString() : new Date().getFullYear().toString();
@@ -891,7 +928,8 @@ function SeriesContent() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                   oldFolderPath: folderPath,
-                  metadataId: item.id || item.sourceId,
+                  // /api/search already names the provider's id `id` (Metron's own field is sourceId).
+                  metadataId: item.id,
                   metadataSource: searchProvider,
                   name: item.name || "Unknown",
                   year: safeYear,
@@ -1030,7 +1068,7 @@ function SeriesContent() {
       }
   }
 
-  const handleToggleRead = async (issue: any, markAsRead: boolean) => {
+  const handleToggleRead = async (issue: OwnedSeriesIssue, markAsRead: boolean) => {
     try {
         await fetch('/api/progress', {
             method: 'POST',
@@ -1050,7 +1088,7 @@ function SeriesContent() {
         }));
         
         if (activeIssue?.id === issue.id) {
-            setActiveIssue((prev: any) => ({ ...prev, isRead: markAsRead, readProgress: markAsRead ? 100 : 0 }));
+            setActiveIssue((prev) => prev ? { ...prev, isRead: markAsRead, readProgress: markAsRead ? 100 : 0 } : prev);
         }
 
         toast({ title: "Success", description: `Issue marked as ${markAsRead ? 'read' : 'unread'}.` });
@@ -1134,7 +1172,7 @@ function SeriesContent() {
         });
         toast({ title: "Review Saved!" });
         const res = await fetch(`/api/reviews?seriesId=${seriesInfo.id}`);
-        const data = await res.json();
+        const data: ReviewsReply = await res.json();
         setReviews(data.reviews);
         setCommunityRating({ avg: data.avgRating, total: data.total });
     } catch (e) {
@@ -1203,13 +1241,13 @@ function SeriesContent() {
       finally { setIsBulkProcessing(false); }
   };
 
-  const getImageUrl = (imageObj: any) => {
+  const getImageUrl = (imageObj: MatchResultImage) => {
       if (!imageObj) return null;
       if (typeof imageObj === 'string') return imageObj;
       return imageObj.medium_url || imageObj.screen_url || imageObj.icon_url || null;
   };
 
-  const getReadButtonLabel = (issue: any) => {
+  const getReadButtonLabel = (issue: Pick<SeriesIssue, 'isRead' | 'readProgress'> | null) => {
     if (!issue) return "Read";
     const isActuallyRead = issue.isRead || (issue.readProgress || 0) >= 100;
     if (issue.readProgress > 0 && !isActuallyRead) return "Resume";
@@ -1218,8 +1256,9 @@ function SeriesContent() {
 
   const sortedMatchResults = useMemo(() => {
     const sorted = [...searchResults];
-    if (matchSort === 'year_desc') sorted.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
-    if (matchSort === 'year_asc') sorted.sort((a, b) => parseInt(a.year || '0') - parseInt(b.year || '0'));
+    // Metron's years are numbers, ComicVine's text; parseInt reads both as text.
+    if (matchSort === 'year_desc') sorted.sort((a, b) => parseInt(String(b.year || '0')) - parseInt(String(a.year || '0')));
+    if (matchSort === 'year_asc') sorted.sort((a, b) => parseInt(String(a.year || '0')) - parseInt(String(b.year || '0')));
     if (matchSort === 'name_asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (matchSort === 'name_desc') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
     if (matchSort === 'issues_desc') sorted.sort((a, b) => (b.count || 0) - (a.count || 0));
@@ -1252,7 +1291,7 @@ function SeriesContent() {
 
                   <div className="aspect-[2/3] w-full bg-muted rounded-2xl border border-border shadow-xl flex items-center justify-center overflow-hidden relative">
                       {displayCover || seriesInfo.cover ? (
-                          <img src={displayCover || seriesInfo.cover} onError={coverImgError(seriesInfo.cover)} alt="Cover" className="object-cover w-full h-full transition-opacity duration-300" />
+                          <img src={displayCover || seriesInfo.cover || undefined} onError={coverImgError(seriesInfo.cover)} alt="Cover" className="object-cover w-full h-full transition-opacity duration-300" />
                       ) : (
                           <ImageIcon className="w-16 h-16 text-muted-foreground/30" />
                       )}
@@ -1349,7 +1388,7 @@ function SeriesContent() {
                       </Button>
                   ) : (
                       <Button 
-                        className={cn("w-full font-black shadow-md", activeIssue?.readProgress > 0 && !(activeIssue?.isRead || activeIssue?.readProgress >= 100) && "bg-primary hover:bg-primary/90 text-primary-foreground border-0")} 
+                        className={cn("w-full font-black shadow-md", (activeIssue?.readProgress ?? 0) > 0 && !(activeIssue?.isRead || (activeIssue?.readProgress ?? 0) >= 100) && "bg-primary hover:bg-primary/90 text-primary-foreground border-0")}
                         size="lg" 
                         disabled={!activeIssue || !activeIssue.fullPath} 
                         onClick={() => router.push(`/reader?path=${encodeURIComponent(activeIssue?.fullPath || '')}&series=${encodeURIComponent(folderPath || '')}`)}>
@@ -1514,7 +1553,7 @@ function SeriesContent() {
     </h4>
     <div className="flex flex-wrap gap-2">
         {characters.length > 0 ? (
-            characters.slice(0,10).map((char: any, i: number) => (
+            characters.slice(0,10).map((char, i) => (
                 <Link key={i} href={`/library?q=${encodeURIComponent(`character:"${char}"`)}`}>
                     <Badge variant="secondary" className="bg-muted text-foreground font-bold px-3 py-1 border border-border hover:bg-primary/20 hover:text-primary transition-colors cursor-pointer">
                         <Sparkles className="w-3 h-3 mr-1.5 text-primary" /> {char}

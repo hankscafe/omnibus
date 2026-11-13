@@ -12,6 +12,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders } from '@/lib/engine';
+import type { PageSweepScanPayload } from '@/types/api/page-sweep';
 
 const MAX_BATCH = 50;
 
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
             where: { id: { in: candidateIssueIds }, seriesId: source.seriesId, filePath: { not: null } },
             select: { id: true, number: true, filePath: true },
         });
-        if (candidates.length === 0) return NextResponse.json({ matches: [], skipped: [], errors: [] });
+        if (candidates.length === 0) return NextResponse.json({ matches: [], skipped: [], errors: [] } satisfies PageSweepScanPayload);
         const byPath = new Map(candidates.map(c => [c.filePath as string, c]));
 
         let data: any;
@@ -75,7 +76,7 @@ export async function POST(request: Request) {
             return c ? [{ issueId: c.id, label: label(c), error: e.error }] : [];
         });
 
-        return NextResponse.json({ matches, skipped, errors, sourceHash: data.source_hash });
+        return NextResponse.json({ matches, skipped, errors, sourceHash: data.source_hash } satisfies PageSweepScanPayload);
     } catch (error: unknown) {
         Logger.log(`[Page Sweep] Scan failed: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

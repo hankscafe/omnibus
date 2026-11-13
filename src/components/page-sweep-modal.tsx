@@ -14,6 +14,8 @@ import { useToast } from "@/components/ui/use-toast"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { Loader2, Trash2, AlertTriangle, ScanSearch, XCircle, CheckCircle2, FileArchive } from "lucide-react"
 import { errorMessageOr } from '@/lib/utils/error';
+import type { PageSweepResult } from '@/lib/pages/page-sweep';
+import type { PageSweepMatch, PageSweepScanReply, PageSweepStatusReply } from '@/types/api/page-sweep';
 
 export interface PageSweepSource {
   issueId: string
@@ -22,13 +24,7 @@ export interface PageSweepSource {
   entryName: string
 }
 
-interface SweepMatch {
-  issueId: string
-  label: string
-  filePath: string
-  entryName: string
-  index: number
-}
+type SweepMatch = PageSweepMatch
 
 interface Props {
   open: boolean
@@ -54,7 +50,7 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
   const [error, setError] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [enqueuing, setEnqueuing] = useState(false)
-  const [run, setRun] = useState<any>(null) // last polled sweep result
+  const [run, setRun] = useState<PageSweepResult | null>(null) // last polled sweep result
   const [cancelling, setCancelling] = useState(false)
   const runIdRef = useRef<string | null>(null)
   const notifiedDone = useRef(false)
@@ -98,12 +94,12 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
               candidateIssueIds: batch.map(b => b.issueId),
             }),
           })
-          const data = await res.json().catch(() => ({}))
+          const data: PageSweepScanReply = await res.json().catch(() => ({}))
           if (!res.ok) throw new Error(data?.error || `Scan failed (${res.status})`)
           if (cancelled) return
           setMatches(prev => [...prev, ...(data.matches || [])])
-          setSkipped(prev => [...prev, ...(data.skipped || []).map((s: any) => ({ label: s.label || labelById.get(s.issueId) || s.issueId, reason: s.reason }))])
-          setScanErrors(prev => [...prev, ...(data.errors || []).map((e: any) => ({ label: e.label || labelById.get(e.issueId) || e.issueId, error: e.error }))])
+          setSkipped(prev => [...prev, ...(data.skipped || []).map((s) => ({ label: s.label || labelById.get(s.issueId) || s.issueId, reason: s.reason }))])
+          setScanErrors(prev => [...prev, ...(data.errors || []).map((e) => ({ label: e.label || labelById.get(e.issueId) || e.issueId, error: e.error }))])
           setScanProgress({ scanned: Math.min(i + batch.length, candidates.length), total: candidates.length })
         }
         if (!cancelled) setPhase('review')
@@ -123,7 +119,7 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
     const poll = async () => {
       try {
         const res = await fetch('/api/library/issue/pages/sweep', { cache: 'no-store' })
-        const data = await res.json().catch(() => ({}))
+        const data: PageSweepStatusReply = await res.json().catch(() => ({}))
         if (stopped) return
         const result = data?.result
         if (result && result.runId === runIdRef.current) {
@@ -307,10 +303,10 @@ export default function PageSweepModal({ open, onOpenChange, source, onApplied }
                   Runs on the server — it&apos;s safe to close this window. Progress also shows in Job History, and the admin bell announces completion.
                 </p>
               )}
-              {run?.failedCount > 0 && (
+              {run && run.failedCount > 0 && (
                 <div className="p-3 rounded border border-red-500/40 bg-red-500/10 text-xs text-red-500 space-y-1">
                   <p className="font-semibold">{run.failedCount} file(s) failed:</p>
-                  {(run.failed || []).slice(0, 8).map((f: any, i: number) => (
+                  {(run.failed || []).slice(0, 8).map((f, i) => (
                     <p key={i} className="truncate">{f.label}: {f.error}</p>
                   ))}
                 </div>

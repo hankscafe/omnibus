@@ -18,6 +18,7 @@ import {
     readSweepResult, sweepIsActive, PageSweepJobData, PageSweepItem,
     PAGE_SWEEP_RESULT_KEY, PAGE_SWEEP_CANCEL_KEY,
 } from '@/lib/pages/page-sweep';
+import type { PageSweepStatusPayload } from '@/types/api/page-sweep';
 
 const MAX_ITEMS = 2000;
 
@@ -27,7 +28,7 @@ export async function GET() {
         const session = await getServerSession(authOptions);
         if (session?.user?.role !== 'ADMIN') return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
         const result = await readSweepResult();
-        return NextResponse.json({ result, active: sweepIsActive(result) });
+        return NextResponse.json({ result, active: sweepIsActive(result) } satisfies PageSweepStatusPayload);
     } catch (error: unknown) {
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }

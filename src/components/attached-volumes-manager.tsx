@@ -29,6 +29,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { BookMarked, Link2, Loader2, Plus, RefreshCw, Search, Unlink } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getErrorMessage } from '@/lib/utils/error';
+import type { SearchReply, SearchResult } from '@/types/api/search';
 
 export interface Attachment {
     id: string
@@ -153,7 +154,7 @@ export function AttachedVolumesManager({
     const [dialogOpen, setDialogOpen] = useState(false)
     const [provider, setProvider] = useState<string>(defaultProvider === "METRON" ? "METRON" : "COMICVINE")
     const [query, setQuery] = useState("")
-    const [results, setResults] = useState<any[]>([])
+    const [results, setResults] = useState<SearchResult[]>([])
     const [isSearching, setIsSearching] = useState(false)
     const [hasSearched, setHasSearched] = useState(false)
     const [exactId, setExactId] = useState("")
@@ -228,7 +229,7 @@ export function AttachedVolumesManager({
         setIsSearching(true)
         try {
             const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&provider=${provider}`)
-            const data = await res.json()
+            const data: SearchReply = await res.json()
             if (!res.ok) throw new Error(data.error || "Search failed")
             setResults(data.results || [])
             setHasSearched(true)
@@ -239,7 +240,8 @@ export function AttachedVolumesManager({
         }
     }
 
-    const attach = async (volumeId: string, name?: string, startYear?: string | number) => {
+    // startYear as the search result has it (null when the provider has none); the route parses it.
+    const attach = async (volumeId: string, name?: string, startYear?: string | number | null) => {
         setAttachingId(volumeId)
         try {
             const res = await fetch(`/api/library/series/attachments`, {
@@ -519,7 +521,7 @@ export function AttachedVolumesManager({
 
                         {results.length > 0 && (
                             <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
-                                {results.map((r: any) => (
+                                {results.map((r) => (
                                     <div key={`${r.id}`} className="flex items-center gap-3 p-2 rounded-lg border border-border bg-muted/20">
                                         <div className="relative w-10 h-14 shrink-0 rounded overflow-hidden bg-muted">
                                             {r.image ? (

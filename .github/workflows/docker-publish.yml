@@ -5,8 +5,8 @@ name: Build, Publish, and Release Docker Image
 #        images only, never releases or announcements. (legacy-* branches are locked archives.)
 on:
   push:
-    branches: ['main', 'dev']
-    tags: ['v*']
+    branches: ["main", "dev"]
+    tags: ["v*"]
 
 env:
   REGISTRY: ghcr.io
@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
       - name: Run Tests
@@ -34,7 +34,7 @@ jobs:
   build-and-push-image:
     needs: test # <-- CRITICAL: This tells Docker to wait for tests to pass!
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: write
       packages: write
@@ -89,7 +89,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }} 
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -135,7 +135,7 @@ jobs:
 
       # --- DOCKER DISCORD NOTIFICATION ---
       - name: Send Discord Notification (Docker Published)
-        if: success() 
+        if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_BUILDS }}
         run: |
@@ -169,7 +169,7 @@ jobs:
               }]
             }' \
           )
-          
+
           curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
 
       # --- SPECIFIC RELEASE NOTIFICATION (PLAIN TEXT FORMAT, main only) ---
@@ -184,16 +184,16 @@ jobs:
           VERSION="v${{ env.VERSION }}"
           WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
-          
+
           # Fetch the release body/notes using GitHub CLI
           RELEASE_NOTES=$(gh release view $VERSION --json body -q ".body")
-          
+
           # Check length and truncate if it exceeds 1500 characters
           if [ ${#RELEASE_NOTES} -gt 1500 ]; then
             # Using $'\n' to ensure Bash passes actual newlines into the variable
             RELEASE_NOTES="${RELEASE_NOTES:0:1500}..."$'\n\n'"*(Notes truncated due to Discord limits. [Click here to view full release notes]($RELEASE_URL))*"
           fi
-          
+
           # Construct the payload using jq's native string interpolation \(var)
           # This guarantees that newlines inside the jq string are properly formatted for JSON
           PAYLOAD=$(jq -n \
@@ -205,7 +205,7 @@ jobs:
               content: "🎉 **Release \($version)**\n\n\($url)\n\n\($notes)\n\n**Upgrade:**\n```bash\ndocker compose pull\ndocker compose down\ndocker compose up -d\n```" 
             }' \
           )
-          
+
           # Send to Discord and fail with body if rejected
           curl --fail-with-body -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_RELEASE_WEBHOOK
 
@@ -274,13 +274,12 @@ jobs:
           curl -H "Content-Type: application/json" -d "$PAYLOAD" $DISCORD_WEBHOOK
 
   # --- 4. THE ENGINE PUBLISHER: build & push the Rust engine image ---
-  build-and-push-engine:
+  build-engine-amd64:
     needs: test-engine # Wait for the engine lint/test gate
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout repository
@@ -291,13 +290,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Log in to the Container registry (GHCR)
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for the engine image
         id: meta-engine
@@ -314,19 +306,203 @@ jobs:
             type=ref,event=tag
             type=sha
 
-      - name: Build and push the engine image
+      - name: Build the amd64 engine image
         uses: docker/build-push-action@v5
         with:
           context: ./omnibus-engine
-          push: true
-          tags: ${{ steps.meta-engine.outputs.tags }}
+          platforms: linux/amd64
+          outputs: type=oci,name=omnibus-engine:amd64,dest=/tmp/engine-amd64.tar
           labels: ${{ steps.meta-engine.outputs.labels }}
           # Bake the release version into the image so /health can report it for drift detection.
           build-args: |
             OMNIBUS_VERSION=${{ env.VERSION }}
-          # Separate cache scope so the engine and Node images don't evict each other.
-          cache-from: type=gha,scope=engine
-          cache-to: type=gha,mode=max,scope=engine
+          # Keep the per-architecture caches separate from each other and the Node image cache.
+          cache-from: type=gha,scope=engine-amd64
+          cache-to: type=gha,mode=max,scope=engine-amd64
+
+      - name: Upload the amd64 engine image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-amd64
+          path: /tmp/engine-amd64.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  build-engine-arm64:
+    needs: test-engine # Wait for the engine lint/test gate
+    runs-on: ubuntu-24.04-arm
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from package.json
+        run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata (tags, labels) for the engine image
+        id: meta-engine
+        uses: docker/metadata-action@v5
+        with:
+          # GHCR only: GHCR auto-creates the package on first push (packages: write), so there is no
+          # Docker Hub repo to pre-create. docker-compose.yml pulls the engine from GHCR by default.
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-engine
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=dev,enable=${{ github.ref == format('refs/heads/{0}', 'dev') }}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build the arm64 engine image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./omnibus-engine
+          platforms: linux/arm64
+          outputs: type=oci,name=omnibus-engine:arm64,dest=/tmp/engine-arm64.tar
+          labels: ${{ steps.meta-engine.outputs.labels }}
+          # Bake the release version into the image so /health can report it for drift detection.
+          build-args: |
+            OMNIBUS_VERSION=${{ env.VERSION }}
+          # Keep the per-architecture caches separate from each other and the Node image cache.
+          cache-from: type=gha,scope=engine-arm64
+          cache-to: type=gha,mode=max,scope=engine-arm64
+
+      - name: Upload the arm64 engine image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-arm64
+          path: /tmp/engine-arm64.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  push-engine:
+    needs: [build-engine-amd64, build-engine-arm64]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from package.json
+        run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
+
+      - name: Log in to the Container registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags) for the engine image
+        id: meta-engine
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-engine
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=v${{ env.VERSION }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=dev,enable=${{ github.ref == format('refs/heads/{0}', 'dev') }}
+            type=ref,event=tag
+            type=sha
+
+      - name: Download the amd64 engine image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-amd64
+          path: /tmp/engine-amd64
+
+      - name: Download the arm64 engine image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-arm64
+          path: /tmp/engine-arm64
+
+      - name: Install Skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+
+      - name: Assemble multi-architecture OCI image
+        run: |
+          mkdir -p /tmp/oci-amd64 /tmp/oci-arm64 /tmp/oci-merged/blobs/sha256
+          tar -xf /tmp/engine-amd64/engine-amd64.tar -C /tmp/oci-amd64
+          tar -xf /tmp/engine-arm64/engine-arm64.tar -C /tmp/oci-arm64
+
+          jq -e '
+            (.manifests | length) == 1 and
+            .manifests[0].platform.os == "linux" and
+            .manifests[0].platform.architecture == "amd64"
+          ' /tmp/oci-amd64/index.json > /dev/null
+          jq -e '
+            (.manifests | length) == 1 and
+            .manifests[0].platform.os == "linux" and
+            .manifests[0].platform.architecture == "arm64"
+          ' /tmp/oci-arm64/index.json > /dev/null
+
+          cp /tmp/oci-amd64/oci-layout /tmp/oci-merged/oci-layout
+          cp -a /tmp/oci-amd64/blobs/. /tmp/oci-merged/blobs/
+          cp -an /tmp/oci-arm64/blobs/. /tmp/oci-merged/blobs/
+
+          jq -s '
+            {
+              schemaVersion: 2,
+              mediaType: "application/vnd.oci.image.index.v1+json",
+              manifests: [
+                .[0].manifests[],
+                .[1].manifests[]
+              ] | map(del(.annotations["org.opencontainers.image.ref.name"]))
+            }
+          ' /tmp/oci-amd64/index.json /tmp/oci-arm64/index.json \
+            > /tmp/oci-merged-index.json
+
+          INDEX_DIGEST=$(sha256sum /tmp/oci-merged-index.json | cut -d " " -f 1)
+          INDEX_SIZE=$(wc -c < /tmp/oci-merged-index.json)
+          cp /tmp/oci-merged-index.json "/tmp/oci-merged/blobs/sha256/$INDEX_DIGEST"
+          jq -n \
+            --arg digest "sha256:$INDEX_DIGEST" \
+            --argjson size "$INDEX_SIZE" \
+            '{
+              schemaVersion: 2,
+              mediaType: "application/vnd.oci.image.index.v1+json",
+              manifests: [{
+                mediaType: "application/vnd.oci.image.index.v1+json",
+                digest: $digest,
+                size: $size,
+                annotations: {"org.opencontainers.image.ref.name": "merged"}
+              }]
+            }' > /tmp/oci-merged/index.json
+
+      - name: Publish multi-architecture engine image
+        env:
+          FINAL_TAGS: ${{ steps.meta-engine.outputs.tags }}
+        run: |
+          mapfile -t tags <<< "$FINAL_TAGS"
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "::error::No final engine tags were generated"
+            exit 1
+          fi
+
+          for tag in "${tags[@]}"; do
+            [ -z "$tag" ] && continue
+            skopeo copy \
+              --all \
+              --authfile "$HOME/.docker/config.json" \
+              oci:/tmp/oci-merged:merged \
+              "docker://$tag"
+          done
 
       # --- ENGINE DISCORD NOTIFICATIONS ---
       # Independent of the web image's ping so a failed/skipped engine build can't hide behind the web's

@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { BookmarksPayload } from '@/types/api/bookmarks';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
             orderBy: { pageIndex: 'asc' }
         });
 
-        return NextResponse.json({ bookmarks });
+        return NextResponse.json({ bookmarks } satisfies BookmarksPayload);
     } catch (error: unknown) {
         Logger.log(`[Bookmark GET Error]: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ bookmarks: [] });

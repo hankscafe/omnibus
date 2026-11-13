@@ -7,6 +7,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { getServerSession } from 'next-auth/next';
 import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getAccessibleLibraryIds, nestedSeriesAccessWhere } from '@/lib/library-access';
+import type { RecentSeriesPayload } from '@/types/api/shelves';
 
 export async function GET() {
     try {
@@ -62,7 +63,7 @@ export async function GET() {
             };
         });
 
-        return NextResponse.json({ items: formatted });
+        return NextResponse.json({ items: formatted } satisfies RecentSeriesPayload);
     } catch (error: unknown) {
         Logger.log(`Recent Library API Error: ${getErrorMessage(error)}`, 'error');
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });

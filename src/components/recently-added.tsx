@@ -6,9 +6,10 @@ import { Eye, Image as ImageIcon, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { FollowBell } from "@/components/follow-bell";
+import type { ShelfSeriesCard, RecentSeriesReply } from "@/types/api/shelves";
 
 export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number }) {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<ShelfSeriesCard[]>([]);
   const [loading, setLoading] = useState(true);
   // Per-user followed set (Beta C): every carousel card gets a follow bell in its hover overlay.
   const [followedIds, setFollowedIds] = useState<Set<string>>(new Set());
@@ -18,7 +19,7 @@ export function RecentlyAdded({ refreshSignal = 0 }: { refreshSignal?: number })
     let alive = true;
     fetch(`/api/library/recent?_t=${Date.now()}`, { cache: 'no-store' })
       .then(res => res.json())
-      .then(data => {
+      .then((data: RecentSeriesReply) => {
         if (alive && data.items) setItems(data.items);
       })
       .catch(err => console.error("Failed to fetch recent series:", err))

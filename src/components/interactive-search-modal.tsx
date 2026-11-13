@@ -22,10 +22,11 @@ interface Props {
   onClose: () => void;
   initialQuery: string;
   comicData: {
-    cvId: number;
+    // As the request search's detail pane holds them: a Metron id is text, and either may be missing.
+    cvId: number | string | null;
     year: string;
     publisher: string;
-    image: string;
+    image: string | null;
     type: 'volume' | 'issue';
     metadataSource?: string;
     isManga?: boolean;

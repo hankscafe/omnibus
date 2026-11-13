@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import { getErrorMessage } from '@/lib/utils/error';
 import { Logger } from '@/lib/logger';
 import { getAccessibleLibraryIds, seriesAccessWhere } from '@/lib/library-access';
+import type { RecommendationsPayload } from '@/types/api/shelves';
 
 export const dynamic = 'force-dynamic';
 
@@ -129,7 +130,7 @@ export async function GET(_request: Request) {
             };
         });
 
-        return NextResponse.json({ series: formatted, basedOn: seedRead.issue.series.name });
+        return NextResponse.json({ series: formatted, basedOn: seedRead.issue.series.name } satisfies RecommendationsPayload);
 
     } catch (error: unknown) {
         Logger.log(`[Recommendations API] Error: ${getErrorMessage(error)}`, 'error');

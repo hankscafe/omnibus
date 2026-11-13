@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import Link from "next/link"
 import { InteractiveSearchModal } from "./interactive-search-modal"
 import { cn } from "@/lib/utils"
+import type { IssueDetailsReply } from "@/types/api/issue-details"
 
 interface SearchResult {
   id: number;
@@ -58,6 +59,25 @@ interface Issue {
   isReleased?: boolean;
 }
 
+// The detail pane's item: a search result (a volume - isVolume) or one of its issues (the first, or the
+// one picked under More in this Series), with the volume's provider id and source. It is then topped up
+// from GET /api/issue-details, whose fields win - except an empty name, an "Unknown" publisher, a "????"
+// year, no image and a blank description - and whose volumeId may be null (a Metron issue the provider
+// gave no series for).
+type SelectedItem = Omit<Partial<IssueDetailsReply>, 'error'> & {
+  id: number | string;
+  name: string;
+  year: string;
+  publisher?: string;
+  image: string | null;
+  description?: string;
+  volumeId: number | string | null;
+  metadataSource: string;
+  isVolume?: boolean;
+  issueNumber?: string;
+  isReleased?: boolean;
+};
+
 
 export function RequestSearch() {
   const { data: session } = useSession()
@@ -68,7 +88,7 @@ export function RequestSearch() {
   const [searchSort, setSearchSort] = useState("relevance")
   const [interactiveQuery, setInteractiveQuery] = useState<{ query: string, type: 'volume' | 'issue' } | null>(null)
   
-  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number, name: string, image: string, year: string, publisher: string, metadataSource?: string } | null>(null);
+  const [monitorPrompt, setMonitorPrompt] = useState<{ id: number | string | null, name: string, image: string | null, year: string, publisher: string, metadataSource?: string } | null>(null);
   
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -77,7 +97,7 @@ export function RequestSearch() {
   const [hasMoreSearch, setHasMoreSearch] = useState(false);
   const [isSearchingMore, setIsSearchingMore] = useState(false);
 
-  const [selectedItem, setSelectedItem] = useState<any>(null)
+  const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null)
   const [volumeIssues, setVolumeIssues] = useState<Issue[]>([])
   
   const [requestingTarget, setRequestingTarget] = useState<string | null>(null)
@@ -174,10 +194,11 @@ export function RequestSearch() {
 
     fetch(`/api/issue-details?id=${selectedItemId}&type=${itemType}&provider=${selectedItemSource}&_t=${Date.now()}`)
       .then(res => res.json())
-      .then(data => {
+      .then((data: IssueDetailsReply) => {
         if (data && !data.error) {
-          setSelectedItem((prev: any) => {
-            if (String(prev?.id) !== String(data.id)) return prev; 
+          setSelectedItem((prev) => {
+            // A reply for an item no longer shown (or none at all) changes nothing.
+            if (!prev || String(prev.id) !== String(data.id)) return prev;
             return {
                 ...prev,
                 ...data,
@@ -192,7 +213,8 @@ export function RequestSearch() {
       });
   }, [selectedItemId, selectedItemIsVolume, selectedItemSource]);
 
-  const handleRequest = async (id: number, name: string, image: string, year: string, type: 'volume' | 'issue', publisher: string, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
+  // id, image and publisher as the detail pane holds them (see SelectedItem).
+  const handleRequest = async (id: number | string | null, name: string, image: string | null, year: string, type: 'volume' | 'issue', publisher: string | undefined, monitored: boolean = false, issueNumber?: string, monitorOnly: boolean = false, metadataSource: string = 'COMICVINE') => {
     if (!canRequest) {
         toast({ title: "Requests not enabled", description: "Ask an admin to grant you the Request permission.", variant: "destructive" });
         return;
@@ -239,7 +261,7 @@ export function RequestSearch() {
             setActiveRequests(prev => [
                 ...prev, 
                 { 
-                    volumeId: id.toString(), 
+                    volumeId: String(id), 
                     name: exactIssueName, 
                     status: session?.user?.role === 'ADMIN' ? 'PENDING' : 'PENDING_APPROVAL' 
                 }
@@ -504,11 +526,11 @@ export function RequestSearch() {
                       <div className="space-y-6">
                              {hasCreators && (
                                 <div className="grid grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg border border-border transition-colors duration-300">
-                                    {selectedItem.writers?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedItem.writers.join(", ")}</p></div>)}
-                                    {selectedItem.artists?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.artists.join(", ")}</p></div>)}
-                                    {selectedItem.coverArtists?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.coverArtists.join(", ")}</p></div>)}
-                                    {selectedItem.colorists?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p><p className="text-sm font-medium text-foreground">{selectedItem.colorists.join(", ")}</p></div>)}
-                                    {selectedItem.letterers?.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p><p className="text-sm font-medium text-foreground">{selectedItem.letterers.join(", ")}</p></div>)}
+                                    {selectedItem.writers && selectedItem.writers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Writer</p><p className="text-sm font-medium text-foreground">{selectedItem.writers.join(", ")}</p></div>)}
+                                    {selectedItem.artists && selectedItem.artists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.artists.join(", ")}</p></div>)}
+                                    {selectedItem.coverArtists && selectedItem.coverArtists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Cover Artist</p><p className="text-sm font-medium text-foreground">{selectedItem.coverArtists.join(", ")}</p></div>)}
+                                    {selectedItem.colorists && selectedItem.colorists.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><Paintbrush className="w-3 h-3" /> Colorist</p><p className="text-sm font-medium text-foreground">{selectedItem.colorists.join(", ")}</p></div>)}
+                                    {selectedItem.letterers && selectedItem.letterers.length > 0 && (<div><p className="text-[10px] sm:text-xs font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1"><PenTool className="w-3 h-3" /> Letterer</p><p className="text-sm font-medium text-foreground">{selectedItem.letterers.join(", ")}</p></div>)}
                                 </div>
                              )}
 

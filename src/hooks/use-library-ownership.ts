@@ -13,6 +13,16 @@ export type StatusType =
   | null;
 
 /**
+ * A request in flight: GET /api/library/ids lists everyone's (its `name` is the download's name), and a
+ * request button adds one at once (its `name` the issue it asked for) until the next fetch.
+ */
+export interface ActiveRequestStub {
+  volumeId: string;
+  status: string;
+  name: string | null;
+}
+
+/**
  * Shared library-ownership + request-status logic for the Discover grid (comic-grid) and the
  * manual-search component (request-search). This used to be copy-pasted in both, which is how a
  * matching bug got fixed in one and not the other.
@@ -29,7 +39,7 @@ export function useLibraryOwnership(refreshSignal: unknown = 0) {
   const [monitoredSeries, setMonitoredSeries] = useState<Set<string>>(new Set());
   const [ownedIssues, setOwnedIssues] = useState<Set<string>>(new Set());
   const [coveredIssues, setCoveredIssues] = useState<Set<string>>(new Set());
-  const [activeRequests, setActiveRequests] = useState<any[]>([]);
+  const [activeRequests, setActiveRequests] = useState<ActiveRequestStub[]>([]);
   const [requestedVolumes, setRequestedVolumes] = useState<Set<string>>(new Set());
   const [requestedIssues, setRequestedIssues] = useState<Set<string>>(new Set());
 
@@ -48,7 +58,8 @@ export function useLibraryOwnership(refreshSignal: unknown = 0) {
       .catch(() => {});
   }, [refreshSignal]);
 
-  const getVolumeStatus = useCallback((volumeId: number | string): StatusType => {
+  // volumeId as a detail pane holds it: null when the provider gave an issue no volume (String(null) matches nothing).
+  const getVolumeStatus = useCallback((volumeId: number | string | null): StatusType => {
     const idStr = String(volumeId);
 
     // Ownership is determined ONLY by the provider volume ID — never by name (name matching ignored
@@ -71,7 +82,7 @@ export function useLibraryOwnership(refreshSignal: unknown = 0) {
     return null;
   }, [ownedSeries, monitoredSeries, requestedVolumes, activeRequests]);
 
-  const getIssueStatus = useCallback((issueId: number | string, volumeId: number | string, issueName: string, isReleased?: boolean, issueNumber?: string, seriesName?: string): StatusType => {
+  const getIssueStatus = useCallback((issueId: number | string, volumeId: number | string | null, issueName: string, isReleased?: boolean, issueNumber?: string, seriesName?: string): StatusType => {
     const idStr = String(issueId);
     const volStr = String(volumeId);
     const cleanName = issueName.toLowerCase().trim();
@@ -88,10 +99,11 @@ export function useLibraryOwnership(refreshSignal: unknown = 0) {
     if (isOwned) return 'ISSUE_OWNED';
     if (requestedIssues.has(issueName) || requestedIssues.has(coreName)) return 'REQUESTED';
 
+    // `name` is the download's name (the route sends it under that key) or the issue asked for; there
+    // was also a check on `activeDownloadName`, which no request here ever carries.
     const req = activeRequests.find(r =>
       (String(r.volumeId) === volStr && (r.name === issueName || r.name === coreName)) ||
-      (r.name && (r.name.toLowerCase() === cleanName || r.name.toLowerCase() === coreName)) ||
-      (r.activeDownloadName && (r.activeDownloadName.toLowerCase() === cleanName || r.activeDownloadName.toLowerCase() === coreName))
+      (r.name && (r.name.toLowerCase() === cleanName || r.name.toLowerCase() === coreName))
     );
 
     if (req) {

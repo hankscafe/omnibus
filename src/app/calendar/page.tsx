@@ -539,7 +539,7 @@ export default function CalendarPage() {
                                                                     onClick={(e) => {
                                                                         e.preventDefault();
                                                                         e.stopPropagation();
-                                                                        setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
+                                                                        setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: issue.metadataSource || 'METRON' })
                                                                     }}
                                                                 >
                                                                     {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Plus className="w-3 h-3 mr-1" />} Request Series
@@ -557,7 +557,7 @@ export default function CalendarPage() {
                                                                         onClick={(e) => {
                                                                             e.preventDefault();
                                                                             e.stopPropagation();
-                                                                            handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
+                                                                            handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, issue.metadataSource || 'METRON', false, issue.releaseDate)
                                                                         }}
                                                                     >
                                                                         {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />} Request Issue
@@ -601,7 +601,7 @@ export default function CalendarPage() {
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: (issue as any).metadataSource || 'METRON' })
+                                                                setMonitorPrompt({ id: volIdKey, name: issue.seriesName, image: issue.coverUrl || "", year: issue.year || "", publisher: issue.publisher, issueNumber: issue.issueNumber, metadataSource: issue.metadataSource || 'METRON' })
                                                             }}
                                                         >
                                                             {requestingTarget === `vol-${volIdKey}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Plus className="w-3 h-3 mr-1.5" />} Request Series
@@ -621,7 +621,7 @@ export default function CalendarPage() {
                                                             onClick={(e) => {
                                                                 e.preventDefault();
                                                                 e.stopPropagation();
-                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, (issue as any).metadataSource || 'METRON', false, issue.releaseDate)
+                                                                handleRequest(volIdKey, compositeName, issue.coverUrl || "", issue.year || "", 'issue', issue.publisher, false, issue.issueNumber, issue.metadataSource || 'METRON', false, issue.releaseDate)
                                                             }}
                                                         >
                                                             {requestingTarget === `iss-${issueTargetName}` ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />} Request Issue

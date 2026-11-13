@@ -90,14 +90,6 @@ export interface DiscordWebhookConfig {
     botAvatarUrl?: string | null;
 }
 
-// --- STANDARD API RESPONSES ---
-export interface ApiResponse<T = any> {
-    success?: boolean;
-    message?: string;
-    error?: string;
-    data?: T;
-}
-
 // --- UI COMPONENT TYPES ---
 export interface OptionType {
     label: string;
@@ -112,11 +104,4 @@ export interface FormattedSearchResult {
     image?: string;
     description?: string;
     issue_number?: string;
-}
-
-export interface Comic {
-    id: string;
-    name: string;
-    isVolume?: boolean; // <-- This fixes the comic-grid.tsx error!
-    [key: string]: any;
 }

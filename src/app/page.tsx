@@ -29,6 +29,7 @@ import {
 import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage } from "@/lib/utils/error"
+import type { AdminRequest, AdminUser, IssueReportEntry, JobLogEntry } from "@/types/api/admin"
 
 export default function Home() {
   const { data: session } = useSession()
@@ -73,24 +74,24 @@ export default function Home() {
 
         const resReq = await fetch(`/api/admin/requests?_t=${timestamp}`, { cache: 'no-store' })
         if (resReq.ok) {
-          const data = await resReq.json()
-          const pending = data.filter((r: any) => r.status === 'PENDING_APPROVAL')
+          const data: AdminRequest[] = await resReq.json()
+          const pending = data.filter((r) => r.status === 'PENDING_APPROVAL')
           setPendingCount(pending.length)
-          const manual = data.filter((r: any) => r.status === 'MANUAL_DDL')
+          const manual = data.filter((r) => r.status === 'MANUAL_DDL')
           setManualDownloadsCount(manual.length)
         }
 
         const resRep = await fetch(`/api/admin/reports?_t=${timestamp}`, { cache: 'no-store' })
         if (resRep.ok) {
-          const data = await resRep.json()
-          const openReports = data.filter((r: any) => r.status === 'OPEN')
+          const data: IssueReportEntry[] = await resRep.json()
+          const openReports = data.filter((r) => r.status === 'OPEN')
           setOpenReportsCount(openReports.length)
         }
 
         const resUsers = await fetch(`/api/admin/users?_t=${timestamp}`, { cache: 'no-store' })
         if (resUsers.ok) {
-          const data = await resUsers.json()
-          const pendingUsers = data.filter((u: any) => !u.isApproved)
+          const data: AdminUser[] = await resUsers.json()
+          const pendingUsers = data.filter((u) => !u.isApproved)
           setPendingUsersCount(pendingUsers.length)
         }
 
@@ -135,8 +136,8 @@ export default function Home() {
             try {
                 const res = await fetch('/api/admin/job-logs');
                 if (res.ok) {
-                    const logs = await res.json();
-                    const recentJob = logs.find((l: any) => l.jobType === 'DISCOVER_SYNC' && new Date(l.createdAt).getTime() >= requestTime);
+                    const logs: JobLogEntry[] = await res.json();
+                    const recentJob = logs.find((l) => l.jobType === 'DISCOVER_SYNC' && new Date(l.createdAt).getTime() >= requestTime);
                     if (recentJob) {
                         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
                         setRefreshSignal(Date.now()); 

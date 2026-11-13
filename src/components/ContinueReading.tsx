@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link"; 
 import { Logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/utils/error";
+import type { SeriesIssueResult } from "@/types/api/series-issues";
+import type { RecentProgressItem, RecentProgressReply } from "@/types/api/shelves";
 
 function DynamicCover({ metadataId, metadataSource, issueNumber, fallbackUrl, altName }: { metadataId: string | null, metadataSource: string, issueNumber: string, fallbackUrl: string, altName: string }) {
     const [cover, setCover] = useState<string | null>(fallbackUrl);
@@ -16,7 +18,7 @@ function DynamicCover({ metadataId, metadataSource, issueNumber, fallbackUrl, al
         const cacheKey = `meta-vol-${metadataSource}-${metadataId}`;
         const cached = sessionStorage.getItem(cacheKey);
         
-        const extractCover = (issues: any[]) => {
+        const extractCover = (issues: SeriesIssueResult[]) => {
             const parsedNum = parseFloat(issueNumber);
             const matched = issues.find(cv => parseFloat(cv.issueNumber || cv.issue_number) === parsedNum);
             if (matched && matched.image && typeof matched.image === 'string') {
@@ -53,14 +55,14 @@ function DynamicCover({ metadataId, metadataSource, issueNumber, fallbackUrl, al
 }
 
 export function ContinueReading() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<RecentProgressItem[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
     fetch('/api/progress/recent')
       .then(res => res.json())
-      .then(data => {
+      .then((data: RecentProgressReply) => {
         if (data.items) setItems(data.items);
       })
       .catch(err => console.error("Failed to fetch recent progress:", err))
@@ -100,10 +102,10 @@ export function ContinueReading() {
             <div 
               key={item.id} 
               className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-[transform,box-shadow] duration-200 cursor-pointer border border-border snap-start"
-              onClick={() => router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`)}
+              onClick={() => router.push(`/reader?path=${encodeURIComponent(String(item.filePath))}&series=${encodeURIComponent(item.seriesPath)}`)}
             >
               <DynamicCover 
-                  metadataId={item.metadataId || (item.seriesCvId ? item.seriesCvId.toString() : null)} 
+                  metadataId={item.metadataId || null} 
                   metadataSource={item.metadataSource || 'COMICVINE'}
                   issueNumber={item.issueNumber} 
                   fallbackUrl={item.seriesCoverUrl} 
@@ -132,7 +134,7 @@ export function ContinueReading() {
                       className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
                       onClick={(e) => {
                           e.stopPropagation();
-                          router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
+                          router.push(`/reader?path=${encodeURIComponent(String(item.filePath))}&series=${encodeURIComponent(item.seriesPath)}`);
                       }}
                   >
                       <BookOpen className="w-3 h-3 shrink-0" /> <span>Resume</span>

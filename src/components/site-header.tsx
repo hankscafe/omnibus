@@ -22,12 +22,13 @@ import { Switch } from "@/components/ui/switch"
 import { TierBadge } from "@/components/tier-badge"
 import { ImpersonationBanner, useStopImpersonating } from "@/components/impersonation-banner"
 import { cn } from "@/lib/utils"
+import type { BellNotification } from "@/types/api/notifications"
 
 const NOTIFICATION_POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
 
 // --- INTERNAL NOTIFICATION COMPONENT ---
 function NotificationBell() {
-  const [notifications, setNotifications] = useState<any[]>([])
+  const [notifications, setNotifications] = useState<BellNotification[]>([])
   const [open, setOpen] = useState(false)
 
   const fetchNotifications = async () => {
@@ -165,7 +166,7 @@ function NotificationBell() {
                     )}
 
                     {n.type === 'comic' ? (
-                        ['IMPORTED', 'COMPLETED'].includes(n.status) ? (
+                        ['IMPORTED', 'COMPLETED'].includes(n.status ?? '') ? (
                             <div className="flex items-center gap-1.5"><div className="h-1.5 w-1.5 rounded-full bg-green-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-green-600 tracking-widest">Available Now</span></div>
                         ) : (
                             <div className="flex items-center gap-1.5"><div className="h-1.5 w-1.5 rounded-full bg-blue-500" /><span className="text-[11px] sm:text-[10px] font-black uppercase text-blue-600 tracking-widest">Approved & Downloading</span></div>
@@ -210,7 +211,7 @@ export function SiteHeader() {
   useEffect(() => {
     const standalone =
       window.matchMedia?.('(display-mode: standalone)')?.matches ||
-      (window.navigator as any).standalone === true;
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
     setIsStandalonePwa(!!standalone);
   }, [])
 
@@ -378,7 +379,7 @@ export function SiteHeader() {
                                 <p className="text-sm font-bold leading-none">{session.user?.name}</p>
                                 <div className="flex items-center gap-2">
                                     <p className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{session.user?.role}</p>
-                                    {session.user && <TierBadge user={session.user as any} />}
+                                    {session.user && <TierBadge user={session.user} />}
                                 </div>
                             </div>
                         </DropdownMenuLabel>

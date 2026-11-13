@@ -8,6 +8,7 @@ import { Logger } from '@/lib/logger';
 import { COMIC_EXT_REGEX } from '@/lib/utils/formats';
 import { UNMATCHED_DIR } from '@/lib/utils/paths';
 import { getAccessibleLibraryIds } from '@/lib/library-access';
+import type { BellNotificationRow } from '@/types/api/notifications';
 
 export async function GET() {
   try {
@@ -39,7 +40,7 @@ export async function GET() {
       getAccessibleLibraryIds(userId, role),
     ]);
 
-    let formatted = [
+    let formatted: BellNotificationRow[] = [
         ...activeComics.map(c => ({ id: c.id, type: 'comic', status: c.status, title: c.activeDownloadName, imageUrl: c.imageUrl, date: c.updatedAt })),
         ...newTrophies.map(t => ({ id: t.id, type: 'trophy', title: t.trophy.name, description: t.trophy.description, imageUrl: t.trophy.iconUrl, date: t.earnedAt })),
         ...newReports.map(r => ({ id: r.id, type: 'report', title: `Resolved: ${r.series.name}`, description: r.adminComment || 'Your issue has been resolved by an Admin.', imageUrl: null, date: r.updatedAt }))
@@ -76,7 +77,7 @@ export async function GET() {
                 description: 'New arrivals in series you follow are waiting in Updates.',
                 imageUrl: null,
                 date: newestArrival?.fileAddedAt || new Date(),
-            } as any);
+            });
         }
     } catch (e) {
         Logger.log(`[Notifications API] Follow-arrivals summary failed: ${getErrorMessage(e)}`, 'warn');

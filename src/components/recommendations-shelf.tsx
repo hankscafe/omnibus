@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Image as ImageIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { ShelfSeriesCard, RecommendationsReply } from "@/types/api/shelves";
 
 export function RecommendationsShelf({ refreshSignal = 0 }: { refreshSignal?: number }) {
-  const [items, setItems] = useState<any[]>([]);
-  const [basedOn, setBasedOn] = useState("");
+  const [items, setItems] = useState<ShelfSeriesCard[]>([]);
+  // The series the picks are for; null when the route had nothing to go on (the shelf is empty then).
+  const [basedOn, setBasedOn] = useState<string | null>("");
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
@@ -14,7 +16,7 @@ export function RecommendationsShelf({ refreshSignal = 0 }: { refreshSignal?: nu
     let alive = true;
     fetch(`/api/recommendations?_t=${Date.now()}`, { cache: 'no-store' })
       .then(res => res.json())
-      .then(data => {
+      .then((data: RecommendationsReply) => {
         if (alive && data.series) {
             setItems(data.series);
             setBasedOn(data.basedOn);

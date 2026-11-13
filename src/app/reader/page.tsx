@@ -20,6 +20,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { readerHref, nextInList } from "@/lib/reading-list-nav"
 import { getErrorMessage } from '@/lib/utils/error';
+import type { BookmarksResponse } from '@/types/api/bookmarks';
+import type { LibraryIssueDetailReply } from '@/types/api/library-issue';
+import type { SeriesReply } from '@/types/api/series';
 
 // In-reader tagging (#199 round 2, concept by CapitanoNemo78; admin-only): note characters,
 // teams, locations, and credits spotted while reading. Nothing saves per-tag — additions
@@ -103,10 +106,10 @@ function ReaderContent() {
     setIsSavingTags(true);
     try {
       const res = await fetch(`/api/library/issue?id=${issueId}`, { headers: getAuthHeaders() });
-      const current = await res.json();
+      const current: LibraryIssueDetailReply = await res.json();
       if (!res.ok || current.error) throw new Error(current.error || "Couldn't load current issue metadata");
 
-      const payload: Record<string, any> = { issueId };
+      const payload: Record<string, unknown> = { issueId };
       (Object.keys(TAG_CATEGORY_LABELS) as TagCategory[]).forEach(cat => {
         if (pendingTags[cat].length === 0) return;
         const base: string[] = Array.isArray(current[cat]) ? current[cat] : [];
@@ -299,8 +302,8 @@ function ReaderContent() {
     Promise.all([
       fetch(`/api/reader/pages?path=${encodeURIComponent(filePath)}`).then(res => res.json()),
       fetch(`/api/progress?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.json()),
-      fetch(`/api/progress/bookmarks?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then(res => res.ok ? res.json() : { bookmarks: [] }),
-      seriesPath ? fetch(`/api/library/series?path=${encodeURIComponent(seriesPath)}`, { headers: getAuthHeaders() }).then(res => res.json()) : Promise.resolve(null),
+      fetch(`/api/progress/bookmarks?path=${encodeURIComponent(filePath)}`, { headers: getAuthHeaders() }).then((res): Promise<BookmarksResponse> | BookmarksResponse => res.ok ? res.json() : { bookmarks: [] }),
+      seriesPath ? fetch(`/api/library/series?path=${encodeURIComponent(seriesPath)}`, { headers: getAuthHeaders() }).then((res): Promise<SeriesReply> => res.json()) : Promise.resolve(null),
       // #270: the Reading List it was opened from - its items in reading order, only what this user
       // may see. A list that is gone or no longer visible just means the series decides "next".
       listId ? fetch(`/api/reading-lists?id=${encodeURIComponent(listId)}`).then(res => res.ok ? res.json() : null).catch(() => null) : Promise.resolve(null)
@@ -310,7 +313,7 @@ function ReaderContent() {
         setPages(pageData.pages);
 
         if (bookmarkData.bookmarks) {
-            setBookmarks(bookmarkData.bookmarks.map((b: any) => b.pageIndex));
+            setBookmarks(bookmarkData.bookmarks.map((b) => b.pageIndex));
         }
 
         if (seriesData && seriesData.downloadedIssues && seriesData.isManga) setSettings(s => ({ ...s, readingMode: 'rtl' }));
@@ -332,8 +335,8 @@ function ReaderContent() {
             // #203: annuals read AFTER the main run — same order as the series page and OPDS, so
             // "next issue" from the run's finale is Annual #1, not a mid-run jump.
             const sortedIssues = [...seriesData.downloadedIssues].sort((a, b) =>
-                (((a as any).isAnnual ? 1 : 0) - ((b as any).isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0)));
-            const currentIdx = sortedIssues.findIndex((issue: any) => issue.fullPath === filePath);
+                ((a.isAnnual ? 1 : 0) - (b.isAnnual ? 1 : 0)) || ((a.parsedNum ?? 0) - (b.parsedNum ?? 0)));
+            const currentIdx = sortedIssues.findIndex((issue) => issue.fullPath === filePath);
             if (currentIdx > -1 && currentIdx < sortedIssues.length - 1) {
                 const next = sortedIssues[currentIdx + 1];
                 setNextIssue({ href: readerHref(next.fullPath, seriesPath), name: next.name });

@@ -25,6 +25,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import type { RequestListItem } from "@/types/api/request"
+import type { SeriesIssuesReply } from "@/types/api/series-issues"
 
 function RequestCard({
     req,
@@ -33,7 +35,7 @@ function RequestCard({
     isSelected,
     onToggleSelect
 }: {
-    req: any,
+    req: RequestListItem,
     onCancel: (id: string) => void,
     isSelectionMode: boolean,
     isSelected: boolean,
@@ -66,8 +68,8 @@ function RequestCard({
                     fetch(`/api/series-issues?volumeId=${req.volumeId}&provider=${req.metadataSource || 'COMICVINE'}`)
                 ]);
                 const volData = await volRes.json();
-                const issuesData = await issuesRes.json();
-                const specificIssue = issuesData.results?.find((i: any) => parseFloat(i.issueNumber) === targetIssueNum);
+                const issuesData: SeriesIssuesReply = await issuesRes.json();
+                const specificIssue = issuesData.results?.find((i) => parseFloat(i.issueNumber) === targetIssueNum);
                 const finalDesc = specificIssue?.description || volData.description;
                 setDesc(finalDesc ? finalDesc.trim() : "No synopsis available.");
             } else {
@@ -237,7 +239,7 @@ function RequestCard({
 
 export default function RequestsPage() {
   const { data: session } = useSession()
-  const [requests, setRequests] = useState<any[]>([])
+  const [requests, setRequests] = useState<RequestListItem[]>([])
   const [loading, setLoading] = useState(true)
   
   const [activeTab, setActiveTab] = useState("ALL")

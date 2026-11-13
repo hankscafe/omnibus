@@ -6,6 +6,7 @@ import { getAuthOptions } from '@/app/api/auth/[...nextauth]/options';
 import path from 'path';
 import { Logger } from '@/lib/logger';
 import { getErrorMessage } from '@/lib/utils/error';
+import type { RecentProgressPayload } from '@/types/api/shelves';
 
 export async function GET(_request: Request) {
   try {
@@ -72,7 +73,7 @@ export async function GET(_request: Request) {
         };
     });
 
-    return NextResponse.json({ items });
+    return NextResponse.json({ items } satisfies RecentProgressPayload);
 
   } catch (error: unknown) {
     Logger.log(`Recent Progress API Error: ${getErrorMessage(error)}`, 'error');

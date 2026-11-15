@@ -17,7 +17,7 @@ import { getErrorMessage } from '@/lib/utils/error';
 import { ENGINE_URL, engineHeaders, engineFetchLong } from '@/lib/engine';
 import { isSameIssue, extractIssueNumber } from '@/lib/utils/issue-parser';
 import { requestedIssueRow } from '@/lib/utils/attachment-name';
-import { requestedIssueRows } from '@/lib/requested-release';
+import { requestedIssueRows, releasedWithinDays, FRESH_RELEASE_DAYS, FRESH_RETRY_HOURS } from '@/lib/requested-release';
 import { issueNumberOf, settleDuplicateOnLink } from '@/lib/request-dedupe';
 import { processPageSweepChunk } from '@/lib/pages/page-sweep';
 import { SCHEDULE_SEED_KEY, newScheduleSeed, scheduleOffsetMs } from '@/lib/schedule-jitter';
@@ -1135,12 +1135,44 @@ export function initWorker() {
                     }
                     if (parkedRetried > 0) details += `[PARKED] Re-searched ${parkedRetried} parked request(s) (awaiting/manual/dead-stalled) after ${awaitingRetryDays}d.\n`;
 
+                    // Phase 3c -- just-released issues no source had yet (calendar fix A, beta.040). A new
+                    // issue is searched on its release date, and GetComics and the indexers usually post it
+                    // a day or two later, so that first search often comes back NOT_FOUND - and the sweep
+                    // above would then wait awaiting_retry_days (default 7) to look again. A NOT_FOUND
+                    // request whose issue came out in the last FRESH_RELEASE_DAYS is searched again on every
+                    // run instead, at most every FRESH_RETRY_HOURS (an hourly monitor must not hammer the
+                    // sources). Only NOT_FOUND: a MANUAL_DDL hold would get the same link again, and a
+                    // dateless AWAITING_RELEASE has no release to count from. The pool stops at the sweep's
+                    // cutoff - anything older was just re-searched above.
+                    let freshRetried = 0;
+                    const freshCutoff = new Date(Date.now() - FRESH_RETRY_HOURS * 60 * 60 * 1000);
+                    const freshPool = await prisma.request.findMany({
+                        where: {
+                            status: 'NOT_FOUND',
+                            updatedAt: { lt: freshCutoff, gte: awaitingCutoff },
+                            OR: [{ snoozedUntil: null }, { snoozedUntil: { lt: nowTs } }]
+                        },
+                        select: { id: true, volumeId: true, activeDownloadName: true }
+                    });
+                    // The issue's own row (Specials included) gives the release date and the search year;
+                    // a request with no row in the library, or no date, stays on the slow cadence.
+                    const freshRows = await requestedIssueRows(freshPool);
+                    for (const req of freshPool) {
+                        const fresh = freshRows.get(req.id);
+                        const releaseDate = fresh?.row.releaseDate;
+                        if (!fresh || !releaseDate || !releasedWithinDays(releaseDate, FRESH_RELEASE_DAYS)) continue;
+                        await prisma.request.update({ where: { id: req.id }, data: { status: 'PENDING', retryCount: 0, progress: 0 } });
+                        searchAndDownload(req.id, req.activeDownloadName || "", releaseDate.split('-')[0], fresh.series.publisher || "Unknown", fresh.series.isManga, false, JOB_PRIORITY.BACKGROUND).catch(() => {});
+                        freshRetried++;
+                    }
+                    if (freshRetried > 0) details += `[FRESH] Re-searched ${freshRetried} just-released request(s) not found yet (released in the last ${FRESH_RELEASE_DAYS}d).\n`;
+
                     await prisma.jobLog.create({
                         data: {
                             jobType: 'SERIES_MONITOR',
                             status: 'COMPLETED',
                             durationMs: Date.now() - startTime,
-                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${parkedRetried} parked re-searched, ${requestsClosed} closed (already in the library).`
+                            message: details + `\nFinal Summary: ${skeletonsCreated} calendar entries, ${newRequestsFound} new downloads, ${unreleasedUpgraded} upgrades, ${parkedRetried} parked re-searched, ${freshRetried} just-released re-searched, ${requestsClosed} closed (already in the library).`
                         }
                     });
                     break;

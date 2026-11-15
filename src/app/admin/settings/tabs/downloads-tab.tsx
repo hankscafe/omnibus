@@ -504,7 +504,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 className="h-12 sm:h-10 w-full sm:w-32 bg-background border-border text-foreground"
                             />
                             <span className="text-sm text-muted-foreground">
-                                How often to re-search requests that aren&apos;t available on any source yet (brand-new / small-press titles). These retry on this slow cadence instead of counting as failures. (Default: 7)
+                                How often to re-search requests that aren&apos;t available on any source yet (brand-new / small-press titles). These retry on this slow cadence instead of counting as failures. For the first two weeks after an issue&apos;s release it&apos;s searched again on every New Issue Monitor run (at most twice a day), since new issues usually reach the sources within a day or two. (Default: 7)
                             </span>
                         </div>
                     </div>

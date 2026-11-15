@@ -724,7 +724,8 @@ describe('Cron: BullMQ Worker Router', () => {
                 { id: 'r_terminal', volumeId: null, activeDownloadName: 'X-Men #6', status: 'STALLED', retryCount: 3, downloadLink: 'https://host/file' },
                 { id: 'r_nolink', volumeId: null, activeDownloadName: 'X-Men #7', status: 'STALLED', retryCount: 0, downloadLink: null },
                 { id: 'r_live', volumeId: null, activeDownloadName: 'X-Men #8', status: 'STALLED', retryCount: 1, downloadLink: 'https://host/live' }
-            ]);
+            ])
+            .mockResolvedValueOnce([]); // Phase 3c: the fresh-release pass (calendar fix A)
         await runMonitor([]);
 
         // The three dead ones go back to PENDING with a fresh retry budget and a new search…
@@ -746,7 +747,8 @@ describe('Cron: BullMQ Worker Router', () => {
             .mockResolvedValueOnce([]) // Phase 3: UNRELEASED
             .mockResolvedValueOnce([   // Phase 3b: parked
                 { id: 'r_nf', volumeId: null, activeDownloadName: 'Saga #61', status: 'NOT_FOUND', retryCount: 0, downloadLink: null },
-            ]);
+            ])
+            .mockResolvedValueOnce([]); // Phase 3c: the fresh-release pass
         await runMonitor([]);
 
         type FindArgs = { where?: { status?: { in?: string[] } } } | undefined;
@@ -789,7 +791,8 @@ describe('Cron: BullMQ Worker Router', () => {
             .mockResolvedValueOnce([]) // Phase 3: UNRELEASED
             .mockResolvedValueOnce([   // Phase 3b: parked
                 { id: 'r_nf', volumeId: null, activeDownloadName: 'Saga #61', status: 'NOT_FOUND', retryCount: 0, downloadLink: null },
-            ]);
+            ])
+            .mockResolvedValueOnce([]); // Phase 3c: the fresh-release pass
         await runMonitor([]);
 
         expect(mocks.searchAndDownload).toHaveBeenCalledTimes(1);
@@ -798,8 +801,102 @@ describe('Cron: BullMQ Worker Router', () => {
         }));
     });
 
+    // Calendar fix A (beta.040): the monitor searches a new issue on its release date, and GetComics and the
+    // indexers usually post it a day or two later - so that first search often finds nothing (NOT_FOUND), and
+    // the parked sweep above waited awaiting_retry_days (7) to look again. A NOT_FOUND request whose issue came
+    // out in the last 14 days is searched again on every run instead, at most every 12 hours.
+    describe('a just-released issue no source had yet (calendar fix A)', () => {
+        type FindArgs = { where?: { status?: unknown; updatedAt?: { lt?: Date; gte?: Date }; OR?: unknown } } | undefined;
+        const day = 86_400_000;
+        const isoDaysAgo = (n: number) => new Date(Date.now() - n * day).toISOString().slice(0, 10);
+        const freshQuery = (a: FindArgs) => a?.where?.status === 'NOT_FOUND';
+        /** The fresh pass's pool answers `rows`; every other request query answers nothing. */
+        const pool = (rows: Array<{ id: string; volumeId: string | null; activeDownloadName: string }>) =>
+            mocks.requestFindMany.mockImplementation(async (a: FindArgs) => (freshQuery(a) ? rows : []));
+        /** Saga (v1) with #61 released on `releaseDate` - the row the request's issue is looked up in. */
+        const sagaWith61 = (releaseDate: string | null) => mocks.seriesFindMany.mockResolvedValueOnce([
+            { id: 's1', metadataId: 'v1', name: 'Saga', publisher: 'Image', isManga: false,
+              issues: [{ number: '61', releaseDate, attachedVolumeId: null, attachedVolume: null }] },
+        ]);
+        const saga61 = { id: 'r_new', volumeId: 'v1', activeDownloadName: 'Saga #61' };
+        const freshArgs = () => (mocks.requestFindMany.mock.calls as unknown as [FindArgs][]).map(c => c[0]).find(freshQuery);
+
+        // Later tests get the request queries' answer they had before this block ("nothing").
+        afterEach(() => { mocks.requestFindMany.mockImplementation(async () => []); });
+
+        it('searches it again on this run, with its own year, at the background tier', async () => {
+            const released = isoDaysAgo(3);
+            pool([saga61]);
+            sagaWith61(released);
+
+            await runMonitor([]);
+
+            expect(mocks.requestUpdate).toHaveBeenCalledWith({ where: { id: 'r_new' }, data: { status: 'PENDING', retryCount: 0, progress: 0 } });
+            expect(mocks.searchAndDownload).toHaveBeenCalledWith('r_new', 'Saga #61', released.slice(0, 4), 'Image', false, false, JOB_PRIORITY.BACKGROUND);
+            expect(mocks.jobLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+                data: expect.objectContaining({
+                    jobType: 'SERIES_MONITOR',
+                    message: expect.stringMatching(/\[FRESH\] Re-searched 1 just-released request\(s\)[\s\S]*1 just-released re-searched/),
+                }),
+            }));
+        });
+
+        it('asks only for NOT_FOUND requests last searched 12+ hours ago, not yet due for the slow sweep, and not snoozed', async () => {
+            const previous = mocks.systemSettingFindUnique.getMockImplementation();
+            mocks.systemSettingFindUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
+                where.key === 'awaiting_retry_days' ? { value: '3' } : null);
+            try {
+                pool([]);
+                const before = Date.now();
+
+                await runMonitor([]);
+
+                const where = freshArgs()?.where;
+                expect(where?.status).toBe('NOT_FOUND');
+                const lt = where?.updatedAt?.lt?.getTime() ?? 0;
+                const gte = where?.updatedAt?.gte?.getTime() ?? 0;
+                expect(Math.abs(lt - (before - 12 * 60 * 60 * 1000))).toBeLessThan(60_000);
+                // The slow sweep takes everything older than awaiting_retry_days (3 here): never both passes.
+                expect(Math.abs(gte - (before - 3 * day))).toBeLessThan(60_000);
+                expect(where?.OR).toEqual([{ snoozedUntil: null }, { snoozedUntil: { lt: expect.any(Date) } }]);
+                expect(mocks.searchAndDownload).not.toHaveBeenCalled();
+            } finally {
+                mocks.systemSettingFindUnique.mockImplementation(previous ?? (async () => undefined));
+            }
+        });
+
+        it('leaves an issue released more than two weeks ago to the slow sweep', async () => {
+            pool([saga61]);
+            sagaWith61(isoDaysAgo(20));
+
+            await runMonitor([]);
+
+            expect(mocks.requestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'r_new' } }));
+            expect(mocks.searchAndDownload).not.toHaveBeenCalled();
+        });
+
+        it("doesn't search an issue whose date is still ahead", async () => {
+            pool([saga61]);
+            sagaWith61(isoDaysAgo(-3));
+
+            await runMonitor([]);
+
+            expect(mocks.searchAndDownload).not.toHaveBeenCalled();
+        });
+
+        it('leaves a request alone when its issue has no date, or no row in the library', async () => {
+            pool([saga61, { id: 'r_other', volumeId: 'v9', activeDownloadName: 'Paper Girls #1' }]);
+            sagaWith61(null);
+
+            await runMonitor([]);
+
+            expect(mocks.requestUpdate).not.toHaveBeenCalled();
+            expect(mocks.searchAndDownload).not.toHaveBeenCalled();
+        });
+    });
+
     // A monitor run can queue hundreds of searches at once (every new issue, plus every parked request
-    // past the awaiting cadence). Nobody is waiting on any one of them, so all four of its search paths
+    // past the awaiting cadence). Nobody is waiting on any one of them, so all five of its search paths
     // go to the back: a request someone makes in the meantime must not queue behind the whole run.
     it('queues every search it starts at the background tier, behind anything a person asked for', async () => {
         mocks.requestFindMany
@@ -811,7 +908,8 @@ describe('Cron: BullMQ Worker Router', () => {
             ])
             .mockResolvedValueOnce([   // Phase 3b: a parked request past the awaiting cadence
                 { id: 'req_park', volumeId: null, activeDownloadName: 'X-Men #5', status: 'MANUAL_DDL', retryCount: 0, downloadLink: 'https://getcomics.org/dls/x' }
-            ]);
+            ])
+            .mockResolvedValueOnce([]); // Phase 3c: the fresh-release pass (its own BACKGROUND check is below)
         mocks.seriesFindMany.mockResolvedValueOnce([
             { id: 's2', metadataId: 'v2', publisher: 'Image', isManga: false, issues: [{ number: '70', releaseDate: '2020-01-01' }] }
         ]);
@@ -839,7 +937,8 @@ describe('Cron: BullMQ Worker Router', () => {
                 { id: 'req_later', volumeId: 'v1', activeDownloadName: 'Absolute Batman: Ark-M #1' },
                 { id: 'req_out', volumeId: 'v2', activeDownloadName: 'Absolute Batman: Ark-M #1' }
             ])
-            .mockResolvedValueOnce([]); // Phase 3b
+            .mockResolvedValueOnce([]) // Phase 3b
+            .mockResolvedValueOnce([]); // Phase 3c: the fresh-release pass
         mocks.seriesFindMany.mockResolvedValueOnce([
             // v1: the run's #1 is long out, the Special's #1 is not.
             { id: 's1', metadataId: 'v1', name: 'Absolute Batman', publisher: 'DC Comics', isManga: false, issues: [

@@ -4,7 +4,8 @@
 // and the profile's activity list, which used to hard-code their own labels (Request Management printed
 // AWAITING_RELEASE and MANUAL_DDL raw).
 //
-// The two WAITING states are re-searched by the monitor's parked sweep every awaiting_retry_days and
+// The two WAITING states are re-searched by the monitor's parked sweep every awaiting_retry_days (a
+// NOT_FOUND issue released in the last two weeks on every run instead - queue.ts Phase 3c, beta.040) and
 // are never a health error:
 //   NOT_FOUND        - searched every source, nothing had it yet (queue.ts, the engine's no-match answer);
 //   AWAITING_RELEASE - the provider says the issue is out but gives no release date, so the monitor

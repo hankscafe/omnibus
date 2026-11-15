@@ -68,9 +68,10 @@ export async function GET(request: Request) {
     const parsedEditor = safeParse((issue as any).editor);
     const parsedTranslator = safeParse((issue as any).translator);
     const parsedTags = safeParse((issue as any).tags);
-    // #199 Call-3 Beta B: the typed/scalar per-issue remainder, returned on BOTH response paths so
-    // the (Beta C) editor never loads blanks it could then save over. Providers don't supply these —
-    // they come from files, embeds, and admins — so the deep-fetch path returns the stored values.
+    // #199 Call-3 Beta B: the typed/scalar per-issue remainder, returned on EVERY reply (the Metron
+    // deep fetch included since beta.039) so the (Beta C) editor never loads blanks it could then
+    // save over. Providers don't supply these — they come from files, embeds, and admins — so the
+    // deep-fetch replies return the stored values. LibraryIssueDetail requires them on all three.
     const issueComicInfoRest = {
         tags: parsedTags,
         mainCharacterOrTeam: (issue as any).mainCharacterOrTeam ?? null,
@@ -139,6 +140,12 @@ export async function GET(request: Request) {
                     const mergedArcs = mergeList(deepData.storyArcs, parsedStoryArcs);
                     const finalStoryArcs = mergedArcs.length > 0 ? mergedArcs : ["NONE"];
                     const finalTeams = mergeList(deepData.teams, parsedTeams);
+                    // Metron's own inker/editor/translator credits (the provider splits them out) — stored
+                    // and answered like ComicVine's. Until beta.039 this reply had none of them, so the
+                    // editor and the reader's tagging, loading from it, saved blanks over the stored ones.
+                    const finalInker = mergeList(deepData.inker, parsedInker);
+                    const finalEditor = mergeList(deepData.editor, parsedEditor);
+                    const finalTranslator = mergeList(deepData.translator, parsedTranslator);
 
                     await prisma.issue.update({
                         where: { id: issue.id },
@@ -148,6 +155,9 @@ export async function GET(request: Request) {
                             coverArtists: JSON.stringify(finalCoverArtists),
                             colorists: JSON.stringify(finalColorists),
                             letterers: JSON.stringify(finalLetterers),
+                            inker: JSON.stringify(finalInker),
+                            editor: JSON.stringify(finalEditor),
+                            translator: JSON.stringify(finalTranslator),
                             characters: JSON.stringify(finalCharacters),
                             storyArcs: JSON.stringify(finalStoryArcs),
                             teams: JSON.stringify(finalTeams),
@@ -168,12 +178,17 @@ export async function GET(request: Request) {
                         coverArtists: finalCoverArtists,
                         colorists: finalColorists,
                         letterers: finalLetterers,
+                        inker: finalInker,
+                        editor: finalEditor,
+                        translator: finalTranslator,
                         characters: finalCharacters,
                         genres: parsedGenres,
                         storyArcs: finalStoryArcs,
                         teams: finalTeams,
                         locations: parsedLocations,
-                        description: safeDescription(newDescription)
+                        ...issueComicInfoRest,
+                        description: safeDescription(newDescription),
+                        hasCustomMetadata: !!issue.hasCustomMetadata
                     } satisfies LibraryIssueDetail);
                 }
 

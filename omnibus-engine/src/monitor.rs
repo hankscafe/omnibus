@@ -2,7 +2,8 @@
 // "partial" split: this engine module does the multi-minute API fetch + match + skeleton-upsert
 // (Phase 1 Metron Oracle: the upcoming window, in full weekly and incrementally between — #216;
 // Phase 2 ComicVine 25 oldest-monitored series × 30
-// issues), and returns the monitored, matched, not-yet-in-library issues as *candidates*. The Node
+// issues; without Metron credentials, then the window's candidates from the local rows — beta.041),
+// and returns the monitored, matched, not-yet-in-library issues as *candidates*. The Node
 // worker keeps request creation + searchAndDownload (BullMQ) + the Phase 3 UNRELEASED upgrade sweep.
 use anyhow::Result;
 use crate::db::Db;
@@ -782,6 +783,20 @@ fn window_candidates(
     dated.into_iter().map(|(_, c)| c).collect()
 }
 
+/// Calendar fix B (beta.041): appends the candidates no earlier phase sent — the same volume and the
+/// same issue number (is_same_issue: "005" is "5") is one issue — and returns how many it added.
+fn extend_new_candidates(candidates: &mut Vec<MonitorCandidate>, more: Vec<MonitorCandidate>) -> usize {
+    let mut added = 0;
+    for c in more {
+        if candidates.iter().any(|e| e.volume_id == c.volume_id && is_same_issue(&e.issue_number, &c.issue_number)) {
+            continue;
+        }
+        candidates.push(c);
+        added += 1;
+    }
+    added
+}
+
 /// Phase 1 — Metron Oracle: bring the upcoming window up to date (in full once a week, otherwise only
 /// what changed — #216), match what Metron sent to local series, upsert skeletons and heal strays,
 /// then emit candidates for monitored series from the local rows. Returns how many issues Metron sent.
@@ -1099,9 +1114,11 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
     // something is monitored: the window feeds monitored series' requests and the calendar's tracked
     // view, and asking Metron for it with nothing to feed only costs Metron (#216).
     let mut metron_fetched = 0;
+    let mut window_sent = false;
     if let Some(auth) = crate::metron_client::load_auth(&db.pool).await {
         if series.iter().any(|s| s.monitored) {
             metron_fetched = phase1_metron(&db, &client, &auth, &series, &mut issues, &coverage, &mut strays, &mut skeletons_created, &mut candidates, &mut notes).await;
+            window_sent = true;
         } else {
             notes.push("[Phase 1] Nothing is monitored, so Metron wasn't asked for upcoming releases.".to_string());
         }
@@ -1114,6 +1131,22 @@ pub async fn run_series_monitor(db: Db) -> Result<MonitorOutput> {
     if let Some(key) = cv_api_key {
         if let Err(e) = phase2_comicvine(&db, &client, &key, &mut issues, &coverage, &mut skeletons_created, &mut candidates).await {
             notes.push(format!("[Phase 2] ComicVine sync error: {}", e));
+        }
+    }
+
+    // Calendar fix B (beta.041): without Metron credentials Phase 1 never ran, and its last step with it —
+    // every monitored series' unowned row dated inside the window, from the local rows. Phase 2 reaches
+    // only 25 ComicVine series a run, so an issue already on the Calendar waited for the rotation to come
+    // round to its series. The same local pass runs here instead (no API call), after Phase 2 so its new
+    // skeletons and corrected dates count; an issue Phase 2 already sent isn't sent twice.
+    if !window_sent {
+        let (from, to) = window_bounds(Utc::now().date_naive());
+        let added = extend_new_candidates(&mut candidates, window_candidates(&series, &issues, &coverage, from, to));
+        if added > 0 {
+            notes.push(format!(
+                "[Local] {} issue(s) of monitored series dated {} to {} wanted from the library's own rows (no Metron credentials).",
+                added, from, to
+            ));
         }
     }
 
@@ -1751,6 +1784,77 @@ mod tests {
         assert!(!out.candidates[0].is_released);
         assert!(!out.notes.iter().any(|n| n.contains("#208 audit")), "an in-window stray costs the audit nothing: {:?}", out.notes);
         assert_eq!(load_window_sync(&db).await, None, "a fetch that didn't finish writes no state");
+    }
+
+    // ==== Calendar fix B (beta.041): without Metron credentials Phase 1 never ran, and its last step — the
+    // window's candidates from the local rows — with it. Phase 2 reaches only the 25 least-recently-checked
+    // ComicVine series a run, so an issue already on the Calendar waited for the rotation to come round to its
+    // series. The same local pass now runs after Phase 2 whenever Phase 1 didn't.
+
+    fn cand(volume: &str, number: &str) -> MonitorCandidate {
+        MonitorCandidate {
+            volume_id: volume.into(), metadata_source: "COMICVINE".into(), search_name: format!("V{} #{}", volume, number),
+            issue_number: number.into(), issue_year: "2026".into(), is_released: true, has_date: true,
+            publisher: "Marvel".into(), is_manga: false, image_url: None,
+        }
+    }
+
+    #[test]
+    fn the_local_pass_adds_only_the_issues_no_earlier_phase_sent() {
+        let mut got = vec![cand("160511", "5")];
+
+        let added = extend_new_candidates(&mut got, vec![cand("160511", "005"), cand("160511", "6"), cand("999", "5")]);
+
+        assert_eq!(added, 2);
+        assert_eq!(
+            got.iter().map(|c| (c.volume_id.as_str(), c.issue_number.as_str())).collect::<Vec<_>>(),
+            vec![("160511", "5"), ("160511", "6"), ("999", "5")],
+            "#005 is #5 of the same volume, sent already; another volume's #5 is its own issue"
+        );
+    }
+
+    /// A ComicVine-sourced row of `series_id` released `days` from today (negative = already out).
+    async fn dated_issue(db: &Db, id: &str, series_id: &str, num: &str, path: Option<&str>, days: i64) {
+        let date = (Utc::now().date_naive() + chrono::Duration::days(days)).format("%Y-%m-%d").to_string();
+        sqlx::query(r#"INSERT INTO "Issue" (id, "seriesId", number, "filePath", "releaseDate", "metadataId", "metadataSource") VALUES ($1, $2, $3, $4, $5, $6, 'COMICVINE')"#)
+            .bind(id).bind(series_id).bind(num).bind(path).bind(&date).bind(format!("cv_{}", id))
+            .execute(&db.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn without_metron_the_monitored_series_own_rows_in_the_window_are_wanted() {
+        // No Metron credentials and no ComicVine key: Phase 1 and Phase 2 both skip, nothing touches the network.
+        let db = fixture("local_window").await;
+        insert_series(&db, "s1", "Saga", "Image", 2012, "4000", "COMICVINE", 1, None).await;
+        insert_series(&db, "s2", "Paper Girls", "Image", 2015, "5000", "COMICVINE", 0, None).await;
+        dated_issue(&db, "out", "s1", "61", None, -3).await;                          // out three days ago
+        dated_issue(&db, "soon", "s1", "62", None, 10).await;                         // out in ten days
+        dated_issue(&db, "old", "s1", "40", None, -20).await;                         // left the window
+        dated_issue(&db, "owned", "s1", "60", Some("/lib/Saga 060 (2022).cbz"), -10).await; // on disk
+        dated_issue(&db, "unmon", "s2", "1", None, -3).await;                         // not monitored
+
+        let out = run_series_monitor(db.clone()).await.unwrap();
+
+        assert_eq!(
+            out.candidates.iter().map(|c| (c.search_name.as_str(), c.is_released, c.volume_id.as_str())).collect::<Vec<_>>(),
+            vec![("Saga #61", true, "4000"), ("Saga #62", false, "4000")],
+            "the released one is searched now, the upcoming one waits as UNRELEASED - as on a Metron install"
+        );
+        assert!(out.notes.iter().any(|n| n.starts_with("[Local] 2 issue(s) of monitored series")), "{:?}", out.notes);
+        assert_eq!(out.metron_fetched, 0);
+    }
+
+    #[tokio::test]
+    async fn with_metron_the_window_is_phase_1s_and_each_issue_comes_once() {
+        let db = fixture("local_window_metron").await;
+        with_metron_blocked(&db).await;
+        insert_series(&db, "s1", "Saga", "Image", 2012, "4000", "COMICVINE", 1, None).await;
+        dated_issue(&db, "out", "s1", "61", None, -3).await;
+
+        let out = run_series_monitor(db.clone()).await.unwrap();
+
+        assert_eq!(out.candidates.iter().map(|c| c.search_name.as_str()).collect::<Vec<_>>(), vec!["Saga #61"]);
+        assert!(!out.notes.iter().any(|n| n.starts_with("[Local]")), "Phase 1 already sent the window: {:?}", out.notes);
     }
 
     #[test]

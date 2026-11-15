@@ -10,11 +10,12 @@ import { GET } from '@/app/api/calendar/route';
 const mocks = vi.hoisted(() => ({
     getServerSession: vi.fn(),
     findManyIssues: vi.fn(),
+    findManyRequests: vi.fn(),
 }));
 
 vi.mock('next-auth/next', () => ({ getServerSession: mocks.getServerSession }));
 vi.mock('@/lib/db', () => ({
-    prisma: { issue: { findMany: mocks.findManyIssues } }
+    prisma: { issue: { findMany: mocks.findManyIssues }, request: { findMany: mocks.findManyRequests } }
 }));
 vi.mock('@/lib/library-access', () => ({
     getAccessibleLibraryIds: vi.fn().mockResolvedValue('ALL'),
@@ -44,6 +45,7 @@ const weekReq = () => new Request('http://localhost/api/calendar?weekOffset=0');
 describe('API Route: GET /api/calendar (tracked-series week view)', () => {
     beforeEach(() => {
         mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'ADMIN' } });
+        mocks.findManyRequests.mockResolvedValue([]);
     });
 
     it('marks a future release with no file as UNRELEASED', async () => {
@@ -131,5 +133,108 @@ describe('API Route: GET /api/calendar scope contract', () => {
 
         const where = mocks.findManyIssues.mock.calls[0][0].where;
         expect(where.series.follows).toEqual({ some: { userId: 'u1' } });
+    });
+});
+
+// Calendar fix C (beta.042): a "Released" card couldn't say whether anything was fetching the issue (field
+// report: monitored issues showed RELEASED and never downloaded). Each week row now carries its request's
+// status, found the way the monitor and the search worker find a request's issue.
+describe('API Route: GET /api/calendar - the request behind each row', () => {
+    const series = { name: 'Batman', folderPath: '/comics/DC/Batman (2016)', coverUrl: null, publisher: 'DC Comics', metadataId: '4000' };
+    const row = (overrides: Record<string, unknown> = {}) => baseIssue({
+        releaseDate: isoDaysFromNow(-3), attachedVolumeId: null, attachedVolume: null, series, ...overrides,
+    });
+    const request = (overrides: Record<string, unknown> = {}) => ({
+        volumeId: '4000', issueNumber: '5', activeDownloadName: 'Batman #5', status: 'NOT_FOUND', updatedAt: new Date(), ...overrides,
+    });
+    const statuses = async () => {
+        const data = await (await GET(weekReq())).json();
+        return Object.fromEntries(data.releases.map((r: { id: string; requestStatus: unknown }) => [r.id, r.requestStatus]));
+    };
+
+    beforeEach(() => {
+        mocks.getServerSession.mockResolvedValue({ user: { id: 'u1', role: 'ADMIN' } });
+        mocks.findManyRequests.mockResolvedValue([]);
+    });
+
+    it("answers the status of the issue's request, asking only for this week's series and never a cancelled one", async () => {
+        mocks.findManyIssues.mockResolvedValue([row()]);
+        mocks.findManyRequests.mockResolvedValue([request()]);
+
+        expect(await statuses()).toEqual({ iss_1: 'NOT_FOUND' });
+
+        const args = mocks.findManyRequests.mock.calls[0][0];
+        // A series' requests are filed under its provider id, or its own id when it has none.
+        expect([...args.where.volumeId.in].sort()).toEqual(['4000', 'ser_1']);
+        expect(args.where.status).toEqual({ not: 'CANCELLED' });
+        expect(args.orderBy).toEqual({ updatedAt: 'desc' });
+        // The rows' lane and the series' provider id feed the match.
+        const include = mocks.findManyIssues.mock.calls[0][0].include;
+        expect(include.series.select.metadataId).toBe(true);
+        expect(include.attachedVolume).toEqual({ select: { name: true, kind: true } });
+    });
+
+    it('takes the most recently updated request when there are several', async () => {
+        mocks.findManyIssues.mockResolvedValue([row()]);
+        mocks.findManyRequests.mockResolvedValue([request({ status: 'DOWNLOADING' }), request({ status: 'NOT_FOUND' })]);
+
+        expect(await statuses()).toEqual({ iss_1: 'DOWNLOADING' });
+    });
+
+    it('answers null for a row with no request, and for requests of another issue or another series', async () => {
+        mocks.findManyIssues.mockResolvedValue([row()]);
+        mocks.findManyRequests.mockResolvedValue([
+            request({ issueNumber: '6', activeDownloadName: 'Batman #6' }),
+            request({ volumeId: '9999' }),
+        ]);
+
+        expect(await statuses()).toEqual({ iss_1: null });
+    });
+
+    it("reads the request's stored issue number before its name (a pack title), and the name when none is stored", async () => {
+        mocks.findManyIssues.mockResolvedValue([row(), row({ id: 'iss_2', number: '7' })]);
+        mocks.findManyRequests.mockResolvedValue([
+            request({ issueNumber: '5', activeDownloadName: 'Batman #3-6 (2016)', status: 'DOWNLOADING' }),
+            request({ issueNumber: null, activeDownloadName: 'Batman #7', status: 'MANUAL_DDL' }),
+        ]);
+
+        expect(await statuses()).toEqual({ iss_1: 'DOWNLOADING', iss_2: 'MANUAL_DDL' });
+    });
+
+    it("puts a Special's request on the Special, never on the run's issue of the same number (#255)", async () => {
+        const arkM = { name: 'Batman: Ark-M', kind: 'SPECIAL' };
+        mocks.findManyIssues.mockResolvedValue([
+            row({ id: 'run_1', number: '1' }),
+            row({ id: 'ark_1', number: '1', attachedVolumeId: 'av_ark', attachedVolume: arkM }),
+        ]);
+        mocks.findManyRequests.mockResolvedValue([request({ issueNumber: '1', activeDownloadName: 'Batman: Ark-M #1', status: 'NOT_FOUND' })]);
+
+        expect(await statuses()).toEqual({ run_1: null, ark_1: 'NOT_FOUND' });
+    });
+
+    it("leaves annual and collected-edition rows without one: their requests are filed under the lane's volume", async () => {
+        mocks.findManyIssues.mockResolvedValue([
+            row({ id: 'ann_1', number: '1', attachedVolumeId: 'av_ann', attachedVolume: { name: 'Batman Annual', kind: 'ANNUAL' } }),
+        ]);
+        mocks.findManyRequests.mockResolvedValue([request({ issueNumber: '1', activeDownloadName: 'Batman #1', status: 'DOWNLOADING' })]);
+
+        expect(await statuses()).toEqual({ ann_1: null });
+    });
+
+    it("tells a non-admin too - it's the library's state, like In Library", async () => {
+        mocks.getServerSession.mockResolvedValue({ user: { id: 'u2', role: 'USER' } });
+        mocks.findManyIssues.mockResolvedValue([row()]);
+        mocks.findManyRequests.mockResolvedValue([request({ status: 'PENDING' })]);
+
+        expect(await statuses()).toEqual({ iss_1: 'PENDING' });
+    });
+
+    it('asks for no requests in an empty week', async () => {
+        mocks.findManyIssues.mockResolvedValue([]);
+
+        const data = await (await GET(weekReq())).json();
+
+        expect(data.releases).toEqual([]);
+        expect(mocks.findManyRequests).not.toHaveBeenCalled();
     });
 });

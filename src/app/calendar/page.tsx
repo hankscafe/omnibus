@@ -13,7 +13,9 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { FollowBell } from "@/components/follow-bell"
+import { CalendarRequestChip } from "@/components/calendar-request-chip"
 import { hasMetronCredentials } from "@/lib/metron/credentials"
+import type { CalendarLibraryState } from "@/types/api/calendar"
 
 interface UpcomingIssue {
     id: string | number;
@@ -31,7 +33,10 @@ interface UpcomingIssue {
     parsedDay?: string;
     monitored?: boolean;
     inLibrary?: boolean;
-    libraryState?: 'UNRELEASED' | 'RELEASED' | 'IN_LIBRARY';
+    // The tracked tab and the personal pull list (GET /api/calendar, CalendarRelease): where the issue
+    // stands in the library, and what its request is doing (beta.042).
+    libraryState?: CalendarLibraryState;
+    requestStatus?: string | null;
 }
 
 export default function CalendarPage() {
@@ -251,6 +256,7 @@ export default function CalendarPage() {
                                     <div>
                                         <p className="font-bold text-xs truncate text-foreground group-hover:text-primary transition-colors" title={issue.seriesName}>{issue.seriesName}</p>
                                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mt-0.5">Issue #{issue.issueNumber}</p>
+                                        <CalendarRequestChip state={issue.libraryState} status={issue.requestStatus} />
                                     </div>
                                     <div className="mt-2 pt-2 border-t border-border">
                                         <Badge variant="secondary" className="w-full justify-center bg-muted text-muted-foreground border-border text-[10px] font-mono">{issue.parsedDay}</Badge>

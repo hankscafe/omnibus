@@ -287,7 +287,13 @@ function ReaderContent() {
   useEffect(() => {
     if (!filePath) return;
     setLoading(true);
-    
+    // Progress syncing starts half a second after the issue loads. That timer belongs to this load: it
+    // is cancelled when the reader closes or moves to another issue, and a load that settles after that
+    // starts none. Until beta.043 neither held - the Jobs page's twin fired after a test file's jsdom
+    // teardown and failed a whole CI run.
+    let alive = true;
+    let readyTimer: ReturnType<typeof setTimeout> | undefined;
+
     // Reset reader state immediately when navigating to a new issue
     setCurrentIndex(0);
     setIsReadyToSync(false);
@@ -374,10 +380,14 @@ function ReaderContent() {
 
         setIsMarkedRead(progressData?.isCompleted || false);
         setIssueId(progressData?.issueId || null);
-        setTimeout(() => setIsReadyToSync(true), 500);
+        if (alive) readyTimer = setTimeout(() => setIsReadyToSync(true), 500);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
+    return () => {
+      alive = false;
+      if (readyTimer) clearTimeout(readyTimer);
+    };
   }, [filePath, seriesPath, pageParam, listId, listItemId, getAuthHeaders]);
 
   // Sync Progress

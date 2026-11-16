@@ -73,6 +73,20 @@ export default function ScheduledJobsPage() {
   const { toast } = useToast()
 
   const [isDataLoaded, setIsDataLoaded] = useState(false)
+  // The unsaved-changes baseline is taken half a second after the settings load (fetchConfig). That
+  // timer is cancelled when the page goes away, and never started once it has: the load can settle
+  // after an unmount. Until beta.043 it was neither - under vitest it fired after a test file's jsdom
+  // was torn down and failed a whole run ("window is not defined"). The mount flag is set again on
+  // every mount, so StrictMode's development double mount doesn't leave it false.
+  const mountedRef = useRef(true)
+  const dataLoadedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+      mountedRef.current = true
+      return () => {
+          mountedRef.current = false
+          if (dataLoadedTimerRef.current) clearTimeout(dataLoadedTimerRef.current)
+      }
+  }, [])
   const [initialStateHash, setInitialStateHash] = useState("")
   const [unsavedModalOpen, setUnsavedModalOpen] = useState(false)
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null)
@@ -186,8 +200,10 @@ export default function ScheduledJobsPage() {
     } catch (e) {
       toast({ title: "Error", description: "Failed to load schedules.", variant: "destructive" });
     } finally {
-      setLoading(false)
-      setTimeout(() => setIsDataLoaded(true), 500);
+      if (mountedRef.current) {
+        setLoading(false)
+        dataLoadedTimerRef.current = setTimeout(() => setIsDataLoaded(true), 500);
+      }
     }
   };
 

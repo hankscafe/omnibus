@@ -262,6 +262,12 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
+    // The unsaved-changes baseline is taken half a second after the settings load. Leaving the page
+    // cancels that timer, and a load that settles afterwards starts none - until beta.043 neither held,
+    // and the Jobs page's twin fired after a test file's jsdom teardown and failed a whole CI run. Each
+    // mount has its own flag, so StrictMode's development double mount is unaffected.
+    let alive = true;
+    let baselineTimer: ReturnType<typeof setTimeout> | undefined;
     fetch('/api/admin/config').then(res => res.json()).then((data: AdminConfigResponse) => {
         setConfiguredLibraries(data.libraries || []);
         setConfiguredClients(data.downloadClients || []);
@@ -404,7 +410,7 @@ export default function SettingsPage() {
         setCustomProwlarrCategories(currentCats.filter((c:string) => !predefinedIds.includes(c)).join(', '));
 
         setConfig(newConfig);
-        setTimeout(() => setIsDataLoaded(true), 500);
+        if (alive) baselineTimer = setTimeout(() => setIsDataLoaded(true), 500);
     })
 
     fetch('/api/admin/users').then(res => res.json()).then(data => {
@@ -413,6 +419,10 @@ export default function SettingsPage() {
     fetch('/api/admin/api-keys').then(res => res.json()).then(data => {
         if (Array.isArray(data)) setApiKeys(data);
     });
+    return () => {
+        alive = false;
+        if (baselineTimer) clearTimeout(baselineTimer);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

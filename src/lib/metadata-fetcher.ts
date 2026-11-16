@@ -19,6 +19,7 @@ import { CV_VOLUME_CREDIT_FIELDS, parseVolumeCredits, persistSeriesCredits } fro
 import { syncedReleaseDate } from '@/lib/utils/synced-release-date';
 import { comicInfoWritesEnabled } from '@/lib/comicinfo-writes';
 import { bookTypeFromEvidence, bookTypeFromGuess } from '@/lib/book-type';
+import { claimLocalAttachments } from '@/lib/local-attachment-claim';
 
 // ComicVine signals its velocity/burst block with HTTP 420 (not 429) -- a separate throttle from
 // the documented 200/hr quota that can trip even well under it. Engine parity: metadata.rs
@@ -89,6 +90,15 @@ export async function syncSeriesMetadata(metadataId: string, folderPath: string,
 
     // Update this line:
     Logger.log(`[Metadata] Fetching data for: "${series.name}" (ID: ${metadataId} via ${metadataSource})`, 'info');
+
+    // #257: the LOCAL editions claim their books by name before the pairing below, so an unbound
+    // "Vol. 1" of one is never taken for the run's #1 (engine parity: metadata.rs, before run_rows).
+    try {
+        const claimed = await claimLocalAttachments(series.id, series.name || '');
+        if (claimed > 0) Logger.log(`[Metadata] ${claimed} book(s) of "${series.name}" joined their local edition before the sync.`, 'info');
+    } catch (e) {
+        Logger.log(`[Metadata] Local edition claim failed for "${series.name}": ${getErrorMessage(e)}`, 'warn');
+    }
 
     // cover_source policy, parity with the engine's resolve_cover (issue #194 follow-up): a custom
     // cover is never overwritten; in 'archive' mode an existing local/extracted cover file wins.

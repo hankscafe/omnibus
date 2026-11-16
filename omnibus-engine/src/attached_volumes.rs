@@ -123,6 +123,26 @@ pub async fn sync_series_attachments(db: &Db, client: &Client, series_id: &str) 
     }
 }
 
+/// #257: the LOCAL editions' name claim on its own, run BEFORE the series' provider pairing. A
+/// LOCAL edition needs no provider call, and a book still unbound at sync time (indexed by a scan
+/// that predates its lane binding, or put back by hand) must be on its lane before the
+/// number-anchored pairing could heal "Vol. 1" into the run's #1. sync_series_attachments still
+/// runs after the pairing; claiming the same row twice is a no-op.
+pub async fn claim_local_attachments(db: &Db, client: &Client, series_id: &str) {
+    let ids: Vec<String> = sqlx::query_scalar::<_, String>(
+        r#"SELECT id FROM "AttachedVolume" WHERE "seriesId" = $1 AND "metadataSource" = 'LOCAL' ORDER BY "createdAt" ASC"#,
+    )
+    .bind(series_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    for id in ids {
+        if let Err(e) = sync_attachment(db, client, &id, true).await {
+            log::warn!("[Attached] Local claim failed for attachment {} on series {}: {:?}", id, series_id, e);
+        }
+    }
+}
+
 /// #239: the Series that keep a RETAINED attachment's volume as their own — the admin chose "Leave
 /// it as its own series". The child is found exactly the way the attach POST finds it (same
 /// metadataSource, metadataId = volumeId, not the parent), so a rematch or delete of the child needs

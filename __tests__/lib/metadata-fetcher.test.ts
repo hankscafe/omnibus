@@ -395,6 +395,23 @@ describe('Metadata Pipeline: ComicVine Sync Engine', () => {
         expect(mocks.issueCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ number: '1', metadataId: '999' }) }));
     });
 
+    it("still syncs when the local edition claim fails (#257)", async () => {
+        // The claim is a best-effort step before the pairing, as in the engine: a failed claim is
+        // logged and the run's issues still sync.
+        mocks.attachedVolumeFindMany.mockRejectedValue(new Error('db locked'));
+        mocks.axiosGet.mockImplementation(async (url: string) => {
+            if (url.includes('/volume/')) return { data: { results: { name: 'Batman', start_year: '2016', publisher: { name: 'DC Comics' }, image: null } } };
+            if (url.includes('/issues/')) return { data: { number_of_total_results: 1, results: [{ id: 999, issue_number: '1', name: 'I Am Gotham Part 1', store_date: '2016-06-01' }] } };
+            return { data: Buffer.from('img') };
+        });
+        mocks.existsSync.mockReturnValue(false);
+
+        const result = await syncSeriesMetadata('123', '/comics/Batman', 'COMICVINE');
+        expect(result.success).toBe(true);
+        expect(mocks.attachedVolumeFindMany).toHaveBeenCalled();
+        expect(mocks.issueCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ number: '1', metadataId: '999' }) }));
+    });
+
     // Library-aware recommendations (Beta A): the volume call asks for the VOLUME resource's credit
     // fields and lands them in SeriesCredit on every sync — the same rows the engine twin writes.
     it("asks the volume for people/characters and writes them to SeriesCredit in one transaction", async () => {

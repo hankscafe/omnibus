@@ -37,6 +37,8 @@ describe('claimLocalAttachments', () => {
 
         expect(await claimLocalAttachments('s1', 'Saga')).toBe(2);
 
+        // Only this series' editions compete for its files.
+        expect(mocks.attachedVolumeFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: { seriesId: 's1' } }));
         expect(mocks.issueFindMany).toHaveBeenCalledWith(expect.objectContaining({
             where: { seriesId: 's1', attachedVolumeId: null, filePath: { not: null }, NOT: { filePath: '' } },
         }));

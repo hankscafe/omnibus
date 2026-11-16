@@ -62,8 +62,8 @@ interface Issue {
 // The detail pane's item: a search result (a volume - isVolume) or one of its issues (the first, or the
 // one picked under More in this Series), with the volume's provider id and source. It is then topped up
 // from GET /api/issue-details, whose fields win - except an empty name, an "Unknown" publisher, a "????"
-// year, no image and a blank description - and whose volumeId may be null (a Metron issue the provider
-// gave no series for).
+// year, no image, a blank description and a missing volumeId (a Metron issue the provider gave no series
+// for answers null; the search result's volume then stays - beta.044).
 type SelectedItem = Omit<Partial<IssueDetailsReply>, 'error'> & {
   id: number | string;
   name: string;
@@ -202,6 +202,11 @@ export function RequestSearch() {
             return {
                 ...prev,
                 ...data,
+                // A reply with no volume (Metron's, when its issue names no series) keeps the search
+                // result's. Until beta.044 its null replaced it, and every request from the pane went out
+                // with cvId null: an issue was filed under volume "0", tied to no series, and a series
+                // request made the server guess the series by its name.
+                volumeId: data.volumeId ?? prev.volumeId,
                 name: data.name || prev?.name,
                 publisher: (data.publisher && data.publisher !== 'Unknown') ? data.publisher : prev?.publisher,
                 year: (data.year && data.year !== '????') ? data.year : prev?.year,

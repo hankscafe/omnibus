@@ -95,7 +95,11 @@ describe('RequestSearch: the detail pane', () => {
         expect(screen.getByText('Pending Approval')).toBeInTheDocument();
     });
 
-    it('details with no volume id: the request posts none, and is marked like any other', async () => {
+    // beta.044: details with no volume id (Metron's, when its issue names no series) used to REPLACE the
+    // search result's volume with null - the request then went out with cvId null, the server filed it under
+    // volume "0", and nothing could tie it to its series again (the monitor's dedupe, the series page, the
+    // Calendar, the UNRELEASED upgrade). The search's volume now stays.
+    it("details with no volume id: the request still posts the search result's volume, and is marked like any other", async () => {
         details = { ...DETAILS, volumeId: null };
         await pickBatman();
         await screen.findByText('Gotham needs a hero.');
@@ -103,9 +107,33 @@ describe('RequestSearch: the detail pane', () => {
         await act(async () => { fireEvent.click(paneRequestIssue()); });
         await settle();
 
-        expect(requestBodies()[0]).toMatchObject({ cvId: null, name: 'Batman #1: I Am Gotham', type: 'issue' });
+        expect(requestBodies()[0]).toMatchObject({ cvId: 50, name: 'Batman #1: I Am Gotham', type: 'issue', metadataSource: 'METRON' });
         expect(screen.getAllByText('Requested').length).toBeGreaterThan(0);
         expect(screen.getByText('Pending Approval')).toBeInTheDocument();
+    });
+
+    it("details with no volume id: Request Series asks for the search result's volume, not one guessed by name", async () => {
+        details = { ...DETAILS, volumeId: null };
+        await pickBatman();
+        await screen.findByText('Gotham needs a hero.');
+
+        await act(async () => { fireEvent.click(screen.getByText('Request Series').closest('button') as HTMLElement); });
+        await act(async () => { fireEvent.click(screen.getByText('Yes, Request & Monitor')); });
+        await settle();
+
+        // A volume request with no id makes the server pick the first search hit for the name.
+        expect(requestBodies()[0]).toMatchObject({ cvId: 50, type: 'volume', monitored: true, metadataSource: 'METRON' });
+    });
+
+    it("details that name the issue's own volume: that one is posted", async () => {
+        details = { ...DETAILS, volumeId: 51 };
+        await pickBatman();
+        await screen.findByText('Gotham needs a hero.');
+
+        await act(async () => { fireEvent.click(paneRequestIssue()); });
+        await settle();
+
+        expect(requestBodies()[0]).toMatchObject({ cvId: 51, type: 'issue' });
     });
 
     it('a details reply that lands after Back changes nothing', async () => {

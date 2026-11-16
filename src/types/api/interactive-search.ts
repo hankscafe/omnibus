@@ -24,9 +24,9 @@ export interface InteractiveSearchResult {
     /** Prowlarr only: the query of the search ladder that found it, and its rung (0 = the exact term). */
     matchedQuery?: string;
     queryRung?: number;
-    /** The dialog reads these two, but the engine sends neither: the Age cell of every GetComics or Anna's
-     *  Archive row is blank, and every Usenet row reads "Grabs: 0". */
-    age?: string;
+    /** Prowlarr's grab count, when the indexer gives one (Usenet indexers do); absent otherwise. The engine
+     *  passes it through since beta.045 - every Usenet row read "Grabs: 0" before. (A direct download has no
+     *  age either: its publishDate is "N/A", and the dialog shows "-".) */
     grabs?: number;
 }
 

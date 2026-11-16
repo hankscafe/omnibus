@@ -297,6 +297,7 @@ pub async fn search(
                     info_hash: None,
                     matched_query: None,
                     query_rung: None,
+                    grabs: None,
                 });
             }
 

@@ -29,14 +29,18 @@ export async function GET(_request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Only issues that still have a file: Continue Reading opens it. Until beta.045 progress on an issue whose
+    // file was gone (the row's filePath cleared) was listed too, and its card opened the reader on path=null.
+    // Asked of the database, so the seven cards are all readable; the filter below only narrows the type.
     const recentProgress = await prisma.readProgress.findMany({
-        where: { userId: userId, isCompleted: false, totalPages: { gt: 0 } },
+        where: { userId: userId, isCompleted: false, totalPages: { gt: 0 }, issue: { filePath: { not: null }, NOT: { filePath: '' } } },
         include: { issue: { include: { series: true } } },
         orderBy: { updatedAt: 'desc' },
         take: 7
     });
+    const readable = recentProgress.flatMap(p => (p.issue.filePath ? [{ ...p, filePath: p.issue.filePath }] : []));
 
-    const items = recentProgress.map(p => {
+    const items = readable.map(p => {
         const percentage = Math.round((p.currentPage / p.totalPages) * 100);
         const folderPath = p.issue.series.folderPath;
         
@@ -52,7 +56,7 @@ export async function GET(_request: Request) {
             seriesCoverUrl = `/api/library/cover?path=${encodeURIComponent(folderPath)}`;
         }
 
-        const fileName = path.basename(p.issue.filePath || '');
+        const fileName = path.basename(p.filePath);
         const explicitMatch = fileName.match(/(?:#|issue\s*#?)\s*(-?\d+(\.\d+)?)/i);
         
         let parsedNum = p.issue.number;
@@ -62,7 +66,7 @@ export async function GET(_request: Request) {
             id: p.id,
             seriesName: p.issue.series.name || path.basename(folderPath).replace(/\s\(\d{4}\)$/, ""),
             issueNumber: parsedNum,
-            filePath: p.issue.filePath,
+            filePath: p.filePath,
             seriesPath: folderPath,
             currentPage: p.currentPage,
             totalPages: p.totalPages,

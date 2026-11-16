@@ -1022,7 +1022,7 @@ mod tests {
             guid: "g".into(), title: title.into(), size: 0, indexer: "idx".into(),
             seeders, peers, info_url: String::new(), download_url: String::new(),
             protocol: "torrent".into(), publish_date: String::new(), info_hash: None,
-            matched_query: None, query_rung: None,
+            matched_query: None, query_rung: None, grabs: None,
         }
     }
 
@@ -1440,7 +1440,7 @@ mod tests {
             guid: format!("g-{}", title), title: title.into(), size: 0, indexer: "idx".into(),
             seeders, peers, info_url: String::new(), download_url: format!("u-{}", title),
             protocol: protocol.into(), publish_date: String::new(), info_hash: None,
-            matched_query: None, query_rung: None,
+            matched_query: None, query_rung: None, grabs: None,
         }
     }
 

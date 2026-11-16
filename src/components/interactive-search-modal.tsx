@@ -40,6 +40,26 @@ interface Props {
 export const sortByQueryRung = <T extends { queryRung?: number }>(rows: T[]): T[] =>
     [...rows].sort((a, b) => (a.queryRung || 0) - (b.queryRung || 0));
 
+// One id for a release everywhere in the dialog: its row, its Hide/Block, and its Download's spinner. The
+// engine always sets a guid; a torrent may carry an info hash too. Until beta.045 a request tracked itself by
+// the info hash first while its row looked for the guid first, so a hashed torrent's row never spun.
+function releaseKey(r: InteractiveSearchResult): string;
+function releaseKey(r: ManualPick): string | null | undefined;
+function releaseKey(r: ManualPick): string | null | undefined {
+    return r.guid || r.infoHash || r.downloadUrl;
+}
+
+// What the Peers column says for a release that isn't a torrent: a direct download has no peers, and a
+// Usenet indexer's grab count is shown when it gives one (Prowlarr's `grabs`, passed through by the engine
+// since beta.045 - every Usenet row used to read "Grabs: 0").
+const peersOrGrabs = (res: InteractiveSearchResult) =>
+    res.protocol === 'ddl' || res.grabs == null ? '-' : `Grabs: ${res.grabs}`;
+
+// A direct download (GetComics, Anna's Archive) carries no date: its Age reads "-" - it was blank, read from
+// an `age` the engine never sends.
+const ageOf = (res: InteractiveSearchResult, getAge: (d: string) => string) =>
+    res.protocol === 'ddl' ? '-' : getAge(res.publishDate);
+
 // Aggressive formatter that forces 3-digit padding and strips subtitles
 const getOptimizedSearchQuery = (rawQuery: string, year?: string) => {
     if (!rawQuery) return "";
@@ -138,7 +158,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
   const handleManualRequest = async (searchResult: ManualPick, source: ReleaseSource | 'flag_admin', monitored: boolean) => {
     // A release always carries its guid (the engine sets one); only a pick with none of the three ids
     // would come out undefined, and it then tracks as nothing (null).
-    const trackingId = source === 'flag_admin' ? 'flag_admin' : (searchResult.infoHash || searchResult.guid || searchResult.downloadUrl);
+    const trackingId = source === 'flag_admin' ? 'flag_admin' : releaseKey(searchResult);
     setDownloadingId(trackingId ?? null);
     
     try {
@@ -245,11 +265,11 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                         <tbody className="divide-y border-border">
                             {loading ? (
                                 <tr><td colSpan={7} className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></td></tr>
-                            ) : results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).length === 0 ? (
+                            ) : results.filter(r => !hiddenIds.has(releaseKey(r))).length === 0 ? (
                                 <tr><td colSpan={7} className="text-center py-12 text-muted-foreground italic text-base">No results found.</td></tr>
                             ) : (
-                                results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).map((res, idx) => {
-                                    const trackingId = res.guid || res.infoHash || res.downloadUrl;
+                                results.filter(r => !hiddenIds.has(releaseKey(r))).map((res, idx) => {
+                                    const trackingId = releaseKey(res);
                                     const isTorrent = res.protocol === 'torrent';
                                     const isDdl = res.protocol === 'ddl';
                                     const isAnnas = (res.indexer || '').toLowerCase().includes('anna');
@@ -261,7 +281,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                                 {isAnnas ? "Anna's" : isDdl ? 'Direct' : res.protocol}
                                             </Badge>
                                         </td>
-                                        <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{isDdl ? res.age : getAge(res.publishDate)}</td>
+                                        <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{ageOf(res, getAge)}</td>
                                         <td className="px-4 py-3">
                                             <div
                                                 className="font-medium text-foreground break-words whitespace-normal line-clamp-3 leading-tight"
@@ -278,7 +298,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                         
                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{res.indexer}</td>
                                         <td className="px-4 py-3 font-mono text-sm text-foreground whitespace-nowrap">{formatSize(res.size)}</td>
-                                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{isTorrent ? <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold"><Users className="w-4 h-4"/> S: {res.seeders}</span> : isDdl ? "-" : `Grabs: ${res.grabs || 0}`}</td>
+                                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{isTorrent ? <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold"><Users className="w-4 h-4"/> S: {res.seeders}</span> : peersOrGrabs(res)}</td>
                                         <td className="px-4 py-3 whitespace-nowrap">
                                             <div className="flex items-center justify-end gap-2">
                                                 <Button variant="ghost" size="icon" className="h-9 w-9 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => setHiddenIds(prev => new Set(prev).add(trackingId))} title="Hide/Block Release"><Ban className="w-4 h-4" /></Button>
@@ -298,11 +318,11 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
             <div className="lg:hidden space-y-4 pb-6">
                 {loading ? (
                     <div className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></div>
-                ) : results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).length === 0 ? (
+                ) : results.filter(r => !hiddenIds.has(releaseKey(r))).length === 0 ? (
                     <div className="text-center py-12 text-muted-foreground italic bg-background rounded-lg border border-border text-base">No results found.</div>
                 ) : (
-                    results.filter(r => !hiddenIds.has(r.guid || r.infoHash || r.downloadUrl)).map((res, idx) => {
-                        const trackingId = res.guid || res.infoHash || res.downloadUrl;
+                    results.filter(r => !hiddenIds.has(releaseKey(r))).map((res, idx) => {
+                        const trackingId = releaseKey(res);
                         const isTorrent = res.protocol === 'torrent';
                         const isDdl = res.protocol === 'ddl';
                         const isAnnas = (res.indexer || '').toLowerCase().includes('anna');
@@ -314,7 +334,7 @@ export function InteractiveSearchModal({ isOpen, onClose, initialQuery, comicDat
                                     {isAnnas ? <Library className="w-3.5 h-3.5 mr-1.5"/> : isTorrent ? <Database className="w-3.5 h-3.5 mr-1.5"/> : isDdl ? <Globe className="w-3.5 h-3.5 mr-1.5"/> : <HardDrive className="w-3.5 h-3.5 mr-1.5"/>}
                                     {isAnnas ? "Anna's" : isDdl ? 'Direct' : res.protocol}
                                 </Badge>
-                                <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{isDdl ? res.age : getAge(res.publishDate)}</Badge>
+                                <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{ageOf(res, getAge)}</Badge>
                                 <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 bg-muted text-muted-foreground">{formatSize(res.size)}</Badge>
                                 {isTorrent && <Badge variant="outline" className="text-xs px-2 py-0.5 border-green-200 text-green-600 bg-green-50 dark:bg-green-900/20 dark:text-green-400">S: {res.seeders}</Badge>}
                                 {(res.queryRung || 0) > 0 && <Badge variant="outline" className="text-[10px] px-2 py-0.5 text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800" title={`Found via broadened query: ${res.matchedQuery || ''}`}>via broadened search</Badge>}

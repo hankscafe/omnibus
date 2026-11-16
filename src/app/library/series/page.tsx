@@ -1162,21 +1162,36 @@ function SeriesContent() {
       }
   }
 
+  // Until beta.045 the save's answer was never read (a refused save said "Review Saved!"), and the re-read's
+  // was put into the list as it came - a re-read answering { error } left the list undefined, and the page
+  // errored on its next render. A refused save now says why; a failed re-read keeps the reviews shown.
   const submitReview = async () => {
     setSubmittingReview(true);
     try {
-        await fetch('/api/reviews', {
+        const saved = await fetch('/api/reviews', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ seriesId: seriesInfo.id, rating: userReview.rating, text: userReview.text })
         });
-        toast({ title: "Review Saved!" });
+        if (!saved.ok) {
+            const refusal: { error?: string } = await saved.json().catch(() => ({}));
+            throw new Error(refusal.error || `The server answered ${saved.status}.`);
+        }
+    } catch (e) {
+        toast({ title: "Failed to save review", description: getErrorMessage(e), variant: "destructive" });
+        setSubmittingReview(false);
+        return;
+    }
+    toast({ title: "Review Saved!" });
+    try {
         const res = await fetch(`/api/reviews?seriesId=${seriesInfo.id}`);
         const data: ReviewsReply = await res.json();
-        setReviews(data.reviews);
-        setCommunityRating({ avg: data.avgRating, total: data.total });
-    } catch (e) {
-        toast({ title: "Failed to save review", variant: "destructive" });
+        if (res.ok && Array.isArray(data.reviews)) {
+            setReviews(data.reviews);
+            setCommunityRating({ avg: data.avgRating, total: data.total });
+        }
+    } catch {
+        // The review is saved; the list just isn't refreshed until the next visit.
     } finally {
         setSubmittingReview(false);
     }

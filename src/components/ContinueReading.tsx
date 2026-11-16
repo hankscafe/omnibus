@@ -102,7 +102,7 @@ export function ContinueReading() {
             <div 
               key={item.id} 
               className="group relative flex-none w-[calc(50%-0.5rem)] md:w-[calc(25%-0.75rem)] lg:w-[calc(14.285%-0.857rem)] aspect-[2/3] bg-muted rounded-lg overflow-hidden shadow-sm hover:scale-[1.03] transition-[transform,box-shadow] duration-200 cursor-pointer border border-border snap-start"
-              onClick={() => router.push(`/reader?path=${encodeURIComponent(String(item.filePath))}&series=${encodeURIComponent(item.seriesPath)}`)}
+              onClick={() => router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`)}
             >
               <DynamicCover 
                   metadataId={item.metadataId || null} 
@@ -134,7 +134,7 @@ export function ContinueReading() {
                       className="w-full min-w-0 font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md border-0" 
                       onClick={(e) => {
                           e.stopPropagation();
-                          router.push(`/reader?path=${encodeURIComponent(String(item.filePath))}&series=${encodeURIComponent(item.seriesPath)}`);
+                          router.push(`/reader?path=${encodeURIComponent(item.filePath)}&series=${encodeURIComponent(item.seriesPath)}`);
                       }}
                   >
                       <BookOpen className="w-3 h-3 shrink-0" /> <span>Resume</span>

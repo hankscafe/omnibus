@@ -89,3 +89,49 @@ describe('Interactive Search: requests', () => {
         expect(downloadIn(tableRow(TORRENT.title))).toHaveTextContent('Download');
     });
 });
+
+// beta.045 (list item 9, found in beta.037's pass): a torrent with an info hash never showed its spinner (the
+// row tracked itself by guid first, the request by info hash first); every GetComics / Anna's Archive row's
+// Age was blank (the dialog read an `age` the engine never sends); every Usenet row read "Grabs: 0" (the
+// engine dropped Prowlarr's grab count).
+describe('Interactive Search: what each row shows', () => {
+    const HASHED = release({ guid: 'g-hashed', infoHash: 'c0ffee', title: 'Saga 061 (2022) (hashed torrent)' });
+    const NZB = release({ guid: 'g-nzb', protocol: 'usenet', indexer: 'NZBgeek', title: 'Saga 061 (2022) (nzb)', seeders: 0, peers: 0, grabs: 37 });
+    const NZB_NO_GRABS = release({ guid: 'g-nzb2', protocol: 'usenet', indexer: 'DrunkenSlug', title: 'Saga 061 (2022) (nzb, no grabs)', seeders: 0, peers: 0 });
+    const cells = (title: string) => within(tableRow(title)).getAllByRole('cell').map(c => c.textContent?.trim());
+    const AGE = 1;
+    const PEERS = 5;
+
+    beforeEach(() => {
+        fetchMock = stubFetchRouter([
+            ['/api/search/interactive', () => ok({ prowlarr: [HASHED, NZB, NZB_NO_GRABS], getcomics: [DIRECT], annas_archive: [] })],
+            ['/api/request/manual', () => new Promise(resolve => {
+                finishRequest = () => resolve({ ok: true, json: async () => ({ message: 'Queued' }) });
+            })],
+        ]);
+    });
+
+    it('a torrent with an info hash spins on its own row while its request is out', async () => {
+        await open();
+        await act(async () => { fireEvent.click(downloadIn(tableRow(HASHED.title))); });
+
+        expect(manualBodies()[0]).toMatchObject({ source: 'prowlarr', searchResult: HASHED });
+        expect(downloadIn(tableRow(HASHED.title))).not.toHaveTextContent('Download');
+        expect(downloadIn(tableRow(NZB.title))).toHaveTextContent('Download');
+    });
+
+    it('a direct download has no date: its Age reads "-", a dated release its age', async () => {
+        await open();
+
+        expect(cells(DIRECT.title)[AGE]).toBe('-');
+        expect(cells(HASHED.title)[AGE]).toMatch(/^(\d+d|Today)$/);
+    });
+
+    it("a Usenet release shows the indexer's grab count, or \"-\" when it gives none", async () => {
+        await open();
+
+        expect(cells(NZB.title)[PEERS]).toBe('Grabs: 37');
+        expect(cells(NZB_NO_GRABS.title)[PEERS]).toBe('-');
+        expect(cells(DIRECT.title)[PEERS]).toBe('-');
+    });
+});

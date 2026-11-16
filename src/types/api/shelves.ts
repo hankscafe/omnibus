@@ -36,7 +36,8 @@ export interface RecentProgressItem {
     seriesName: string;
     /** The number in the file name ("#12", "issue 12"), else the issue's own. */
     issueNumber: string;
-    filePath: string | null;
+    /** The issue's file, which the card opens. Always there: the route lists only issues with a file (beta.045). */
+    filePath: string;
     /** The series folder. */
     seriesPath: string;
     currentPage: number;

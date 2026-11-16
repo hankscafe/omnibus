@@ -17,6 +17,8 @@ pub struct RawProwlarrResult {
     pub protocol: Option<String>,
     pub publish_date: Option<String>,
     pub info_hash: Option<String>,
+    /// How many times the release was grabbed - what Usenet indexers report (beta.045).
+    pub grabs: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -40,6 +42,11 @@ pub struct ProwlarrResult {
     pub matched_query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_rung: Option<u8>,
+    // Prowlarr's grab count, when the indexer gives one (Usenet indexers do). The Interactive Search dialog
+    // shows it for a Usenet release; until beta.045 it was dropped here and every Usenet row read "Grabs: 0".
+    // Absent (skipped) when there is none - GetComics' and Anna's results, most torrents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grabs: Option<i64>,
 }
 
 /// Parse the comma-separated Prowlarr category list, dropping the manga category (8030) for comic
@@ -83,6 +90,7 @@ fn map_raw_result(item: RawProwlarrResult) -> ProwlarrResult {
         protocol: final_protocol.to_string(), publish_date: item.publish_date.unwrap_or_default(),
         info_hash,
         matched_query: None, query_rung: None,
+        grabs: item.grabs,
     }
 }
 
@@ -267,5 +275,19 @@ mod tests {
         let mut r = raw("X"); r.protocol = Some("Torrent".into());
         assert_eq!(map_raw_result(r).protocol, "torrent");
         assert_eq!(map_raw_result(raw("X")).protocol, "torrent"); // None defaults to torrent
+    }
+
+    // beta.045: Prowlarr's grab count reaches the Interactive Search dialog - every Usenet row read "Grabs: 0"
+    // because the engine dropped it. Read from Prowlarr's own JSON, sent on as `grabs`, left out when absent.
+    #[test]
+    fn the_grab_count_is_read_from_prowlarr_and_sent_on() {
+        let hit: RawProwlarrResult = serde_json::from_str(r#"{"guid":"g","title":"Saga 061","protocol":"usenet","grabs":37}"#).unwrap();
+        let m = map_raw_result(hit);
+        assert_eq!(m.grabs, Some(37));
+        assert_eq!(serde_json::to_value(&m).unwrap()["grabs"], 37);
+
+        let none = map_raw_result(serde_json::from_str(r#"{"guid":"g2","title":"Saga 061","protocol":"torrent"}"#).unwrap());
+        assert_eq!(none.grabs, None);
+        assert!(serde_json::to_value(&none).unwrap().get("grabs").is_none(), "no count, no key");
     }
 }

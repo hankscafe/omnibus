@@ -886,7 +886,7 @@ export default function SetupWizard() {
                     <div className="space-y-5">
                         <div className="grid gap-2">
                             <Label>Download Scan Root</Label>
-                            <Input value={formData.download_path} onChange={e => updateForm('download_path', e.target.value)} placeholder="e.g. /downloads" className="h-12 bg-white dark:bg-slate-950"/>
+                            <Input value={formData.download_path} onChange={e => updateForm('download_path', e.target.value)} placeholder="e.g. /data/downloads" className="h-12 bg-white dark:bg-slate-950"/>
                             <p className="text-[10px] text-muted-foreground">The folder where your download clients save completed files.</p>
                         </div>
 

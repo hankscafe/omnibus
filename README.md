@@ -314,7 +314,7 @@ services:
       retries: 10
 ```
 
-> **Using Portainer, Synology Container Manager, Unraid, or another web UI that takes a compose file?** Paste the same file, but give the volumes **full paths** (e.g. `/volume1/docker/omnibus/config:/config`) — some of those tools resolve `./` somewhere other than you'd expect.
+> **Using Portainer, Synology Container Manager, Unraid, or another web UI that takes a compose file?** Paste the same file, but give the volumes **full paths** (e.g. `/volume1/docker/omnibus/config:/config`) — some of those tools resolve `./` somewhere other than you'd expect. On Unraid, see [Running on Unraid](#running-on-unraid).
 
 This is the same stack as the repo's [`docker-compose.yml`](docker-compose.yml), written out with folder mounts instead of Docker-managed volumes. Use one or the other, not both.
 
@@ -345,6 +345,8 @@ On the **Paths** step (*Storage Mappings*), enter folders the way the containers
 | Download Scan Root | `/data/downloads` |
 | Library Folders → Path | `/data/comics` |
 
+When the wizard finishes, it starts a library scan in the background and doesn't wait for it, so your library can look empty at first. Refresh the page after a moment; if it's still empty, click **Scan Library**.
+
 When you're done, the **System Health** card on the Admin page checks your setup — the engine connection, your ComicVine key, and whether the download folder is writable. Then head to [First Steps](#first-steps).
 
 ### Behind a reverse proxy or Cloudflare Tunnel?
@@ -357,6 +359,60 @@ Manual comic uploads are large requests, and proxies commonly cap request bodies
 Omnibus' own upload limit is 2GB per file, adjustable with the `OMNIBUS_MAX_UPLOAD_MB` environment variable on the web container.
 
 Omnibus pages send a Content-Security-Policy that only lets the app's own scripts run. A script a proxy adds to pages — an analytics snippet, or Cloudflare's Rocket Loader, which takes over loading the app's own scripts — is blocked by it, and with Rocket Loader the pages stop working. Turn such features off for Omnibus, or set `OMNIBUS_CSP=report-only` on the web container (the browser console then lists what the policy would block, without blocking it). `OMNIBUS_CSP=off` removes the policy.
+
+### Running on Unraid
+
+Omnibus runs on Unraid as the same three containers, managed as one compose stack by the free **Compose Manager Plus** plugin. This is for the standard SQLite setup above: with the PostgreSQL profile (`docker-compose.postgres.yml`), the web container has to run as its own user, so leave out the `user:` lines below. Tested on Unraid 7.1.4 with Omnibus v1.4.10; the plugin itself lists Unraid 7.2.3 and later as verified.
+
+**1. Install the plugin.** In **Apps**, search for **Compose Manager Plus** and install it.
+
+**2. Make the folders.** In the Unraid terminal (the `>_` icon), for example:
+
+```bash
+mkdir -p /mnt/cache/appdata/omnibus/config /mnt/user/omnibus/comics /mnt/user/omnibus/downloads
+```
+
+* **Put `config` on your pool's own path** (`/mnt/cache/...`, using your pool's name), not under `/mnt/user/`. The SQLite database can be slow through Unraid's user-share layer.
+* **Comics already in a share?** Point the data mount at that share instead, e.g. `/mnt/user/media:/data` when your comics are in `/mnt/user/media/comics`.
+* **No `chown` is needed.** Folders made in the Unraid terminal are writable by everyone, so the `chown -R 1000:1000` from step 1 doesn't apply here.
+
+**3. Add the stack.** On the **Docker** tab, add a new stack under **Compose** (e.g. `omnibus`) and paste the compose file from [step 3](#step-3--create-docker-composeyml) into it. Then make three changes:
+
+* **Give the volumes full paths,** the same two lines in `omnibus` and `omnibus-engine`:
+  ```yaml
+      - /mnt/cache/appdata/omnibus/config:/config
+      - /mnt/user/omnibus:/data
+  ```
+* **Run both as Unraid's usual owner.** Under `container_name:` in **both** `omnibus` and `omnibus-engine`, add:
+  ```yaml
+      user: "99:100"
+  ```
+* **Make the files group-writable.** Uncomment `- UMASK=002` in **both** `environment` lists.
+
+Without the last two changes, every comic the engine rewrites (writing ComicInfo.xml rewrites the file) ends up owned by `root`, and the web app creates folders as user 1000. You then can't edit those files or drop comics into the watched folder over SMB. With them, everything Omnibus creates belongs to `nobody:users`, like the rest of your shares, and any Unraid user can edit it.
+
+The plugin saves the stack, including your `NEXTAUTH_SECRET`, on the Unraid flash drive.
+
+**4. Start it.** Click **Compose Up**, then run the Setup Wizard as in [step 5](#step-5--run-the-setup-wizard).
+
+**Already running Omnibus on Unraid?** Its database and comics belong to user 1000 and `root`, so adding `user: "99:100"` alone would lock the web app out of its own database. Switch over once, with the stack stopped:
+
+1. Click **Compose Down**.
+2. In the Unraid terminal, give your config and data folders to `nobody:users` and make the data group-writable (use your own two folders):
+   ```bash
+   chown -R 99:100 /mnt/cache/appdata/omnibus/config /mnt/user/omnibus/
+   chmod -R g+w /mnt/user/omnibus/
+   ```
+   `UMASK` only affects new files, so without the `chmod` the files Omnibus already made stay read-only over SMB. Keep the trailing `/`: a share that lives only on a pool is a link under `/mnt/user/`, and without the slash `-R` may not go inside it.
+3. Add the `user:` and `UMASK` lines from step 3, then click **Compose Up**.
+
+**Updating on Unraid.** **Compose Up** reuses the images already on your server; it doesn't download newer ones. To update, pull the new images in the Unraid terminal, then click **Compose Up**:
+
+```bash
+docker pull ghcr.io/hankscafe/omnibus:latest && docker pull ghcr.io/hankscafe/omnibus-engine:latest
+```
+
+**System Health** shows the version afterwards ("Web and engine in sync"). Compose Manager Plus also has its own **Update** / **Force Update** items in the stack's menu, which pull and recreate in one step (see its [README](https://github.com/mstrhakr/compose_plugin)).
 
 ---
 
@@ -399,7 +455,7 @@ With the folder layout from [step 1](#step-1--make-the-folders):
 The download finished, but Omnibus couldn't move it into your library. Open **Admin → Logs** and look for lines starting with `[Importer]` from around the time it finished:
 
 * **"No Library Path found for this import"** — no library folder is set. Add `/data/comics` under **Admin → Settings → Library & Files → Root Library Folders**.
-* **"Permission denied"** — Omnibus isn't allowed to write to the folder. On Linux the web container runs as user ID 1000: `sudo chown -R 1000:1000 data`.
+* **"Permission denied"** — Omnibus isn't allowed to write to the folder. On Linux the web container runs as user ID 1000: `sudo chown -R 1000:1000 data`. On Unraid with `user: "99:100"` (see [Running on Unraid](#running-on-unraid)), it's `chown -R 99:100` on your data folder instead.
 * **"Source file not found … Check Path Mappings!"** (torrent / usenet) — your download client saved the file somewhere Omnibus can't see. Mount the downloads folder at the same path in both containers, or map it with the client's **Settings** button under **Admin → Settings → Downloads**.
 
 The **System Health** card on the Admin Dashboard checks the first two for you.

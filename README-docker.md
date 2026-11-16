@@ -250,6 +250,8 @@ On the **Paths** step (*Storage Mappings*), enter folders the way the containers
 | Download Scan Root | `/data/downloads` |
 | Library Folders → Path | `/data/comics` |
 
+When the wizard finishes, it starts a library scan in the background and doesn't wait for it, so your library can look empty at first. Refresh the page after a moment; if it's still empty, click **Scan Library**.
+
 When you're done, the **System Health** card on the Admin page checks your setup — the engine connection, your ComicVine key, and whether the download folder is writable.
 
 ### Behind a reverse proxy or Cloudflare Tunnel?
@@ -262,6 +264,10 @@ Manual comic uploads are large requests, and proxies commonly cap request bodies
 Omnibus' own upload limit is 2GB per file, adjustable with the `OMNIBUS_MAX_UPLOAD_MB` environment variable on the web container.
 
 Omnibus pages send a Content-Security-Policy that only lets the app's own scripts run. A script a proxy adds to pages — an analytics snippet, or Cloudflare's Rocket Loader, which takes over loading the app's own scripts — is blocked by it, and with Rocket Loader the pages stop working. Turn such features off for Omnibus, or set `OMNIBUS_CSP=report-only` on the web container (the browser console then lists what the policy would block, without blocking it). `OMNIBUS_CSP=off` removes the policy.
+
+### Running on Unraid?
+
+See [Running on Unraid](https://github.com/hankscafe/omnibus#running-on-unraid) in the main README: the Compose Manager Plus plugin, the two compose lines that give Omnibus's files Unraid's usual `nobody:users` owner, and switching an existing install over.
 
 ## Support & Community
 

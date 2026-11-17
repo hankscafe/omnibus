@@ -424,6 +424,57 @@ describe('File System: Importer Engine', () => {
         });
     });
 
+    // #271: a download whose only Annual sign is its ComicInfo <Format> while its ComicInfo id is the
+    // run's same-number issue is that run issue - it fills the run's row under the run's name instead
+    // of becoming an annual twin that takes the run's id. Any other Annual sign, or no run issue's
+    // id, leaves it an annual as before.
+    describe('a Format-only annual (#271)', () => {
+        const runRow = (over: Record<string, unknown>) => ({
+            id: 'run_2', seriesId: 'series_1', number: '2', isAnnual: false, name: null, description: null, releaseDate: null,
+            writers: null, artists: null, characters: null, metadataId: '911244', metadataSource: 'COMICVINE', matchState: 'MATCHED',
+            attachedVolumeId: null, filePath: null, status: 'WANTED', ...over,
+        });
+        const download = async (activeDownloadName: string, comicInfo: Record<string, unknown>) => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_wf', status: 'DOWNLOADING', activeDownloadName, volumeId: 'cv_123', createdAt: new Date(),
+            });
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'Batman', number: '2', format: 'Annual', metadataSource: 'COMICVINE', ...comicInfo });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false,
+            });
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([runRow({})]);
+            await Importer.importRequest('req_wf');
+            const filled = (prisma.issue.update as any).mock.calls.map((c: any[]) => c[0]).filter((u: any) => u.data?.filePath);
+            const created = mocks.createIssue.mock.calls.map((c: any[]) => c[0].data);
+            return { filled, created };
+        };
+        afterEach(async () => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([]);
+        });
+
+        it("fills the run's row under the run's name when its ComicInfo id is that run issue's", async () => {
+            const { filled, created } = await download('Batman 02.cbz', { metadataIssueId: '911244' });
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'run_2' }]);
+            expect(filled[0].data.filePath).toMatch(/Batman #002\.cbz$/);
+            expect(created).toEqual([]);
+        });
+
+        it('stays an annual without a run issue\'s id', async () => {
+            const { filled, created } = await download('Batman 02.cbz', { metadataIssueId: '555555' });
+            expect(filled).toEqual([]);
+            expect(created.at(-1)).toMatchObject({ isAnnual: true, number: '2' });
+            expect(created.at(-1).filePath).toContain('Batman Annual #002');
+        });
+
+        it('stays an annual when its name says Annual too', async () => {
+            const { filled, created } = await download('Batman Annual 02.cbz', { metadataIssueId: '911244' });
+            expect(filled.some((u: any) => u.where?.id === 'run_2')).toBe(false);
+            expect(created.at(-1)).toMatchObject({ isAnnual: true });
+        });
+    });
+
     // The naming cleanup (#244): a download is named by the same rules as every other path - padded
     // by the issue_number_padding setting (it used to pad a single digit only), and "$&" in a series
     // name stays "$&" (string replacement turned it back into the token it replaced).

@@ -60,11 +60,49 @@ export function extractIssueNumber(filename: string, seriesName?: string): strin
 // The annual FLAG alone (#203), for callers whose NUMBER comes from ComicInfo rather than the
 // filename (the importer). Signals: ComicInfo <Format>, an "Annual…"-shaped <Number>, or the
 // filename token. Parity: omnibus-engine scanner.rs annual_flag_for_signals.
+const ANNUAL_TOKEN = /(?<![a-zA-Z])annual(?![a-zA-Z])/i;
+
 export function annualFlagForSignals(format: string | null | undefined, number: string | null | undefined, filename: string): boolean {
-    const token = /(?<![a-zA-Z])annual(?![a-zA-Z])/i;
-    if (format && token.test(format)) return true;
-    if (number && token.test(number)) return true;
+    if (format && ANNUAL_TOKEN.test(format)) return true;
+    if (number && ANNUAL_TOKEN.test(number)) return true;
     return describeIssueFromFilename(filename).isAnnual;
+}
+
+// #271: the annual flag rests on the file's <Format> ALONE - no "Annual…" <Number>, no filename
+// token. That is the one signal a mislabelled row feeds back to itself: the engine's writer stamps
+// an annual row's file <Format>Annual</Format>. Parity: scanner.rs annual_by_format_only.
+export function annualByFormatOnly(format: string | null | undefined, number: string | null | undefined, filename: string): boolean {
+    return !!format && ANNUAL_TOKEN.test(format)
+        && !(number && ANNUAL_TOKEN.test(number))
+        && !describeIssueFromFilename(filename).isAnnual;
+}
+
+export interface ProviderIssueRow {
+    metadataSource: string | null;
+    metadataId: string | null;
+    number: string;
+    isAnnual?: boolean | null;
+    attachedVolumeId?: string | null;
+}
+
+// #271: whether one of the run's own rows (neither an annual nor on a lane) holds this provider issue
+// id for the same number. A real annual carries its ANNUAL volume's ids, so a file with a run issue's
+// id and number IS that run issue. Parity: scanner.rs main_run_holds_issue_id.
+export function mainRunHoldsIssueId(source: string | null | undefined, issueId: string | null | undefined, number: string, rows: ProviderIssueRow[]): boolean {
+    if (!issueId) return false;
+    return rows.some(r => !r.isAnnual && !r.attachedVolumeId && r.metadataSource === source && r.metadataId === issueId && isSameIssue(r.number, number));
+}
+
+// #271: annualFlagForSignals, except that a file whose only Annual sign is its <Format> while its
+// ComicInfo carries a same-number run issue's id is that run issue (the engine scanner and watched
+// sync decide the same way).
+export function annualFlagAfterRunGuard(
+    file: { format?: string | null; number?: string | null; filename: string; source?: string | null; issueId?: string | null },
+    number: string,
+    rows: ProviderIssueRow[],
+): boolean {
+    if (!annualFlagForSignals(file.format, file.number, file.filename)) return false;
+    return !(annualByFormatOnly(file.format, file.number, file.filename) && mainRunHoldsIssueId(file.source, file.issueId, number, rows));
 }
 
 export function describeIssueFromFilename(filename: string, seriesName?: string): IssueDescriptor {

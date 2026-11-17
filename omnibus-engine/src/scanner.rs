@@ -529,6 +529,35 @@ pub(crate) fn annual_flag_for_signals(format: Option<&str>, number: Option<&str>
     issue_descriptor_from_filename(file_name, None).1
 }
 
+/// #271: the annual flag rests on the file's `<Format>` ALONE — no "Annual…" `<Number>`, no filename
+/// token. That is the one signal a mislabelled row feeds back to itself: the writer stamps an annual
+/// row's file `<Format>Annual</Format>`, and a rescan of the renamed file reads it back as an annual.
+/// Parity: annualByFormatOnly in src/lib/utils/issue-parser.ts.
+pub(crate) fn annual_by_format_only(format: Option<&str>, number: Option<&str>, file_name: &str) -> bool {
+    format.is_some_and(|f| find_annual_token(f).is_some())
+        && number.is_none_or(|n| find_annual_token(n).is_none())
+        && !issue_descriptor_from_filename(file_name, None).1
+}
+
+/// #271: whether one of the run's own rows holds this provider issue id for the same number. A real
+/// annual carries its ANNUAL volume's issue ids, so a file with a run issue's id and number IS that
+/// run issue, whatever its `<Format>` says. Rows are (metadataSource, metadataId, number, main_run),
+/// main_run = neither an annual nor on a lane. Parity: mainRunHoldsIssueId.
+pub(crate) fn main_run_holds_issue_id(embedded: Option<(&str, &str)>, number: &str, rows: &[(String, String, String, bool)]) -> bool {
+    let Some((source, id)) = embedded.filter(|(_, id)| !id.is_empty()) else { return false };
+    rows.iter().any(|(src, mid, num, main_run)| *main_run && src == source && mid == id && crate::metadata::is_same_issue(num, number))
+}
+
+/// #271 repair: whether read `a` (page, finished) is further along than read `b` — a finished read
+/// beats any page, else the later page wins. A tie keeps `b`, the run row's own.
+fn further_progress(a: (i64, bool), b: (i64, bool)) -> bool {
+    match (a.1, b.1) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => a.0 > b.0,
+    }
+}
+
 /// Per-issue narrative/credit columns from a file's own ComicInfo (discussion #177). Comma-separated
 /// list tags become JSON array strings; absent/empty fields stay None — never a literal '[]' — so
 /// the provider syncs' fill/never-clobber policies treat them as blanks to fill.
@@ -680,7 +709,9 @@ fn comicinfo_series_defaults(info: &ScanComicInfo) -> ComicInfoSeriesDefaults {
     ComicInfoSeriesDefaults {
         imprint: text(&info.imprint),
         tags_json: list(&info.tags),
-        format: text(&info.format),
+        // #271: never an annual Format as the SERIES' format — the writer would stamp it on every
+        // run file and each rescan would read the whole run back as annuals. Anything else stays raw.
+        format: text(&info.format).filter(|f| find_annual_token(f).is_none()),
         book_type: text(&info.format).as_deref().and_then(book_type_from_comicinfo_format),
         language_iso: text(&info.language_iso),
         age_rating: text(&info.age_rating),
@@ -804,6 +835,139 @@ fn attached_twin_heal_sql() -> &'static str {
                      WHERE o."seriesId" = "Issue"."seriesId"
                        AND o."attachedVolumeId" IS NOT NULL
                        AND o."filePath" = "Issue"."filePath")"#
+}
+
+/// 5L (#271, anacronismo 2026-11-06): the split pairs of a library. An unattached ANNUAL row with a
+/// file and a real provider id beside the run's own row (unattached, not annual) that holds the SAME
+/// provider id but no file: the file is that run issue's — a real annual carries its annual volume's
+/// ids, never one of the run's. The numbers are compared in Rust (is_same_issue). $1 = libraryId.
+fn main_run_split_pairs_sql() -> &'static str {
+    r#"SELECT a.id AS annual_id, m.id AS run_id, a.number AS annual_number, m.number AS run_number
+       FROM "Issue" a
+       JOIN "Issue" m ON m."seriesId" = a."seriesId" AND m."metadataSource" = a."metadataSource"
+                     AND m."metadataId" = a."metadataId" AND m.id <> a.id
+       WHERE a."isAnnual" = true AND a."attachedVolumeId" IS NULL
+         AND a."filePath" IS NOT NULL AND a."filePath" <> ''
+         AND a."metadataId" IS NOT NULL AND a."metadataId" <> '' AND a."metadataId" NOT LIKE 'unmatched%'
+         AND m."isAnnual" = false AND m."attachedVolumeId" IS NULL
+         AND (m."filePath" IS NULL OR m."filePath" = '')
+         AND a."seriesId" IN (SELECT id FROM "Series" WHERE "libraryId" = $1)
+       ORDER BY a."seriesId", a.id"#
+}
+
+/// 5L (#271): gives each split pair's file back to the run's row and drops the annual twin, one
+/// transaction per pair. The RUN row survives: it existed before the split, so it holds the reading
+/// history, reading-list entries and request ties of the issue (the twin was created new around the
+/// file). What the twin gathered since moves over where it doesn't clash. Returns the pairs repaired.
+pub(crate) async fn repair_main_run_splits(db: &Db, library_id: &str) -> usize {
+    let pairs = match sqlx::query(main_run_split_pairs_sql()).bind(library_id).fetch_all(&db.pool).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::warn!("[Scan] #271 split check failed: {:?}", e);
+            return 0;
+        }
+    };
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut repaired = 0;
+    for r in pairs {
+        let (annual_id, run_id) = (r.get::<String, _>("annual_id"), r.get::<String, _>("run_id"));
+        if !crate::metadata::is_same_issue(&r.get::<String, _>("annual_number"), &r.get::<String, _>("run_number")) {
+            continue; // same id, different number: the #194 mistag, which proves nothing about which row is right
+        }
+        if used.contains(&annual_id) || used.contains(&run_id) {
+            continue;
+        }
+        let Some(mut tx) = begin_write_tx(db, "#271 split repair").await else { continue };
+        if let Err(e) = hand_split_file_back(db, &mut tx, &annual_id, &run_id).await {
+            log::warn!("[Scan] #271: could not give the file of annual row {} back to run row {}: {:?}", annual_id, run_id, e);
+            continue; // the dropped transaction rolls back
+        }
+        match tx.commit().await {
+            Ok(_) => {
+                log::info!("[Scan] #271: run row {} took back its file from annual row {}, which carried the run issue's own id.", run_id, annual_id);
+                used.insert(annual_id);
+                used.insert(run_id);
+                repaired += 1;
+            }
+            Err(e) => log::warn!("[Scan] #271 split repair: commit failed for run row {}: {:?}", run_id, e),
+        }
+    }
+    repaired
+}
+
+/// One 5L pair inside its transaction: $1 = the annual twin, $2 = the run's row.
+async fn hand_split_file_back(db: &Db, tx: &mut sqlx::Transaction<'static, sqlx::Any>, annual: &str, run: &str) -> Result<(), sqlx::Error> {
+    let now = db.now_expr();
+    // The run's row takes the file. Its own arrival stamp stands: the run had the file first.
+    sqlx::query(&format!(
+        r#"UPDATE "Issue" SET
+               "filePath" = (SELECT a."filePath" FROM "Issue" a WHERE a.id = $1),
+               status = 'DOWNLOADED',
+               "pageCount" = CASE WHEN (SELECT a."pageCount" FROM "Issue" a WHERE a.id = $1) > 0
+                                  THEN (SELECT a."pageCount" FROM "Issue" a WHERE a.id = $1) ELSE "pageCount" END,
+               "fileAddedAt" = COALESCE("fileAddedAt", (SELECT a."fileAddedAt" FROM "Issue" a WHERE a.id = $1)),
+               "updatedAt" = {now}
+           WHERE id = $2"#
+    ))
+    .bind(annual).bind(run).execute(&mut **tx).await?;
+
+    // Reading progress: per user, the further read stays on the run's row (unique per user + issue).
+    let progress = |issue: &str| {
+        sqlx::query(r#"SELECT id, "userId", "currentPage", CAST("isCompleted" AS INTEGER) AS done FROM "ReadProgress" WHERE "issueId" = $1"#)
+            .bind(issue.to_string())
+    };
+    let run_reads: std::collections::HashMap<String, (String, i64, bool)> = progress(run).fetch_all(&mut **tx).await?
+        .iter()
+        .map(|r| (r.get::<String, _>("userId"), (r.get::<String, _>("id"), r.get::<i64, _>("currentPage"), r.get::<i64, _>("done") != 0)))
+        .collect();
+    for r in progress(annual).fetch_all(&mut **tx).await? {
+        let (id, user) = (r.get::<String, _>("id"), r.get::<String, _>("userId"));
+        let read = (r.get::<i64, _>("currentPage"), r.get::<i64, _>("done") != 0);
+        match run_reads.get(&user) {
+            None => {
+                sqlx::query(r#"UPDATE "ReadProgress" SET "issueId" = $1 WHERE id = $2"#).bind(run).bind(&id).execute(&mut **tx).await?;
+            }
+            Some((run_read_id, page, done)) => {
+                if further_progress(read, (*page, *done)) {
+                    sqlx::query(&format!(
+                        r#"UPDATE "ReadProgress" SET
+                               "currentPage" = (SELECT a."currentPage" FROM "ReadProgress" a WHERE a.id = $1),
+                               "totalPages" = (SELECT a."totalPages" FROM "ReadProgress" a WHERE a.id = $1),
+                               "isCompleted" = {done}, "updatedAt" = {now}
+                           WHERE id = $2"#,
+                        done = if read.1 { "true" } else { "false" }
+                    ))
+                    .bind(&id).bind(run_read_id).execute(&mut **tx).await?;
+                }
+                sqlx::query(r#"DELETE FROM "ReadProgress" WHERE id = $1"#).bind(&id).execute(&mut **tx).await?;
+            }
+        }
+    }
+
+    // A day's pages read add up; the rest moves where the run's row has no entry of its own.
+    sqlx::query(
+        r#"UPDATE "DailyIssueRead" SET "pagesRead" = "pagesRead" + COALESCE((SELECT a."pagesRead" FROM "DailyIssueRead" a
+               WHERE a."issueId" = $1 AND a."userId" = "DailyIssueRead"."userId" AND a.date = "DailyIssueRead".date), 0)
+           WHERE "issueId" = $2"#,
+    )
+    .bind(annual).bind(run).execute(&mut **tx).await?;
+    // Bookmarks, daily reads, the file's KOReader ids (they name the FILE) and reading-list entries
+    // move unless the run's row already has the same one; what's left on the twin goes with it.
+    for (table, same) in [
+        ("Bookmark", r#"o."userId" = "Bookmark"."userId" AND o."pageIndex" = "Bookmark"."pageIndex""#),
+        ("DailyIssueRead", r#"o."userId" = "DailyIssueRead"."userId" AND o.date = "DailyIssueRead".date"#),
+        ("KoreaderDocument", r#"o.digest = "KoreaderDocument".digest"#),
+        ("ReadingListItem", r#"o."listId" = "ReadingListItem"."listId""#),
+    ] {
+        sqlx::query(&format!(
+            r#"UPDATE "{table}" SET "issueId" = $2 WHERE "issueId" = $1
+                 AND NOT EXISTS (SELECT 1 FROM "{table}" o WHERE o."issueId" = $2 AND {same})"#
+        ))
+        .bind(annual).bind(run).execute(&mut **tx).await?;
+        sqlx::query(&format!(r#"DELETE FROM "{table}" WHERE "issueId" = $1"#)).bind(annual).execute(&mut **tx).await?;
+    }
+    sqlx::query(r#"DELETE FROM "Issue" WHERE id = $1"#).bind(annual).execute(&mut **tx).await?;
+    Ok(())
 }
 
 fn issue_file_meta(info: Option<&ScanComicInfo>) -> IssueFileMeta {
@@ -2408,10 +2572,12 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     type KnownIssue = (String, String, bool, Option<String>);
     let mut series_issue_nums: std::collections::HashMap<String, Vec<KnownIssue>> = std::collections::HashMap::new();
     let mut series_meta_nums: std::collections::HashMap<String, Vec<(String, String, bool)>> = std::collections::HashMap::new();
+    // #271: (metadataSource, metadataId, number, main_run) per series, for the main-run guard below.
+    let mut series_provider_rows: std::collections::HashMap<String, Vec<(String, String, String, bool)>> = std::collections::HashMap::new();
     if !involved_series.is_empty() {
         // Portable IN (...) list — see the ghost-purge note above on `= ANY($1)`.
         let ph = Db::in_placeholders(1, involved_series.len());
-        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId", "attachedVolumeId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
+        let sql = format!(r#"SELECT "seriesId", id, number, CAST("isAnnual" AS INTEGER) AS is_annual, "metadataId", "metadataSource", "attachedVolumeId" FROM "Issue" WHERE "seriesId" IN ({})"#, ph);
         let mut q = sqlx::query(&sql);
         for sid in &involved_series {
             q = q.bind(sid);
@@ -2420,11 +2586,15 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         for r in rows {
             let sid = r.get::<String, _>("seriesId");
             let row_annual = r.try_get::<i64, _>("is_annual").map(|v| v != 0).unwrap_or(false);
+            let row_lane = r.try_get::<Option<String>, _>("attachedVolumeId").unwrap_or(None);
+            let main_run = !row_annual && row_lane.is_none();
             series_issue_nums.entry(sid.clone()).or_default()
-                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual, r.try_get::<Option<String>, _>("attachedVolumeId").unwrap_or(None)));
+                .push((r.get::<String, _>("id"), r.get::<String, _>("number"), row_annual, row_lane));
             // (metadataId, number, isAnnual) per series for the embedded-id conflict check below (#194 (c2)).
             if let Ok(Some(mid)) = r.try_get::<Option<String>, _>("metadataId") {
                 if !mid.is_empty() && !mid.starts_with("unmatched") {
+                    let source = r.try_get::<Option<String>, _>("metadataSource").unwrap_or(None).unwrap_or_default();
+                    series_provider_rows.entry(sid.clone()).or_default().push((source, mid.clone(), r.get::<String, _>("number"), main_run));
                     series_meta_nums.entry(sid).or_default().push((mid, r.get::<String, _>("number"), row_annual));
                 }
             }
@@ -2488,6 +2658,18 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         // series); the file's own embedded ComicInfo series tag is the next-best title hint.
         let series_hint = info.as_ref().and_then(|i| i.series.as_deref().map(|s| s.to_string()));
         let (issue_num, is_annual) = issue_descriptor_for_file(info.as_ref(), &file_name, series_hint.as_deref());
+        // #271: a file whose only Annual sign is its <Format> (what an annual row's embed stamps)
+        // while its ComicInfo carries a run issue's own id for the same number IS that run issue —
+        // a renamed run file must refill its row, not come back as an annual twin beside it.
+        let is_annual = is_annual && !(
+            annual_by_format_only(info.as_ref().and_then(|i| i.format.as_deref()), info.as_ref().and_then(|i| i.number.as_deref()), &file_name)
+                && main_run_holds_issue_id(
+                    info.as_ref().map(derive_meta).as_ref()
+                        .and_then(|d| d.metadata_issue_id.as_deref().map(|id| (d.metadata_source.as_str(), id))),
+                    &issue_num,
+                    series_provider_rows.get(&series_id).map(Vec::as_slice).unwrap_or(&[]),
+                )
+        );
         let embedded_volume = info.as_ref().map(derive_meta).and_then(|d| match (d.metron_id, d.cv_id) {
             (Some(m), _) => Some(("METRON".to_string(), m.to_string())),
             (None, Some(c)) => Some(("COMICVINE".to_string(), c.to_string())),
@@ -3023,6 +3205,17 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
         }
         Ok(_) => {}
         Err(e) => log::warn!("[Scan] Attached-lane twin heal failed: {:?}", e),
+    }
+
+    // ---------------------------------------------------------
+    // 5L. GIVE SPLIT FILES BACK TO THE RUN (#271, anacronismo 2026-11-06)
+    // ---------------------------------------------------------
+    // A run file that came back from a rename as an unattached ANNUAL row — carrying the run issue's
+    // own provider id — left the run's row WANTED beside it. Each such pair is merged back onto the
+    // run's row (see repair_main_run_splits); the 5B guard keeps new ones from forming.
+    let repaired = repair_main_run_splits(&db, &library_id).await;
+    if repaired > 0 {
+        log::info!("[Scan] Gave {} file(s) back to the run's own issues from annual twins that carried the run's ids (#271).", repaired);
     }
 
     // ---------------------------------------------------------
@@ -4680,6 +4873,281 @@ mod tests {
         assert_eq!(annual.get::<i64, _>("isAnnual"), 1);
         assert_eq!(by_file(&run1).get::<String, _>("id"), "issue_1");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #271: the one Annual signal a mislabelled row feeds back to itself is <Format> — Omnibus' own
+    // writer stamps it. An "Annual…" <Number> or the filename token is the file speaking for itself.
+    #[test]
+    fn annual_by_format_only_is_the_format_signal_alone() {
+        assert!(annual_by_format_only(Some("Annual"), Some("2"), "Batman-Superman Worlds Finest #002 (2022).cbz"));
+        assert!(annual_by_format_only(Some("Annual"), None, "Worlds Finest 002.cbz"));
+        assert!(!annual_by_format_only(Some("Annual"), Some("Annual 2"), "x.cbz"), "the number says it too");
+        assert!(!annual_by_format_only(Some("Annual"), Some("2"), "Batman Annual 002 (2012).cbz"), "the name says it too");
+        assert!(!annual_by_format_only(None, Some("2"), "Worlds Finest 002.cbz"));
+        assert!(!annual_by_format_only(Some("Series"), Some("2"), "Worlds Finest 002.cbz"));
+        assert!(!annual_by_format_only(Some("Annualized"), Some("2"), "Worlds Finest 002.cbz"), "word-bounded, like every annual check");
+    }
+
+    // #271: a real annual carries its ANNUAL volume's issue ids; one of the run's ids on a file of the
+    // same number proves it is that run issue. Provider and number must both agree, and the row must
+    // be the run's own (an annual or lane row holding the id proves nothing about the run).
+    #[test]
+    fn main_run_holds_issue_id_needs_a_main_run_row_with_the_same_provider_id_and_number() {
+        let rows = vec![
+            ("COMICVINE".to_string(), "911244".to_string(), "2".to_string(), true),
+            ("COMICVINE".to_string(), "999001".to_string(), "1".to_string(), false),
+        ];
+        assert!(main_run_holds_issue_id(Some(("COMICVINE", "911244")), "2", &rows));
+        assert!(main_run_holds_issue_id(Some(("COMICVINE", "911244")), "002", &rows), "numbers compare as issues");
+        assert!(!main_run_holds_issue_id(Some(("COMICVINE", "911244")), "3", &rows), "a different number is the #194 mistag, not proof");
+        assert!(!main_run_holds_issue_id(Some(("METRON", "911244")), "2", &rows), "another provider's id");
+        assert!(!main_run_holds_issue_id(Some(("COMICVINE", "123")), "2", &rows));
+        assert!(!main_run_holds_issue_id(Some(("COMICVINE", "999001")), "1", &rows), "an annual row's id is no run issue");
+        assert!(!main_run_holds_issue_id(None, "2", &rows));
+    }
+
+    #[test]
+    fn further_progress_prefers_a_finished_read_then_the_later_page() {
+        assert!(further_progress((3, true), (10, false)), "finished beats any page");
+        assert!(!further_progress((10, false), (3, true)));
+        assert!(further_progress((12, false), (10, false)));
+        assert!(!further_progress((10, false), (10, false)), "a tie keeps the run row's own");
+        assert!(!further_progress((5, false), (10, false)));
+    }
+
+    /// The tables that point at an issue, as Prisma creates them on SQLite (#271 repair fixtures).
+    async fn issue_children_schema(db: &crate::db::Db) {
+        for ddl in [
+            r#"CREATE TABLE "ReadProgress" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "issueId" TEXT NOT NULL,
+                "currentPage" INTEGER NOT NULL DEFAULT 0, "totalPages" INTEGER NOT NULL DEFAULT 0,
+                "isCompleted" BOOLEAN NOT NULL DEFAULT false, "updatedAt" DATETIME NOT NULL, UNIQUE("userId", "issueId"))"#,
+            r#"CREATE TABLE "Bookmark" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "issueId" TEXT NOT NULL, "pageIndex" INTEGER NOT NULL,
+                note TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE("userId", "issueId", "pageIndex"))"#,
+            r#"CREATE TABLE "DailyIssueRead" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "issueId" TEXT NOT NULL, date DATETIME NOT NULL,
+                "pagesRead" INTEGER NOT NULL DEFAULT 0, UNIQUE("userId", "issueId", date))"#,
+            r#"CREATE TABLE "KoreaderDocument" (id TEXT PRIMARY KEY, digest TEXT NOT NULL, method TEXT NOT NULL, "issueId" TEXT NOT NULL,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(digest, "issueId"))"#,
+            r#"CREATE TABLE "ReadingListItem" (id TEXT PRIMARY KEY, "listId" TEXT NOT NULL, "issueId" TEXT, "cvIssueId" INTEGER,
+                "metadataSource" TEXT NOT NULL DEFAULT 'COMICVINE', title TEXT NOT NULL, "order" INTEGER NOT NULL)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create child table");
+        }
+    }
+
+    // #271 (anacronismo): World's Finest #2-#56 sat on unattached ANNUAL rows that carried the run's
+    // own ComicVine issue ids, while the run's rows went WANTED. The repair hands each file back to
+    // the run's row — the row that holds the reading history from before the split — moves what the
+    // annual twin gathered since, and drops the twin. Everything that isn't provably that shape is
+    // left alone.
+    #[tokio::test]
+    async fn the_repair_hands_a_split_file_back_to_the_runs_row_with_its_history() {
+        let base = std::env::temp_dir().join(format!("omnibus_split271_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("split.db");
+        File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, "libraryId" TEXT, name TEXT)"#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, "metadataId" TEXT, "metadataSource" TEXT,
+            number TEXT, "isAnnual" BOOLEAN NOT NULL DEFAULT false, "attachedVolumeId" TEXT, status TEXT, "filePath" TEXT,
+            "pageCount" INTEGER NOT NULL DEFAULT 0, name TEXT, "fileAddedAt" DATETIME, "updatedAt" DATETIME)"#).execute(&db.pool).await.unwrap();
+        issue_children_schema(&db).await;
+        for (id, lib) in [("wf", "lib"), ("other", "lib2")] {
+            sqlx::query(r#"INSERT INTO "Series" (id, "libraryId", name) VALUES ($1, $2, 'Batman/Superman: World''s Finest')"#)
+                .bind(id).bind(lib).execute(&db.pool).await.unwrap();
+        }
+        // (id, series, metadataId, number, annual, lane, status, file, pages, name, fileAddedAt)
+        type Row<'a> = (&'a str, &'a str, &'a str, &'a str, bool, Option<&'a str>, &'a str, Option<&'a str>, i64, Option<&'a str>, Option<i64>);
+        let rows: Vec<Row> = vec![
+            // The split: the run's #2 lost its file to an annual twin with the same id.
+            ("run_2", "wf", "911244", "2", false, None, "WANTED", None, 0, Some("Strange Visitor"), Some(1_000)),
+            ("ann_2", "wf", "911244", "2", true, None, "DOWNLOADED", Some("/lib/WF/Worlds Finest #002 (2022).cbz"), 22, Some("Strange Visitor"), Some(2_000)),
+            // Both rows have a file: nothing proves which is wrong — left alone.
+            ("run_3", "wf", "911245", "3", false, None, "DOWNLOADED", Some("/lib/WF/Worlds Finest #003 (2022).cbz"), 20, None, None),
+            ("ann_3", "wf", "911245", "3", true, None, "DOWNLOADED", Some("/lib/WF/Worlds Finest Annual #003.cbz"), 20, None, None),
+            // Same id, different number: the #194 mistag, not this repair's — left alone.
+            ("run_4", "wf", "911246", "4", false, None, "WANTED", None, 0, None, None),
+            ("ann_9", "wf", "911246", "9", true, None, "DOWNLOADED", Some("/lib/WF/Worlds Finest Annual #009.cbz"), 20, None, None),
+            // An attached annual and a placeholder id never pair.
+            ("run_5", "wf", "911247", "5", false, None, "WANTED", None, 0, None, None),
+            ("lane_5", "wf", "911247", "5", true, Some("att_2024"), "DOWNLOADED", Some("/lib/WF/Worlds Finest 2024 Annual #005.cbz"), 20, None, None),
+            ("run_6", "wf", "unmatched_x", "6", false, None, "WANTED", None, 0, None, None),
+            ("ann_6", "wf", "unmatched_x", "6", true, None, "DOWNLOADED", Some("/lib/WF/Worlds Finest #006.cbz"), 20, None, None),
+            // Another library's series is another scan's.
+            ("o_run_2", "other", "911244", "2", false, None, "WANTED", None, 0, None, None),
+            ("o_ann_2", "other", "911244", "2", true, None, "DOWNLOADED", Some("/lib2/WF/Worlds Finest #002.cbz"), 20, None, None),
+        ];
+        for (id, sid, mid, num, annual, lane, status, file, pages, name, added) in &rows {
+            sqlx::query(&format!(
+                r#"INSERT INTO "Issue" (id, "seriesId", "metadataId", "metadataSource", number, "isAnnual", "attachedVolumeId", status, "filePath", "pageCount", name, "fileAddedAt")
+                   VALUES ($1, $2, $3, 'COMICVINE', $4, {}, $5, $6, $7, $8, $9, $10)"#,
+                if *annual { "true" } else { "false" }
+            ))
+            .bind(id).bind(sid).bind(mid).bind(num).bind(lane).bind(status).bind(file).bind(pages).bind(name).bind(added)
+            .execute(&db.pool).await.unwrap();
+        }
+        // History: u1 read the run's #2 before the split (page 10) and the twin since (page 5) — the
+        // run's further read stays; u2 read only the twin — it moves; u3 finished the twin after
+        // reaching page 3 on the run — the finished read wins.
+        for (id, user, issue, page, done) in [
+            ("rp1", "u1", "run_2", 10, false), ("rp2", "u1", "ann_2", 5, false),
+            ("rp3", "u2", "ann_2", 7, false),
+            ("rp4", "u3", "run_2", 3, false), ("rp5", "u3", "ann_2", 22, true),
+        ] {
+            sqlx::query(&format!(
+                r#"INSERT INTO "ReadProgress" (id, "userId", "issueId", "currentPage", "totalPages", "isCompleted", "updatedAt") VALUES ($1, $2, $3, $4, 22, {}, 1000)"#,
+                if done { "true" } else { "false" }
+            )).bind(id).bind(user).bind(issue).bind(page).execute(&db.pool).await.unwrap();
+        }
+        for (id, user, issue, page) in [("b1", "u1", "ann_2", 4), ("b2", "u1", "ann_2", 6), ("b3", "u1", "run_2", 6)] {
+            sqlx::query(r#"INSERT INTO "Bookmark" (id, "userId", "issueId", "pageIndex", note) VALUES ($1, $2, $3, $4, $1)"#)
+                .bind(id).bind(user).bind(issue).bind(page).execute(&db.pool).await.unwrap();
+        }
+        for (id, user, issue, date, pages) in [("d1", "u1", "run_2", 86_400_000_i64, 3), ("d2", "u1", "ann_2", 86_400_000, 4), ("d3", "u2", "ann_2", 172_800_000, 7)] {
+            sqlx::query(r#"INSERT INTO "DailyIssueRead" (id, "userId", "issueId", date, "pagesRead") VALUES ($1, $2, $3, $4, $5)"#)
+                .bind(id).bind(user).bind(issue).bind(date).bind(pages).execute(&db.pool).await.unwrap();
+        }
+        sqlx::query(r#"INSERT INTO "KoreaderDocument" (id, digest, method, "issueId") VALUES ('k1', 'abc123', 'binary', 'ann_2')"#)
+            .execute(&db.pool).await.unwrap();
+        for (id, list, issue) in [("li1", "L1", "ann_2"), ("li2", "L2", "ann_2"), ("li3", "L2", "run_2")] {
+            sqlx::query(r#"INSERT INTO "ReadingListItem" (id, "listId", "issueId", title, "order") VALUES ($1, $2, $3, 'WF #2', 1)"#)
+                .bind(id).bind(list).bind(issue).execute(&db.pool).await.unwrap();
+        }
+
+        assert_eq!(repair_main_run_splits(&db, "lib").await, 1, "exactly the one split pair is repaired");
+
+        let ids: Vec<String> = sqlx::query_scalar(r#"SELECT id FROM "Issue" ORDER BY id"#).fetch_all(&db.pool).await.unwrap();
+        assert!(!ids.contains(&"ann_2".to_string()), "the annual twin is gone");
+        for kept in ["run_3", "ann_3", "run_4", "ann_9", "run_5", "lane_5", "run_6", "ann_6", "o_run_2", "o_ann_2"] {
+            assert!(ids.contains(&kept.to_string()), "{kept} is left alone");
+        }
+        let run2 = sqlx::query(r#"SELECT "filePath", status, "pageCount", name, CAST("isAnnual" AS INTEGER) AS annual, CAST("fileAddedAt" AS INTEGER) AS added FROM "Issue" WHERE id = 'run_2'"#)
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(run2.get::<Option<String>, _>("filePath").as_deref(), Some("/lib/WF/Worlds Finest #002 (2022).cbz"));
+        assert_eq!(run2.get::<String, _>("status"), "DOWNLOADED");
+        assert_eq!(run2.get::<i64, _>("pageCount"), 22);
+        assert_eq!(run2.get::<i64, _>("annual"), 0);
+        assert_eq!(run2.get::<Option<String>, _>("name").as_deref(), Some("Strange Visitor"));
+        assert_eq!(run2.get::<Option<i64>, _>("added"), Some(1_000), "the file arrived when the run's row first had it");
+        let o_run2: Option<String> = sqlx::query_scalar(r#"SELECT "filePath" FROM "Issue" WHERE id = 'o_run_2'"#).fetch_one(&db.pool).await.unwrap();
+        assert!(o_run2.is_none(), "another library is untouched");
+
+        let progress: Vec<(String, String, i64, i64)> = sqlx::query_as(r#"SELECT "userId", "issueId", "currentPage", CAST("isCompleted" AS INTEGER) FROM "ReadProgress" ORDER BY "userId""#)
+            .fetch_all(&db.pool).await.unwrap();
+        assert_eq!(progress, vec![
+            ("u1".to_string(), "run_2".to_string(), 10, 0),
+            ("u2".to_string(), "run_2".to_string(), 7, 0),
+            ("u3".to_string(), "run_2".to_string(), 22, 1),
+        ]);
+        let marks: Vec<(String, String)> = sqlx::query_as(r#"SELECT id, "issueId" FROM "Bookmark" ORDER BY id"#).fetch_all(&db.pool).await.unwrap();
+        assert_eq!(marks, vec![("b1".to_string(), "run_2".to_string()), ("b3".to_string(), "run_2".to_string())], "a clashing bookmark keeps the run's own");
+        let daily: Vec<(String, String, i64)> = sqlx::query_as(r#"SELECT "userId", "issueId", "pagesRead" FROM "DailyIssueRead" ORDER BY "userId""#)
+            .fetch_all(&db.pool).await.unwrap();
+        assert_eq!(daily, vec![("u1".to_string(), "run_2".to_string(), 7), ("u2".to_string(), "run_2".to_string(), 7)], "one day's pages add up");
+        let ko: Vec<String> = sqlx::query_scalar(r#"SELECT "issueId" FROM "KoreaderDocument""#).fetch_all(&db.pool).await.unwrap();
+        assert_eq!(ko, vec!["run_2".to_string()], "the file's KOReader ids follow the file");
+        let items: Vec<(String, Option<String>)> = sqlx::query_as(r#"SELECT id, "issueId" FROM "ReadingListItem" ORDER BY id"#).fetch_all(&db.pool).await.unwrap();
+        assert_eq!(items, vec![("li1".to_string(), Some("run_2".to_string())), ("li3".to_string(), Some("run_2".to_string()))], "a list holding both keeps one entry");
+
+        assert_eq!(repair_main_run_splits(&db, "lib").await, 0, "a second pass finds nothing");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #271 through a real scan: a renamed run file whose ComicInfo says <Format>Annual</Format> (the
+    // stamp an annual row's embed leaves) but carries the run's own issue id is the run's issue — it
+    // fills the run's row instead of becoming an annual. A real annual, and a Format-only annual with
+    // no run issue's id, stay annuals. And the scan repairs a split it finds (the step runs).
+    #[tokio::test]
+    async fn a_scan_gives_a_format_only_annual_with_a_run_issues_id_back_to_the_run() {
+        let base = std::env::temp_dir().join(format!("omnibus_wf271_{}", uuid::Uuid::new_v4()));
+        let series_dir = base.join("DC Comics").join("BatmanSuperman World's Finest (2022)");
+        std::fs::create_dir_all(&series_dir).unwrap();
+        let cbz = |name: &str, comic_info: Option<&str>| -> String {
+            use std::io::Write as _;
+            let p = series_dir.join(name);
+            let mut zw = zip::ZipWriter::new(File::create(&p).unwrap());
+            if let Some(xml) = comic_info {
+                zw.start_file("ComicInfo.xml", zip::write::SimpleFileOptions::default()).unwrap();
+                zw.write_all(xml.as_bytes()).unwrap();
+            }
+            zw.start_file("01.jpg", zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+            p.to_string_lossy().replace('\\', "/")
+        };
+        let ci = |number: &str, issue_id: &str| format!(
+            r#"<?xml version="1.0"?><ComicInfo><Series>Batman/Superman: World's Finest</Series><Number>{number}</Number><Format>Annual</Format><Web>https://comicvine.gamespot.com/x/4000-{issue_id}/</Web></ComicInfo>"#
+        );
+        let run2 = cbz("Batman-Superman Worlds Finest #002 (2022).cbz", Some(&ci("2", "911244")));
+        let fmt_only3 = cbz("Batman-Superman Worlds Finest #003 (2022).cbz", Some(&ci("3", "555555")));
+        let annual1 = cbz("Batman-Superman Worlds Finest 2024 Annual #001 (2024).cbz", Some(&ci("1", "999001")));
+        let split5 = cbz("Batman-Superman Worlds Finest #005 (2022).cbz", None);
+        // A Special's lane row holds this id: a lane's id is no run issue's, so the Format decides.
+        let lane_id7 = cbz("Batman-Superman Worlds Finest #007 (2022).cbz", Some(&ci("7", "911249")));
+
+        let db_file = base.join("wf.db");
+        File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        scan_schema(&db).await;
+        sqlx::query(r#"DROP TABLE "ReadProgress""#).execute(&db.pool).await.unwrap();
+        issue_children_schema(&db).await;
+        sqlx::query(r#"INSERT INTO "Library" (id, name, path) VALUES ('lib', 'Comics', $1)"#)
+            .bind(base.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Series" (id, "folderPath", name, year, publisher, "metadataId", "metadataSource", "matchState", "libraryId")
+                       VALUES ('wf', $1, 'Batman/Superman: World''s Finest', 2022, 'DC Comics', '141907', 'COMICVINE', 'MATCHED', 'lib')"#)
+            .bind(series_dir.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "AttachedVolume" (id, "seriesId", "metadataSource", "volumeId", kind, name)
+                       VALUES ('att_sp', 'wf', 'COMICVINE', '170000', 'SPECIAL', 'Superman Special')"#)
+            .execute(&db.pool).await.unwrap();
+        // The run's #2 and #3 lost their files (the old names are gone); #5 is already split.
+        for (id, number, mid, annual, file, lane) in [
+            ("run_2", "2", "911244", false, None, None),
+            ("run_3", "3", "911245", false, None, None),
+            ("run_5", "5", "911247", false, None, None),
+            ("ann_5", "5", "911247", true, Some(&split5), None),
+            ("sp_7", "7", "911249", false, None, Some("att_sp")),
+        ] {
+            sqlx::query(&format!(
+                r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", status, "filePath", "metadataId", "metadataSource", "matchState", "attachedVolumeId")
+                   VALUES ($1, 'wf', $2, {}, $3, $4, $5, 'COMICVINE', 'MATCHED', $6)"#,
+                if annual { "true" } else { "false" }
+            ))
+            .bind(id).bind(number).bind(if file.is_some() { "DOWNLOADED" } else { "WANTED" }).bind(file).bind(mid).bind(lane)
+            .execute(&db.pool).await.unwrap();
+        }
+
+        scan_library(db.clone(), base.to_string_lossy().replace('\\', "/"), "lib".to_string(), None).await.expect("scan");
+
+        let rows = sqlx::query(r#"SELECT id, number, "filePath", CAST("isAnnual" AS INTEGER) AS annual FROM "Issue""#)
+            .fetch_all(&db.pool).await.unwrap();
+        let by_file = |f: &str| rows.iter().find(|r| r.get::<Option<String>, _>("filePath").as_deref() == Some(f))
+            .unwrap_or_else(|| panic!("no row for {f}"));
+        let r2 = by_file(&run2);
+        assert_eq!(r2.get::<String, _>("id"), "run_2", "the run's #2 takes its file back");
+        assert_eq!(r2.get::<i64, _>("annual"), 0);
+        let r3 = by_file(&fmt_only3);
+        assert_eq!(r3.get::<i64, _>("annual"), 1, "no run issue's id: the Format still decides");
+        assert_ne!(r3.get::<String, _>("id"), "run_3");
+        assert_eq!(by_file(&annual1).get::<i64, _>("annual"), 1, "a real annual stays an annual");
+        let r5 = by_file(&split5);
+        assert_eq!(r5.get::<String, _>("id"), "run_5", "the scan repaired the split it found");
+        assert_eq!(r5.get::<i64, _>("annual"), 0);
+        assert!(rows.iter().all(|r| r.get::<String, _>("id") != "ann_5"), "and dropped the twin");
+        let r7 = by_file(&lane_id7);
+        assert_ne!(r7.get::<String, _>("id"), "sp_7", "a Special's row is not the run's");
+        assert_eq!(r7.get::<i64, _>("annual"), 1, "a lane row's id proves nothing: the Format decides");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #271 guard B, read side: a <Format> naming Annual never becomes the SERIES' format — every embed
+    // would then stamp the whole run "Annual" and every rescan read it back as annuals.
+    #[test]
+    fn comicinfo_series_defaults_never_take_an_annual_format() {
+        for format in ["Annual", "annual", "Annual Series"] {
+            let info = ScanComicInfo { format: Some(format.to_string()), ..Default::default() };
+            assert_eq!(comicinfo_series_defaults(&info).format, None, "{format}");
+        }
+        let info = ScanComicInfo { format: Some("Limited Series".to_string()), ..Default::default() };
+        assert_eq!(comicinfo_series_defaults(&info).format.as_deref(), Some("Limited Series"), "any other format is kept as it is");
     }
 
     // ------------------------------------------------------------------

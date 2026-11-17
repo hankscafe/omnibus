@@ -309,11 +309,8 @@ async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Re
             // #203: annual domain flag from the file's own signals (Format / Number shape / the
             // ORIGINAL filename — checked before any rename). The number keeps its ComicInfo-only
             // contract above; the flag rides beside it into dedupe + the row.
-            let is_annual = crate::scanner::annual_flag_for_signals(
-                info.format.as_deref(),
-                info.number.as_deref(),
-                &path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
-            );
+            let source_file_name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let is_annual = crate::scanner::annual_flag_for_signals(info.format.as_deref(), info.number.as_deref(), &source_file_name);
             
             let manga_str = info.manga.as_deref().unwrap_or("").to_lowercase();
             let mut is_manga = manga_str == "yes" || manga_str == "yesandrighttoleft";
@@ -350,6 +347,25 @@ async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Re
             } else {
                 ("LOCAL".to_string(), String::new())
             };
+
+            // Per-issue provider ID (parity with metadata-extractor.ts + importer.ts): prefer the
+            // dedicated ComicVineIssueId/MetronIssueId tags, else the numeric id in the <Web> URL
+            // (.../4000-<id>/ for ComicVine, metron.cloud/issue/<id> for Metron; Metron takes
+            // precedence). With a real per-issue id the issue is MATCHED under that id; without one
+            // it is imported UNMATCHED under an `unmatched_<uuid>` placeholder so the follow-up
+            // metadata sync can match it (Node: matchState = metadataIssueId ? 'MATCHED' : 'UNMATCHED').
+            let cv_issue_id = info.comic_vine_issue_id.as_deref().and_then(only_digits).or_else(|| {
+                if web.contains("comicvine") {
+                    re_cv_issue().captures(web).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
+                } else { None }
+            });
+            let metron_issue_id = info.metron_issue_id.as_deref().and_then(only_digits).or_else(|| {
+                if web.contains("metron.cloud") {
+                    re_metron_issue().captures(web).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
+                } else { None }
+            });
+            let resolved_issue_id = metron_issue_id.clone().or_else(|| cv_issue_id.clone());
+            let issue_id_source = if metron_issue_id.is_some() || meta_source == "METRON" { "METRON" } else { "COMICVINE" };
 
             if meta_source == "LOCAL" || meta_id.is_empty() {
                 log::info!("[Watched Sync] '{}' has no ComicVine/Metron ID; routing to unmatched for review.", series_name);
@@ -440,6 +456,15 @@ async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Re
                 };
                 dest_folder = segments.iter().fold(PathBuf::from(&fallback_lib_path), |folder, segment| folder.join(segment));
             }
+
+            // #271: a file whose only Annual sign is its <Format> while its ComicInfo carries the issue
+            // id of the series' same-number run row IS that run issue — it fills the run's row under
+            // the run's name instead of arriving as an annual twin beside it.
+            let is_annual = is_annual && !(
+                had_existing_series
+                    && crate::scanner::annual_by_format_only(info.format.as_deref(), info.number.as_deref(), &source_file_name)
+                    && run_holds_issue_id(&db, &series_id, resolved_issue_id.as_deref().map(|id| (issue_id_source, id)), &issue_num).await
+            );
 
             // A curated nonblank Series imprint is authoritative. Otherwise a new or unlocked
             // existing series may adopt the archive's standard ComicInfo value for this import.
@@ -549,23 +574,6 @@ async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Re
 
                 let issue_id = uuid::Uuid::new_v4().to_string();
 
-                // Per-issue provider ID (parity with metadata-extractor.ts + importer.ts): prefer the
-                // dedicated ComicVineIssueId/MetronIssueId tags, else the numeric id in the <Web> URL
-                // (.../4000-<id>/ for ComicVine, metron.cloud/issue/<id> for Metron; Metron takes
-                // precedence). With a real per-issue id the issue is MATCHED under that id; without one
-                // it is imported UNMATCHED under an `unmatched_<uuid>` placeholder so the follow-up
-                // metadata sync can match it (Node: matchState = metadataIssueId ? 'MATCHED' : 'UNMATCHED').
-                let cv_issue_id = info.comic_vine_issue_id.as_deref().and_then(only_digits).or_else(|| {
-                    if web.contains("comicvine") {
-                        re_cv_issue().captures(web).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
-                    } else { None }
-                });
-                let metron_issue_id = info.metron_issue_id.as_deref().and_then(only_digits).or_else(|| {
-                    if web.contains("metron.cloud") {
-                        re_metron_issue().captures(web).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
-                    } else { None }
-                });
-                let resolved_issue_id = metron_issue_id.clone().or_else(|| cv_issue_id.clone());
                 // Credits parsed from ComicInfo.xml (parity with the main importer).
                 let writers_json = split_to_json(info.writer.as_deref());
                 let artists_json = split_to_json(info.penciller.as_deref());
@@ -573,7 +581,7 @@ async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Re
 
                 let (issue_meta_id, issue_meta_source, issue_match_state): (String, String, &str) = match &resolved_issue_id {
                     Some(id) => {
-                        let src = if metron_issue_id.is_some() || meta_source == "METRON" { "METRON" } else { "COMICVINE" };
+                        let src = issue_id_source;
                         // Local-first ingest (discussion #182, parity with the scanner): an id AND
                         // creative credits from the file = enrichment-complete → DEEP_SYNCED, so
                         // opening the imported issue never costs a provider call.
@@ -697,6 +705,32 @@ async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Re
     }
 
     Ok((success_count, unmatched_count, format!("Processed watched folder. Imported: {}. Moved to unmatched: {}.", success_count, unmatched_count)))
+}
+
+/// #271: whether one of the series' run rows (neither an annual nor on a lane) holds this provider
+/// issue id for the same number — crate::scanner::main_run_holds_issue_id over the series' rows.
+async fn run_holds_issue_id(db: &Db, series_id: &str, embedded: Option<(&str, &str)>, issue_num: &str) -> bool {
+    if embedded.is_none() {
+        return false;
+    }
+    let rows: Vec<(String, String, String, bool)> = sqlx::query(
+        r#"SELECT "metadataSource", "metadataId", number, CAST("isAnnual" AS INTEGER) AS is_annual, "attachedVolumeId"
+           FROM "Issue" WHERE "seriesId" = $1 AND "metadataId" IS NOT NULL"#,
+    )
+    .bind(series_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default()
+    .iter()
+    .map(|r| (
+        r.try_get::<Option<String>, _>("metadataSource").unwrap_or(None).unwrap_or_default(),
+        r.get::<String, _>("metadataId"),
+        r.get::<String, _>("number"),
+        r.try_get::<i64, _>("is_annual").map(|v| v == 0).unwrap_or(false)
+            && r.try_get::<Option<String>, _>("attachedVolumeId").unwrap_or(None).is_none(),
+    ))
+    .collect();
+    crate::scanner::main_run_holds_issue_id(embedded, issue_num, &rows)
 }
 
 /// What a handed-off file became (#240 PR B, "ImportHandoff".outcome). PENDING is the importer's
@@ -1748,6 +1782,92 @@ mod handoff_tests {
             assert!(!e.to_string().contains("or inside it"), "a folder of its own is never refused: {}", e);
         }
         assert!(names_in(&unmatched).is_empty(), "the probe is removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #271: a file whose only Annual sign is its <Format> but whose ComicInfo carries the issue id of
+    // the run's same-number row is that run issue: it fills the run's row under the run's name. With
+    // no run issue's id the Format still decides, as before.
+    #[tokio::test]
+    async fn a_format_only_annual_with_a_run_issues_id_fills_the_runs_row() {
+        let base = std::env::temp_dir().join(format!("omnibus_ws271_{}", uuid::Uuid::new_v4()));
+        let (watched, unmatched, lib) = (base.join("watched"), base.join("unmatched"), base.join("lib"));
+        let series_dir = lib.join("DC Comics").join("Worlds Finest (2022)");
+        for d in [&watched, &unmatched, &series_dir] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let db = handoff_db(&base).await;
+        for ddl in [
+            r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#,
+            r#"CREATE TABLE "Library" (id TEXT PRIMARY KEY, name TEXT, path TEXT, "isDefault" BOOLEAN NOT NULL DEFAULT false, "isManga" BOOLEAN NOT NULL DEFAULT false)"#,
+            r#"CREATE TABLE "Series" (id TEXT PRIMARY KEY, name TEXT, publisher TEXT, year INTEGER, "folderPath" TEXT, "metadataId" TEXT,
+                "metadataSource" TEXT, "matchState" TEXT, "isManga" BOOLEAN NOT NULL DEFAULT false, "seriesGroup" TEXT, "libraryId" TEXT,
+                imprint TEXT, "hasCustomMetadata" BOOLEAN NOT NULL DEFAULT false, "updatedAt" DATETIME)"#,
+            r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "seriesId" TEXT, number TEXT, "isAnnual" BOOLEAN NOT NULL DEFAULT false, status TEXT,
+                "filePath" TEXT, name TEXT, description TEXT, writers TEXT, artists TEXT, characters TEXT, "matchState" TEXT,
+                "metadataId" TEXT, "metadataSource" TEXT, "pageCount" INTEGER NOT NULL DEFAULT 0, "releaseDate" TEXT,
+                "attachedVolumeId" TEXT, "fileAddedAt" DATETIME, "createdAt" DATETIME)"#,
+        ] {
+            sqlx::query(ddl).execute(&db.pool).await.expect("create table");
+        }
+        sqlx::query(r#"INSERT INTO "Library" (id, name, path, "isDefault") VALUES ('lib', 'Comics', $1, true)"#)
+            .bind(lib.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "metadataId", "metadataSource", "matchState", "libraryId")
+                       VALUES ('wf', 'Worlds Finest', 'DC Comics', 2022, $1, '141907', 'COMICVINE', 'MATCHED', 'lib')"#)
+            .bind(series_dir.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+        // The run's #2 (WANTED); an annual row and a Special's lane row that hold ids too - neither is
+        // the run, so a file carrying their ids proves nothing about the run.
+        for (id, number, annual, lane, mid) in [
+            ("run_2", "2", false, None, "911244"),
+            ("ann_4", "4", true, None, "911246"),
+            ("sp_5", "5", false, Some("av_special"), "911247"),
+        ] {
+            sqlx::query(&format!(
+                r#"INSERT INTO "Issue" (id, "seriesId", number, "isAnnual", "attachedVolumeId", status, "metadataId", "metadataSource", "matchState")
+                   VALUES ($1, 'wf', $2, {}, $3, 'WANTED', $4, 'COMICVINE', 'MATCHED')"#,
+                if annual { "true" } else { "false" }
+            ))
+            .bind(id).bind(number).bind(lane).bind(mid).execute(&db.pool).await.unwrap();
+        }
+        let drop_in = |name: &str, number: &str, issue_id: &str| {
+            use std::io::Write as _;
+            let mut zw = zip::ZipWriter::new(std::fs::File::create(watched.join(name)).unwrap());
+            zw.start_file("ComicInfo.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(format!(
+                r#"<?xml version="1.0"?><ComicInfo><Series>Worlds Finest</Series><Number>{number}</Number><Year>2022</Year><Format>Annual</Format><Publisher>DC Comics</Publisher><ComicVineVolumeId>141907</ComicVineVolumeId><ComicVineIssueId>{issue_id}</ComicVineIssueId></ComicInfo>"#
+            ).as_bytes()).unwrap();
+            zw.start_file("01.jpg", zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+            zw.finish().unwrap();
+        };
+        drop_in("Worlds Finest 002.cbz", "2", "911244");
+        drop_in("Worlds Finest 003.cbz", "3", "555555");
+        drop_in("Worlds Finest 004.cbz", "4", "911246");
+        drop_in("Worlds Finest 005.cbz", "5", "911247");
+
+        let (imported, _, _) = sweep_folders(db.clone(), watched.to_string_lossy().to_string(), unmatched.to_string_lossy().to_string())
+            .await.expect("the sweep runs");
+        assert_eq!(imported, 4);
+
+        let rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
+            r#"SELECT id, number, CAST("isAnnual" AS INTEGER), "filePath" FROM "Issue" ORDER BY number, id"#,
+        ).fetch_all(&db.pool).await.unwrap();
+        let file_of = |f: &Option<String>| f.clone().unwrap_or_default();
+        let row = |id: &str| rows.iter().find(|r| r.0 == id).cloned().unwrap_or_else(|| panic!("no row {id}: {rows:?}"));
+        let run2 = row("run_2");
+        assert_eq!(run2.2, 0);
+        assert!(run2.3.is_some() && !file_of(&run2.3).contains("Annual"), "the run's #2 takes the file, named as the run's issue: {rows:?}");
+        let new3: Vec<_> = rows.iter().filter(|r| r.1 == "3").collect();
+        assert_eq!(new3.len(), 1);
+        assert!(new3[0].2 == 1 && file_of(&new3[0].3).contains("Annual"), "no run issue's id: the Format still decides");
+        // An annual row's id is no run issue's: the file is that annual's.
+        let ann4 = row("ann_4");
+        assert!(ann4.2 == 1 && file_of(&ann4.3).contains("Annual"), "{rows:?}");
+        // A lane row's id is no run issue's either: the file stays an annual of its own.
+        assert!(row("sp_5").3.is_none(), "the Special's row is untouched: {rows:?}");
+        let new5: Vec<_> = rows.iter().filter(|r| r.1 == "5" && r.0 != "sp_5").collect();
+        assert!(new5.len() == 1 && new5[0].2 == 1, "{rows:?}");
+        assert_eq!(rows.len(), 5, "{rows:?}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -9,7 +9,7 @@ import { SystemNotifier } from './notifications';
 import { arrivalStamp } from './file-added';
 import { detectManga } from './manga-detector';
 import AdmZip from 'adm-zip';
-import { isSameIssue, extractIssueNumber, annualFlagForSignals } from '@/lib/utils/issue-parser';
+import { isSameIssue, extractIssueNumber, annualFlagAfterRunGuard } from '@/lib/utils/issue-parser';
 import { STOP_WORDS } from '@/lib/utils/search-terms';
 import { COMIC_EXTENSIONS, COMIC_EXT_REGEX, IMAGE_EXT_REGEX } from '@/lib/utils/formats';
 import { sanitizeFilename as sanitize } from '@/lib/utils/sanitize';
@@ -860,9 +860,23 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
     const extractedNum = extractIssueNumber(rawFileName);
     Logger.log(`[Importer Debug] Extracted internal issue number as: ${extractedNum} from raw string: ${rawFileName}`, 'debug');
     
+    const seriesRows = series?.id
+        ? await prisma.issue.findMany({
+            where: { seriesId: series.id },
+            select: { number: true, isAnnual: true, releaseDate: true, attachedVolumeId: true, metadataId: true, metadataSource: true },
+        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null; attachedVolumeId: string | null; metadataId: string | null; metadataSource: string | null }>)
+        : [];
+    const embeddedIssueId = xmlMeta?.metadataIssueId ? String(xmlMeta.metadataIssueId) : null;
+
     // #203 Phase 1: an imported annual lands under the Mylar-shaped name (engine parity:
     // renamer.rs / watched_sync.rs) so it reads correctly beside the main run from the first write.
-    const isAnnualImport = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, rawFileName);
+    // #271: unless its only Annual sign is the <Format> and its ComicInfo id is the run's
+    // same-number issue - then it is that run issue, and fills the run's row under the run's name.
+    const isAnnualImport = annualFlagAfterRunGuard(
+        { format: xmlMeta?.format, number: xmlMeta?.number, filename: rawFileName, source: xmlMeta?.metadataSource, issueId: embeddedIssueId },
+        xmlMeta?.number || extractedNum,
+        seriesRows,
+    );
 
     // #255: a Special is requested against its PARENT's volume under its own name (request-name.ts),
     // so the import lands in the parent — where its "#1" is not the run's #1. The download takes the
@@ -875,13 +889,6 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
             .catch(() => [] as Array<{ id: string; name: string | null; kind: string }>)
         : [];
     const specialIds = new Set(specialLanes.map(a => a.id));
-    const seriesRows = series?.id
-        ? await prisma.issue.findMany({
-            where: { seriesId: series.id },
-            select: { number: true, isAnnual: true, releaseDate: true, attachedVolumeId: true, metadataId: true, metadataSource: true },
-        }).catch(() => [] as Array<{ number: string; isAnnual: boolean; releaseDate: string | null; attachedVolumeId: string | null; metadataId: string | null; metadataSource: string | null }>)
-        : [];
-    const embeddedIssueId = xmlMeta?.metadataIssueId ? String(xmlMeta.metadataIssueId) : null;
     const specialById = embeddedIssueId
         ? seriesRows.find(r => r.attachedVolumeId && specialIds.has(r.attachedVolumeId)
             && r.metadataId === embeddedIssueId && r.metadataSource === xmlMeta.metadataSource) ?? null
@@ -1012,7 +1019,12 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
          if (xmlMeta?.number) issueNum = xmlMeta.number;
          // #203: annual domain — part of numbering identity, so the dedupe below never pairs
          // "Annual #1" with the plain #1. Signals: ComicInfo <Format> / <Number> shape / filename.
-         const isAnnual = annualFlagForSignals(xmlMeta?.format, xmlMeta?.number, fileName);
+         // #271: with the same run guard as the naming above.
+         const isAnnual = annualFlagAfterRunGuard(
+             { format: xmlMeta?.format, number: xmlMeta?.number, filename: fileName, source: xmlMeta?.metadataSource, issueId: embeddedIssueId },
+             issueNum,
+             seriesRows,
+         );
 
          const writersStr = xmlMeta?.writers?.length ? JSON.stringify(xmlMeta.writers) : null;
          const artistsStr = xmlMeta?.artists?.length ? JSON.stringify(xmlMeta.artists) : null;

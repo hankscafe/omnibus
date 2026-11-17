@@ -529,14 +529,16 @@ pub(crate) fn collected_format_from_name(name: &str, series: &str) -> &'static s
 }
 
 /// A file's ComicInfo <Format>: "Annual" for an annual (#203), the edition's kind for a book on a
-/// COLLECTED shelf (#257), else the series' own value (blank when it has none).
+/// COLLECTED shelf (#257), else the series' own value (blank when it has none). #271: a series value
+/// naming Annual is never stamped on one of the run's issues — the scanner reads <Format> Annual
+/// back as an annual, so every rescan would turn the run into annual twins.
 fn collected_or_series_format(is_annual: bool, attached_kind: Option<&str>, attached_name: Option<&str>, series_name: &str, series_format: Option<String>) -> String {
     if is_annual {
         "Annual".to_string()
     } else if attached_kind == Some("COLLECTED") {
         collected_format_from_name(attached_name.unwrap_or(""), series_name).to_string()
     } else {
-        series_format.unwrap_or_default()
+        series_format.filter(|f| crate::scanner::find_annual_token(f).is_none()).unwrap_or_default()
     }
 }
 
@@ -1081,6 +1083,18 @@ mod tests {
         assert_eq!(collected_or_series_format(false, Some("ANNUAL"), Some("Batman Annual"), "Batman", Some("Digital".into())), "Digital");
         assert_eq!(collected_or_series_format(false, None, None, "Saga", Some("Digital".into())), "Digital");
         assert_eq!(collected_or_series_format(false, None, None, "Saga", None), "");
+    }
+
+    // #271 guard B: a series format naming Annual is never stamped onto one of the run's issues —
+    // every rescan would read the run back as annuals. An annual row still says "Annual", and any
+    // other series format is written as it is.
+    #[test]
+    fn comicinfo_format_never_stamps_a_series_annual_onto_the_run() {
+        assert_eq!(collected_or_series_format(false, None, None, "Worlds Finest", Some("Annual".into())), "");
+        assert_eq!(collected_or_series_format(false, None, None, "Worlds Finest", Some("Annual Series".into())), "");
+        assert_eq!(collected_or_series_format(false, Some("ANNUAL"), Some("Worlds Finest 2024 Annual"), "Worlds Finest", Some("annual".into())), "");
+        assert_eq!(collected_or_series_format(true, None, None, "Worlds Finest", Some("Annual".into())), "Annual");
+        assert_eq!(collected_or_series_format(false, None, None, "Worlds Finest", Some("Annualized Edition".into())), "Annualized Edition", "word-bounded");
     }
 
     // Twin of the collectedFormatFromName cases in __tests__/lib/utils/collected-edition.test.ts.

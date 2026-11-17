@@ -1,7 +1,7 @@
 // __tests__/lib/utils/issue-parser.test.ts
 // Removed X of Y testing since hasn't been implemented yet
 import { describe, it, expect } from 'vitest';
-import { extractIssueNumber, describeIssueFromFilename, isSameIssue, parseIssueRange, normalizeFractionNumbers } from '@/lib/utils/issue-parser';
+import { extractIssueNumber, describeIssueFromFilename, isSameIssue, parseIssueRange, normalizeFractionNumbers, annualByFormatOnly, mainRunHoldsIssueId, annualFlagAfterRunGuard } from '@/lib/utils/issue-parser';
 
 describe('Utility: Issue Number Parser', () => {
     describe('isSameIssue()', () => {
@@ -208,5 +208,47 @@ describe('Annual detection (#203 Phase 0)', () => {
         expect(extractIssueNumber('Batman Annual 001 (2012).cbz')).toBe('1');
         expect(extractIssueNumber('Batman 005 (2013).cbz')).toBe('5');
         expect(extractIssueNumber('X-Men #½ (1998).cbz')).toBe('0.5');
+    });
+});
+
+// #271 - twins of the engine's annual_by_format_only / main_run_holds_issue_id tests (scanner.rs).
+describe('#271: a Format-only annual that carries a run issue\'s id', () => {
+    const rows = [
+        { metadataSource: 'COMICVINE', metadataId: '911244', number: '2', isAnnual: false, attachedVolumeId: null },
+        { metadataSource: 'COMICVINE', metadataId: '999001', number: '1', isAnnual: true, attachedVolumeId: null },
+        { metadataSource: 'COMICVINE', metadataId: '700005', number: '5', isAnnual: false, attachedVolumeId: 'av_special' },
+        { metadataSource: 'COMICVINE', metadataId: null, number: '2', isAnnual: false, attachedVolumeId: null },
+    ];
+
+    it('annualByFormatOnly: the <Format> is the only Annual sign', () => {
+        expect(annualByFormatOnly('Annual', '2', 'Batman-Superman Worlds Finest #002 (2022).cbz')).toBe(true);
+        expect(annualByFormatOnly('Annual', null, 'Worlds Finest 002.cbz')).toBe(true);
+        expect(annualByFormatOnly('Annual', 'Annual 2', 'x.cbz')).toBe(false);
+        expect(annualByFormatOnly('Annual', '2', 'Batman Annual 002 (2012).cbz')).toBe(false);
+        expect(annualByFormatOnly(null, '2', 'Worlds Finest 002.cbz')).toBe(false);
+        expect(annualByFormatOnly('Series', '2', 'Worlds Finest 002.cbz')).toBe(false);
+        expect(annualByFormatOnly('Annualized', '2', 'Worlds Finest 002.cbz')).toBe(false);
+    });
+
+    it("mainRunHoldsIssueId: a run row (not an annual, not a lane's) with the same provider, id and number", () => {
+        expect(mainRunHoldsIssueId('COMICVINE', '911244', '2', rows)).toBe(true);
+        expect(mainRunHoldsIssueId('COMICVINE', '911244', '002', rows)).toBe(true);
+        expect(mainRunHoldsIssueId('COMICVINE', '911244', '3', rows)).toBe(false);
+        expect(mainRunHoldsIssueId('METRON', '911244', '2', rows)).toBe(false);
+        expect(mainRunHoldsIssueId('COMICVINE', '123', '2', rows)).toBe(false);
+        expect(mainRunHoldsIssueId('COMICVINE', '999001', '1', rows)).toBe(false);
+        expect(mainRunHoldsIssueId('COMICVINE', '700005', '5', rows)).toBe(false);
+        expect(mainRunHoldsIssueId('COMICVINE', null, '2', rows)).toBe(false);
+    });
+
+    it('annualFlagAfterRunGuard: only the Format-only case with a run issue\'s id flips', () => {
+        const file = (over: Partial<{ format: string | null; number: string | null; filename: string; source: string | null; issueId: string | null }> = {}) => ({
+            format: 'Annual', number: '2', filename: 'Worlds Finest 002.cbz', source: 'COMICVINE', issueId: '911244', ...over,
+        });
+        expect(annualFlagAfterRunGuard(file(), '2', rows)).toBe(false);
+        expect(annualFlagAfterRunGuard(file({ issueId: '555555' }), '2', rows)).toBe(true);
+        expect(annualFlagAfterRunGuard(file({ filename: 'Worlds Finest Annual 002.cbz' }), '2', rows)).toBe(true);
+        expect(annualFlagAfterRunGuard(file({ format: null }), '2', rows)).toBe(false);
+        expect(annualFlagAfterRunGuard(file({ format: null, number: 'Annual 2' }), '2', rows)).toBe(true);
     });
 });

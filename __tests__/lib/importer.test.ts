@@ -475,6 +475,122 @@ describe('File System: Importer Engine', () => {
         });
     });
 
+    // A download never orphans a file the library already has. The run's #1 may already hold a file;
+    // when the download's own ComicInfo names a DIFFERENT issue (an annual with no Annual sign, a
+    // mislabelled release), filling that row would leave its file on disk with no row - so the
+    // download gets a row of its own and the request goes to Needs Review instead. A run download
+    // also never fills a collected edition's book.
+    describe('never orphans a file the library already has', () => {
+        const runRow = (over: Record<string, unknown>) => ({
+            id: 'run_1', seriesId: 'series_1', number: '1', isAnnual: false, name: null, description: null, releaseDate: null,
+            writers: null, artists: null, characters: null, metadataId: '900001', metadataSource: 'COMICVINE', matchState: 'MATCHED',
+            attachedVolumeId: null, filePath: '/library/comics/DC Comics/Batman (2016)/Batman #001.cbz', status: 'DOWNLOADED', ...over,
+        });
+        const download = async (rows: unknown[], comicInfo: Record<string, unknown> | null) => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman 01.cbz', volumeId: 'cv_123', createdAt: new Date(),
+            });
+            mocks.parseComicInfo.mockResolvedValueOnce(comicInfo);
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false,
+            });
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue(rows);
+            (prisma.issue.update as any).mockClear();
+            mocks.createIssue.mockClear();
+            mocks.updateRequest.mockClear();
+            notifierSendAlert.mockClear();
+            await Importer.importRequest('req_1');
+            return {
+                filled: (prisma.issue.update as any).mock.calls.map((c: any[]) => c[0]).filter((u: any) => u.data?.filePath),
+                created: mocks.createIssue.mock.calls.map((c: any[]) => c[0].data),
+                statuses: mocks.updateRequest.mock.calls.map((c: any[]) => c[0].data).filter((d: any) => d.status),
+            };
+        };
+        afterEach(async () => {
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([]);
+        });
+
+        it("keeps the run's file when the download's ComicInfo names another issue: its own row, and Needs Review", async () => {
+            const { filled, created, statuses } = await download([runRow({})],
+                { series: 'Batman', number: '1', metadataIssueId: '700777', metadataSource: 'COMICVINE' });
+            expect(filled).toEqual([]);
+            expect(created).toHaveLength(1);
+            expect(created[0]).toMatchObject({ number: '1', metadataId: '700777', metadataSource: 'COMICVINE' });
+            expect(statuses.map((d: any) => d.status)).toEqual(['NEEDS_REVIEW']);
+            expect(statuses[0].statusNote).toMatch(/#1/);
+            expect(notifierSendAlert.mock.calls.some((c: any[]) => c[0] === 'comic_available')).toBe(false);
+        });
+
+        it("fills the row as before when the row's old file is gone", async () => {
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => !String(p).endsWith('Batman (2016)/Batman #001.cbz'));
+            const { filled, created, statuses } = await download([runRow({})],
+                { series: 'Batman', number: '1', metadataIssueId: '700777', metadataSource: 'COMICVINE' });
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'run_1' }]);
+            expect(created).toEqual([]);
+            expect(statuses.map((d: any) => d.status)).toEqual(['COMPLETED']);
+        });
+
+        it("replaces the row's file as before when the ComicInfo names the same issue (an upgrade)", async () => {
+            const { filled, statuses } = await download([runRow({})],
+                { series: 'Batman', number: '1', metadataIssueId: '900001', metadataSource: 'COMICVINE' });
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'run_1' }]);
+            expect(statuses.map((d: any) => d.status)).toEqual(['COMPLETED']);
+        });
+
+        it('replaces it as before when the download carries no issue id, or another provider\'s', async () => {
+            for (const ci of [
+                { series: 'Batman', number: '1' },
+                // A file tagged with the series' volume only names its provider, not an issue.
+                { series: 'Batman', number: '1', metadataSource: 'COMICVINE' },
+                { series: 'Batman', number: '1', metadataIssueId: '700777', metadataSource: 'METRON' },
+            ]) {
+                const { filled } = await download([runRow({})], ci);
+                expect(filled.map((u: any) => u.where)).toEqual([{ id: 'run_1' }]);
+            }
+        });
+
+        it('fills a placeholder as before, whatever id the download carries (no file to lose)', async () => {
+            const { filled, created } = await download([runRow({ filePath: null, status: 'WANTED' })],
+                { series: 'Batman', number: '1', metadataIssueId: '700777', metadataSource: 'COMICVINE' });
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'run_1' }]);
+            expect(created).toEqual([]);
+        });
+
+        it('replaces a file as before when the row has only a placeholder id (nothing proven)', async () => {
+            const { filled } = await download([runRow({ metadataId: 'unmatched_abc' })],
+                { series: 'Batman', number: '1', metadataIssueId: '700777', metadataSource: 'COMICVINE' });
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'run_1' }]);
+        });
+
+        it("an annual download still fills its annual lane's row", async () => {
+            mocks.findUniqueRequest.mockResolvedValueOnce({
+                id: 'req_1', status: 'DOWNLOADING', activeDownloadName: 'Batman Annual 01.cbz', volumeId: 'cv_123', createdAt: new Date(),
+            });
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'Batman', number: '1', format: 'Annual' });
+            mocks.findFirstSeries.mockResolvedValueOnce({
+                id: 'series_1', name: 'Batman', publisher: 'DC Comics', year: 2016, libraryId: 'lib_1', isManga: false,
+            });
+            const { prisma } = await import('@/lib/db');
+            (prisma.issue.findMany as any).mockResolvedValue([
+                runRow({ id: 'ann_lane_1', isAnnual: true, attachedVolumeId: 'av_2016', metadataId: '600001', filePath: null, status: 'WANTED' }),
+            ]);
+            (prisma.issue.update as any).mockClear();
+            await Importer.importRequest('req_1');
+            const filled = (prisma.issue.update as any).mock.calls.map((c: any[]) => c[0]).filter((u: any) => u.data?.filePath);
+            expect(filled.map((u: any) => u.where)).toEqual([{ id: 'ann_lane_1' }]);
+        });
+
+        it("a run download never fills a collected edition's book", async () => {
+            const { filled, created } = await download(
+                [runRow({ id: 'tpb_1', attachedVolumeId: 'av_tpb', metadataId: 'local_av_tpb_1', metadataSource: 'LOCAL', filePath: null, status: 'WANTED' })],
+                { series: 'Batman', number: '1' });
+            expect(filled.some((u: any) => u.where?.id === 'tpb_1')).toBe(false);
+            expect(created).toHaveLength(1);
+        });
+    });
+
     // The naming cleanup (#244): a download is named by the same rules as every other path - padded
     // by the issue_number_padding setting (it used to pad a single digit only), and "$&" in a series
     // name stays "$&" (string replacement turned it back into the token it replaced).
@@ -588,6 +704,18 @@ describe('File System: Importer Engine', () => {
         it('without a library row, uses the file\'s own ComicInfo <Year>', async () => {
             xmenDownload();
             mocks.parseComicInfo.mockResolvedValueOnce({ series: 'X-Men', number: '38', year: 2024, issueYear: 2026 });
+
+            await Importer.importRequest('req_1');
+            expect(copiedTo()).toMatch(/(?:\d+_)?X-Men #038 \(2026\)\.cbz$/);
+        });
+
+        it("never takes the year of a collected edition's book with the same number", async () => {
+            xmenDownload();
+            mocks.parseComicInfo.mockResolvedValueOnce({ series: 'X-Men', number: '38', year: 2024 });
+            await libraryRows([
+                { number: '38', releaseDate: '2025-03-01', attachedVolumeId: 'av_tpb' } as any,
+                { number: '38', releaseDate: '2026-01-14' },
+            ]);
 
             await Importer.importRequest('req_1');
             expect(copiedTo()).toMatch(/(?:\d+_)?X-Men #038 \(2026\)\.cbz$/);

@@ -109,6 +109,20 @@ async function noteImportBlocked(requestId: string, note: string): Promise<void>
     } catch { /* the note is a courtesy: never let it break the import's own bookkeeping */ }
 }
 
+// A lane row that is not an annual: a Special's or a collected edition's book. An annual download
+// may fill an annual lane's row; the run's downloads never take one of these.
+function isNonAnnualLaneRow(row: { attachedVolumeId?: string | null; isAnnual?: boolean | null }): boolean {
+    return !!row.attachedVolumeId && !row.isAnnual;
+}
+
+// Whether a download's own ComicInfo issue id says it is a DIFFERENT issue than this row: both ids
+// real, from the same provider, and not equal. Without ids on both sides nothing is proven.
+function namesAnotherIssue(row: { metadataId?: string | null; metadataSource?: string | null }, embeddedIssueId: string | null, source: string | null | undefined): boolean {
+    const own = row.metadataId;
+    if (!embeddedIssueId || !own || own.startsWith('unmatched')) return false;
+    return row.metadataSource === source && own !== embeddedIssueId;
+}
+
 export const Importer = {
   async importRequest(requestId: string, opts?: { sourcePathOverride?: string }) {
     // #240 follow-up: the comic out of a one-comic wrapper is unpacked into a scratch folder of our
@@ -910,7 +924,7 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
         const identity = xmlMeta?.number || specialMatch?.number || extractedNum;
         issueReleaseDate = seriesRows.find(r => (specialLane
             ? r.attachedVolumeId === specialLane.id
-            : ((r.isAnnual ?? false) === isAnnualImport) && !(r.attachedVolumeId && specialIds.has(r.attachedVolumeId)))
+            : ((r.isAnnual ?? false) === isAnnualImport) && !isNonAnnualLaneRow(r))
             && isSameIssue(r.number, identity))?.releaseDate ?? null;
     }
     const filePatToUse = specialLane ? SPECIAL_FILE_PATTERN : isAnnualImport ? ANNUAL_FILE_PATTERN : (isManga ? mangaFilePattern : filePattern);
@@ -1013,6 +1027,8 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
               : await countArchivePages(finalPath);
       }
 
+      // A row of the same number whose file was kept because the download names another issue.
+      let keptOtherFile: { number: string } | null = null;
       if (series?.id) {
          let issueNum = extractIssueNumber(fileName);
          if (specialMatch) issueNum = specialMatch.number;
@@ -1058,10 +1074,19 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
              where: { seriesId: series.id }
          });
          // A Special's download fills its lane's own row; anything else never takes a Special's row
-         // (#255). Not found: a new row, unbound, which the lane's name claim then binds.
-         const existingIssue = specialLane
+         // (#255). Not found: a new row, unbound, which the lane's name claim then binds. Nor a
+         // collected edition's book: a run download is never "Vol. 1" of a trade.
+         const sameNumberRow = specialLane
              ? allSeriesIssues.find(i => i.attachedVolumeId === specialLane.id && isSameIssue(i.number, issueNum))
-             : allSeriesIssues.find(i => (((i as any).isAnnual ?? false) === isAnnual) && !(i.attachedVolumeId && specialIds.has(i.attachedVolumeId)) && isSameIssue(i.number, issueNum));
+             : allSeriesIssues.find(i => (((i as any).isAnnual ?? false) === isAnnual) && !isNonAnnualLaneRow(i) && isSameIssue(i.number, issueNum));
+         // Never orphan a file the library has: a row whose file is still on disk is filled by a
+         // download that says it is ANOTHER issue (its ComicInfo id, same provider) only at the cost
+         // of that file - left on disk with no row. The download gets a row of its own instead, and
+         // the request waits for a person.
+         keptOtherFile = !!sameNumberRow && namesAnotherIssue(sameNumberRow, embeddedIssueId, xmlMeta?.metadataSource)
+             && !!sameNumberRow.filePath && fs.existsSync(sameNumberRow.filePath)
+             ? sameNumberRow : null;
+         const existingIssue = keptOtherFile ? undefined : sameNumberRow;
          const targetMetaId = xmlMeta?.metadataIssueId ? xmlMeta.metadataIssueId.toString() : `unmatched_${Math.random()}`;
          const targetMetaSource = xmlMeta?.metadataIssueId ? xmlMeta.metadataSource : 'LOCAL';
          const matchState = xmlMeta?.metadataIssueId ? 'MATCHED' : 'UNMATCHED';
@@ -1187,7 +1212,17 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
       }
 
       // Safely clear the queue for anything sharing the link (Except missing match placeholders)
-        if (req.downloadLink && req.downloadLink !== "PENDING_MATCH") {
+        if (keptOtherFile) {
+            // Not done: what came down is another issue by its own ComicInfo. A person decides.
+            Logger.log(`[Importer] ${fileName} names a different issue than #${keptOtherFile.number} already in the library - added as its own entry, the existing file kept.`, "warn");
+            await prisma.request.update({
+                where: { id: requestId },
+                data: {
+                    status: 'NEEDS_REVIEW',
+                    statusNote: `The download's ComicInfo names a different issue than the #${keptOtherFile.number} already in the library, so it was added as its own entry and that issue's file was kept. Check which one belongs: ${fileName}.`,
+                },
+            });
+        } else if (req.downloadLink && req.downloadLink !== "PENDING_MATCH") {
             await prisma.request.updateMany({
                 where: { downloadLink: req.downloadLink, status: 'DOWNLOADING' },
                 data: { status: 'COMPLETED', progress: 100, notified: false }
@@ -1218,7 +1253,7 @@ async function runImport(requestId: string, opts: { sourcePathOverride?: string 
           } catch (ignoreErr) { }
       }
 
-      let shouldNotify = true;
+      let shouldNotify = !keptOtherFile;
       let notificationTitle = req.activeDownloadName || series?.name || "Unknown Comic";
       let notificationDesc = series?.description;
 

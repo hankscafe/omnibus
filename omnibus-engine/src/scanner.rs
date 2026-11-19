@@ -1376,7 +1376,7 @@ pub(crate) fn strip_series_prefix(file_name: &str, series: &str) -> Option<Strin
         while i < fb.len() && !fb[i].is_ascii_alphanumeric() {
             i += 1;
         }
-        if i + tok.len() > fb.len() || !file_name[i..i + tok.len()].eq_ignore_ascii_case(tok) {
+        if i + tok.len() > fb.len() || !fb[i..i + tok.len()].eq_ignore_ascii_case(tok.as_bytes()) {
             return None;
         }
         i += tok.len();
@@ -4209,6 +4209,17 @@ mod tests {
         assert!(empty.name.is_none() && empty.writers.is_none() && empty.genres.is_none());
         let none = issue_file_meta(None);
         assert!(none.name.is_none() && none.characters.is_none());
+    }
+
+    #[test]
+    fn strip_series_prefix_does_not_panic_on_non_ascii_file_names() {
+        // Slicing the &str at a token's byte length used to panic when that offset fell inside a
+        // multi-byte char ("end byte index 2 is not a char boundary; it is inside 'á'"), aborting
+        // the whole library scan. Comparing bytes keeps the match ASCII-only and never splits a char.
+        assert_eq!(strip_series_prefix("Pá 01.cbz", "Pa"), None);
+        assert_eq!(strip_series_prefix("Ré #2.cbz", "Re"), None);
+        assert_eq!(strip_series_prefix("Ángel 001.cbz", "An"), None);
+        assert_eq!(strip_series_prefix("Saga 001 – Café.cbz", "Saga").as_deref(), Some(" 001 – Café.cbz"));
     }
 
     #[test]

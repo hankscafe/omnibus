@@ -7,8 +7,38 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
     buildKeepCarry, buildManualSuggestion, cleanProviderId, findIssueIdByNumber, normalizeIssueNumber,
-    realSuggestion, resolveIssueIdByNumber,
+    realSuggestion, resolveIssueIdByNumber, matchedIssueLine,
 } from '../../src/lib/utils/smart-match-search';
+
+// Item 15B ("Issue X of Y", Adam 2026-10-16): the suggestion card says which issue of the picked
+// series a loose file is. The count only when the provider gave a real one; a title only when the
+// volume's issue list names it; "not in this series" only when there is a list to check.
+describe('matchedIssueLine', () => {
+    const LIST = [
+        { id: '911244', issue_number: '2', name: 'Strange Visitor' },
+        { id: '911245', issue_number: '3', name: '' },
+    ];
+    it('reads "#N of Y" with the title from the issue list', () => {
+        expect(matchedIssueLine({ count: 56, rawIssues: LIST }, '002')).toEqual({ number: '2', of: 56, title: 'Strange Visitor', notInVolume: false });
+    });
+    it('takes the bound issue over the number for the title', () => {
+        expect(matchedIssueLine({ count: 56, rawIssues: LIST }, '2', '911245').title).toBeNull();
+        expect(matchedIssueLine({ count: 56, rawIssues: LIST }, '9', '911244')).toMatchObject({ title: 'Strange Visitor', notInVolume: false });
+    });
+    it('drops "of Y" when the provider gave no real count', () => {
+        for (const count of [0, '?', '', undefined as unknown as number]) {
+            expect(matchedIssueLine({ count, rawIssues: LIST }, '2').of).toBeNull();
+        }
+        expect(matchedIssueLine({ count: '12', rawIssues: [] }, '2').of).toBe(12);
+    });
+    it('without an issue list (an auto-scan pick): no title, and nothing said about the number', () => {
+        expect(matchedIssueLine({ count: 5 }, '7')).toEqual({ number: '7', of: 5, title: null, notInVolume: false });
+    });
+    it('says a number is not in the series only when the list lacks it and no issue was bound by id', () => {
+        expect(matchedIssueLine({ count: 56, rawIssues: LIST }, '7').notInVolume).toBe(true);
+        expect(matchedIssueLine({ count: 56, rawIssues: LIST }, '7', '999999').notInVolume).toBe(false);
+    });
+});
 
 // #205 (BeepbopbeepityBop): ComicVine numbers half-issues with a vulgar fraction — Bone (1991)
 // #13.5 is "13½" in the volume's issue list — while the admin (and every filename) types "13.5".

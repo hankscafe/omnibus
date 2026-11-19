@@ -67,6 +67,8 @@ describe('Smart Matcher — Search Match dialog', () => {
         detailCalls = [];
         toast.mockClear();
         localStorage.clear();
+        // An applied match is kept in sessionStorage; each test starts unmatched.
+        sessionStorage.clear();
         stubFetchRouter([
             ['/api/admin/unmatched', () => ok([RAW_ITEM])],
             ['/api/admin/config', () => ok({
@@ -189,6 +191,52 @@ describe('Smart Matcher — Search Match dialog', () => {
         expect(screen.getByDisplayValue('171894')).toBeTruthy();
     });
 
+    // Item 15B ("Issue X of Y"): once a series is picked for a loose file, its card says which
+    // issue of that series the file is - with the title when the series' issue list names it.
+    const pickAndApply = async () => {
+        fireEvent.change(screen.getByPlaceholderText('e.g. The Amazing Spider-Man'), { target: { value: 'Conan & Dragonero' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Search$/ }));
+        fireEvent.click(await screen.findByText('Conan & Dragonero'));
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Series Selected' })));
+        fireEvent.click(await screen.findByRole('button', { name: /Apply Match/ }));
+        return waitFor(() => screen.getByTestId('matched-issue'));
+    };
+
+    it("shows the loose file's issue of the picked series: number, count and title", async () => {
+        await openSearchMatchDialog();
+        const line = await pickAndApply();
+        expect(line.textContent).toBe('Issue #1 of 5 · Conan & Dragonero (2026) #1');
+    });
+
+    it('follows a number the admin corrected before applying', async () => {
+        await openSearchMatchDialog();
+        fireEvent.change(screen.getByPlaceholderText('e.g. The Amazing Spider-Man'), { target: { value: 'Conan & Dragonero' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Search$/ }));
+        fireEvent.click(await screen.findByText('Conan & Dragonero'));
+        await waitFor(() => expect(screen.getByDisplayValue('171893')).toBeTruthy());
+        fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '2' } });
+        fireEvent.click(screen.getByRole('button', { name: /Refresh from number/ }));
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Issue ID updated' })));
+        fireEvent.click(screen.getByRole('button', { name: /Apply Match/ }));
+        await waitFor(() => expect(screen.getByTestId('matched-issue').textContent).toBe('Issue #2 of 5 · Conan & Dragonero (2026) #2'));
+    });
+
+    it("says so when the file's number isn't in the picked series", async () => {
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([{ ...RAW_ITEM, name: 'Conan & Dragonero 007', folderPath: '/unmatched/Conan & Dragonero 007.cbz' }])],
+            ['/api/admin/config', () => ok({ settings: [{ key: 'primary_metadata_source', value: 'METRON' }] })],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/search', () => ok({ results: [SEARCH_RESULT], hasMore: false })],
+            ['/api/issue-details', () => ok(VOLUME_DETAILS)],
+        ]);
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero 007');
+        fireEvent.click(screen.getByRole('button', { name: /Search Match/ }));
+        await screen.findByPlaceholderText('e.g. The Amazing Spider-Man');
+        const line = await pickAndApply();
+        expect(line.textContent).toBe("Issue #7 isn't in this series (5 issues)");
+    });
+
     it('reports an empty search honestly and suggests the ID fallback', async () => {
         stubFetchRouter([
             ['/api/admin/unmatched', () => ok([RAW_ITEM])],
@@ -216,6 +264,7 @@ describe('Smart Matcher — Auto-Scan covers', () => {
         coverCalls = [];
         toast.mockClear();
         localStorage.clear();
+        sessionStorage.clear();
         stubFetchRouter([
             ['/api/admin/unmatched', () => ok([RAW_ITEM])],
             ['/api/admin/config', () => ok({
@@ -243,6 +292,30 @@ describe('Smart Matcher — Auto-Scan covers', () => {
         expect(coverCalls[0]).toContain('provider=METRON');
         expect(coverCalls[0]).toContain('id=16180');
         await waitFor(() => expect(screen.getByAltText('Suggestion').getAttribute('src')).toBe(PROXIED));
+    });
+
+    // Item 15B: an auto-scan pick carries no issue list - the card names the number and the count.
+    it("names the loose file's issue and the series' count, without a title", async () => {
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero 001');
+        fireEvent.click(screen.getByRole('button', { name: /Start Auto-Scan/ }));
+        await waitFor(() => expect(screen.getByTestId('matched-issue').textContent).toBe('Issue #1 of 5'));
+    });
+
+    // A folder holds many issues: its card keeps the series' issue count and names no single issue.
+    it('a folder keeps the issue count and names no issue', async () => {
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([{ id: 'dir_1', name: 'Conan & Dragonero (2026)', folderPath: '/unmatched/Conan & Dragonero (2026)', isRawFile: false }])],
+            ['/api/admin/config', () => ok({ settings: [{ key: 'primary_metadata_source', value: 'METRON' }] })],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/search/cover', () => ok({ image: null })],
+            ['/api/search', () => ok({ results: [SEARCH_RESULT], hasMore: false })],
+        ]);
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero (2026)');
+        fireEvent.click(screen.getByRole('button', { name: /Start Auto-Scan/ }));
+        await screen.findByText('5 Issues');
+        expect(screen.queryByTestId('matched-issue')).toBeNull();
     });
 });
 

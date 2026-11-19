@@ -62,6 +62,37 @@ export function findIssueIdByNumber(rawIssues: VolumeIssueStub[] | undefined, is
     return hit?.id != null ? hit.id.toString() : ''
 }
 
+/** Item 15B ("Issue X of Y", Adam 2026-10-16): what a loose file's suggestion card says about its
+ *  issue in the picked series. */
+export interface MatchedIssueLine {
+    /** The file's issue number, leading zeros dropped. */
+    number: string
+    /** The series' issue count - only when the provider gave a real one. */
+    of: number | null
+    /** The issue's title from the series' issue list (a manual match carries one; an auto-scan pick doesn't). */
+    title: string | null
+    /** The list exists and holds no such number, and no issue was bound by its id. */
+    notInVolume: boolean
+}
+
+export function matchedIssueLine(
+    suggestion: Pick<MatchSuggestion, 'count' | 'rawIssues'>,
+    issueNumber: string,
+    boundIssueId?: string,
+): MatchedIssueLine {
+    const count = Number(suggestion.count)
+    const list = suggestion.rawIssues || []
+    const target = normalizeIssueNumber(issueNumber)
+    const bound = boundIssueId ? list.find(i => String(i?.id) === String(boundIssueId)) : undefined
+    const hit = bound ?? (target ? list.find(i => normalizeIssueNumber(i?.issue_number ?? i?.number) === target) : undefined)
+    return {
+        number: target || issueNumber,
+        of: Number.isFinite(count) && count > 0 ? count : null,
+        title: hit?.name?.trim() || null,
+        notInVolume: list.length > 0 && !hit && !boundIssueId,
+    }
+}
+
 /**
  * Resolves a provider's exact issue id from an admin-corrected issue number (#199 round 2:
  * the auto cross-reference can bind the wrong issue inside a correctly-matched series, e.g.

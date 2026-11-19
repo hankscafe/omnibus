@@ -17,7 +17,7 @@ import Link from "next/link"
 import { Logger } from "@/lib/logger"
 import { getErrorMessage, errorMessageOr } from "@/lib/utils/error";
 import { extractIssueNumber } from "@/lib/utils/issue-parser"
-import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion, closedRequestsNote, realSuggestion, type ManualSuggestion, type MatchSuggestion, type SuggestionState } from "@/lib/utils/smart-match-search"
+import { buildManualSuggestion, buildKeepCarry, cleanProviderId, findIssueIdByNumber, resolveIssueIdByNumber, acceptableForBulk, seriesQueryFromName, pickSuggestion, closedRequestsNote, realSuggestion, matchedIssueLine, type ManualSuggestion, type MatchSuggestion, type SuggestionState } from "@/lib/utils/smart-match-search"
 import SmartMatchMetadataDialog, { type SmartMatchOverride, type SmartMatchSeed, buildFolderPreview, shouldEmbedIssueCover, COMIC_INFO_DEFAULT_KEYS } from "@/components/smart-match-metadata-dialog"
 import { FolderCollisionDialog, type FolderCollision, type CollisionResolution } from "@/components/folder-collision-dialog"
 import { AttachLocalCollectedDialog } from "@/components/attach-local-collected-dialog"
@@ -1335,8 +1335,20 @@ export default function SmartMatchPage() {
                                             <div className="min-w-0 flex-1">
                                                 <h4 className="font-bold text-foreground break-words whitespace-normal text-sm leading-tight">{suggestion.name}</h4>
                                                 <p className="text-xs text-muted-foreground break-words whitespace-normal mt-1">{suggestion.publisher || 'Unknown'} • {suggestion.year || '????'}</p>
+                                                {/* Item 15B: a loose file is one issue of this series - say which. */}
+                                                {series.isRawFile && (() => {
+                                                    const line = matchedIssueLine(suggestion, issueOverrides[series.id]?.issueNumber || extractIssueNumber(series.name), issueOverrides[series.id]?.issueId);
+                                                    return (
+                                                        <p data-testid="matched-issue" className={`text-xs font-bold mt-1 break-words whitespace-normal ${line.notInVolume ? 'text-orange-500' : 'text-primary'}`}>
+                                                            {line.notInVolume
+                                                                ? `Issue #${line.number} isn't in this series (${suggestion.count} issues)`
+                                                                : `Issue #${line.number}${line.of ? ` of ${line.of}` : ''}`}
+                                                            {!line.notInVolume && line.title && <span className="font-normal text-muted-foreground"> · {line.title}</span>}
+                                                        </p>
+                                                    );
+                                                })()}
                                                 <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                                                    <p className="text-[10px] text-muted-foreground/80">{suggestion.count} Issues</p>
+                                                    {!series.isRawFile && <p className="text-[10px] text-muted-foreground/80">{suggestion.count} Issues</p>}
                                                     <p className="text-[10px] font-mono font-bold text-muted-foreground/80 bg-muted px-1.5 py-0.5 rounded border border-border" title={`${providerLabel} ${providerLabel === 'Metron' ? 'Series' : 'Volume'} ID`}>
                                                         ID: {suggestion.id}
                                                     </p>

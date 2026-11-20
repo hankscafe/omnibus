@@ -275,6 +275,120 @@ mod search_note_tests {
 }
 
 #[cfg(test)]
+mod scan_lock_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const LOCK: &str = "LIBRARY_SCAN_lib1";
+
+    async fn scan_db(tag: &str) -> (db::Db, PathBuf) {
+        let base = std::env::temp_dir().join(format!("omnibus_scan_lock_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("s.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        // Prisma's SQLite columns: DateTime = INTEGER epoch-ms (what now_expr() writes).
+        sqlx::query(r#"CREATE TABLE "JobLock" (id TEXT PRIMARY KEY, "lockedAt" INTEGER NOT NULL)"#).execute(&db.pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "JobLog" (id TEXT PRIMARY KEY, "jobType" TEXT NOT NULL, status TEXT NOT NULL, "relatedItem" TEXT, "durationMs" INTEGER, attempts INTEGER NOT NULL DEFAULT 1, message TEXT, "createdAt" INTEGER NOT NULL)"#)
+            .execute(&db.pool).await.unwrap();
+        (db, base)
+    }
+
+    async fn locks(db: &db::Db) -> i64 {
+        sqlx::query_scalar::<_, i64>(r#"SELECT COUNT(*) FROM "JobLock""#).fetch_one(&db.pool).await.unwrap()
+    }
+
+    async fn failed_scan_logs(db: &db::Db) -> Vec<String> {
+        sqlx::query_scalar::<_, String>(r#"SELECT message FROM "JobLog" WHERE "jobType" = 'LIBRARY_SCAN' AND status = 'FAILED'"#)
+            .fetch_all(&db.pool).await.unwrap()
+    }
+
+    async fn flagging_scan(ran: Arc<AtomicBool>) -> anyhow::Result<()> {
+        ran.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// #278's panic, reproduced: a str slice cut inside "á".
+    async fn panicking_scan() -> anyhow::Result<()> {
+        let name = String::from("Pá 01.cbz");
+        std::hint::black_box(&name[..2]);
+        Ok(())
+    }
+
+    // #278: a scan that panicked never reached its lock release, so every scan of that library was
+    // skipped as "already in progress" for the next 10 minutes - and with the bad file still there,
+    // the next scan to get in panicked again. Now the crash is logged and the lock let go at once.
+    #[tokio::test]
+    async fn a_scan_that_panics_lets_go_of_its_lock_and_logs_the_crash() {
+        let (db, base) = scan_db("panic").await;
+
+        assert_eq!(run_locked_scan(&db, LOCK, "/comics", panicking_scan()).await, ScanRun::Crashed);
+
+        assert_eq!(locks(&db).await, 0, "the crashed scan's lock is released at once");
+        let logged = failed_scan_logs(&db).await;
+        assert_eq!(logged.len(), 1, "{logged:?}");
+        assert!(logged[0].starts_with("Library scan crashed") && logged[0].contains("not a char boundary"), "{logged:?}");
+
+        // The next scan of that library runs straight away.
+        let ran = Arc::new(AtomicBool::new(false));
+        assert_eq!(run_locked_scan(&db, LOCK, "/comics", flagging_scan(ran.clone())).await, ScanRun::Finished);
+        assert!(ran.load(Ordering::SeqCst));
+        assert_eq!(locks(&db).await, 0);
+        assert_eq!(failed_scan_logs(&db).await.len(), 1, "a finished scan logs no failure");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn a_scan_that_fails_lets_go_of_its_lock_and_logs_the_error() {
+        let (db, base) = scan_db("error").await;
+
+        let outcome = run_locked_scan(&db, LOCK, "/comics", async { Err(anyhow::anyhow!("library root unreachable")) }).await;
+
+        assert_eq!(outcome, ScanRun::Failed);
+        assert_eq!(locks(&db).await, 0);
+        let logged = failed_scan_logs(&db).await;
+        assert_eq!(logged.len(), 1, "{logged:?}");
+        assert!(logged[0].starts_with("Library scan failed") && logged[0].contains("library root unreachable"), "{logged:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn a_running_scan_keeps_its_lock_and_a_second_one_is_skipped() {
+        let (db, base) = scan_db("held").await;
+        sqlx::query(&format!(r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, {})"#, db.now_expr()))
+            .bind(LOCK).execute(&db.pool).await.unwrap();
+
+        let ran = Arc::new(AtomicBool::new(false));
+        assert_eq!(run_locked_scan(&db, LOCK, "/comics", flagging_scan(ran.clone())).await, ScanRun::Skipped);
+        assert!(!ran.load(Ordering::SeqCst), "the second scan never starts");
+        assert_eq!(locks(&db).await, 1, "the running scan's lock stays put");
+        assert!(failed_scan_logs(&db).await.is_empty());
+
+        // Another library isn't held up by it.
+        let other = Arc::new(AtomicBool::new(false));
+        assert_eq!(run_locked_scan(&db, "LIBRARY_SCAN_lib2", "/manga", flagging_scan(other.clone())).await, ScanRun::Finished);
+        assert!(other.load(Ordering::SeqCst));
+        assert_eq!(locks(&db).await, 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn a_lock_older_than_ten_minutes_is_taken_over() {
+        let (db, base) = scan_db("stale").await;
+        // SQLite's now_expr() is epoch-ms: 11 minutes ago.
+        sqlx::query(&format!(r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, {} - 660000)"#, db.now_expr()))
+            .bind(LOCK).execute(&db.pool).await.unwrap();
+
+        let ran = Arc::new(AtomicBool::new(false));
+        assert_eq!(run_locked_scan(&db, LOCK, "/comics", flagging_scan(ran.clone())).await, ScanRun::Finished);
+        assert!(ran.load(Ordering::SeqCst));
+        assert_eq!(locks(&db).await, 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
 mod version_tests {
     use super::*;
 
@@ -1376,41 +1490,88 @@ async fn handle_scan(
     tokio::spawn(async move {
         let db = state.db.clone();
         let lock_id = format!("LIBRARY_SCAN_{}", payload.library_id);
-
-        // Concurrency lock (parity with the pristine Node JobLock): refuse to start a second scan of the
-        // SAME library while one is active, so overlapping scheduled+manual triggers can't race two
-        // inserts of the same issue. Per-library so different libraries still scan concurrently. A stale
-        // lock (>10 min, e.g. from a crashed scan) is atomically taken over.
-        match sqlx::query(&format!(
-            r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, {now})
-               ON CONFLICT (id) DO UPDATE SET "lockedAt" = {now}
-               WHERE {stale}"#,
-            now = db.now_expr(),
-            stale = db.older_than(r#""JobLock"."lockedAt""#, 600)
-        ))
-        .bind(&lock_id)
-        .execute(&db.pool)
-        .await
-        {
-            Ok(r) if r.rows_affected() == 0 => {
-                log::warn!("[Scanner] Library scan for '{}' already in progress; skipping.", payload.library_path);
-                return;
-            }
-            Err(e) => log::warn!("[Scanner] Non-fatal JobLock error, proceeding without lock: {:?}", e),
-            _ => {}
-        }
-
-        let start_time = std::time::Instant::now();
-        if let Err(e) = scanner::scan_library(db.clone(), payload.library_path, payload.library_id.clone(), payload.specific_path).await {
-            log::error!("❌ Library scan failed: {:?}", e);
-            write_failed_joblog(&db, "LIBRARY_SCAN", start_time.elapsed().as_millis() as i32, format!("Library scan failed: {:?}", e)).await;
-        }
-
-        // Release the lock (best-effort; the 10-min stale takeover covers a missed release on panic).
-        let _ = sqlx::query(r#"DELETE FROM "JobLock" WHERE id = $1"#).bind(&lock_id).execute(&db.pool).await;
+        // A future does nothing until polled, so building it here starts no scan before the lock is held.
+        let scan = scanner::scan_library(db.clone(), payload.library_path.clone(), payload.library_id.clone(), payload.specific_path);
+        run_locked_scan(&db, &lock_id, &payload.library_path, scan).await;
     });
 
     StatusCode::ACCEPTED
+}
+
+/// How one library scan request ended.
+#[derive(Debug, PartialEq)]
+enum ScanRun {
+    /// Another scan of the same library holds the lock; this one never started.
+    Skipped,
+    Finished,
+    /// The scan returned an error (logged + a FAILED JobLog).
+    Failed,
+    /// The scan panicked (logged + a FAILED JobLog naming the panic).
+    Crashed,
+}
+
+/// The text of a panic that ended a spawned task ("cancelled" when it didn't panic).
+fn panic_text(err: tokio::task::JoinError) -> String {
+    if !err.is_panic() {
+        return "cancelled".to_string();
+    }
+    let payload = err.into_panic();
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
+}
+
+/// Runs one library scan under its per-library JobLock and always lets go of the lock afterwards,
+/// a panic included (#278).
+async fn run_locked_scan<F>(db: &db::Db, lock_id: &str, library_path: &str, scan: F) -> ScanRun
+where
+    F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    // Concurrency lock (parity with the pristine Node JobLock): refuse to start a second scan of the
+    // SAME library while one is active, so overlapping scheduled+manual triggers can't race two
+    // inserts of the same issue. Per-library so different libraries still scan concurrently. A stale
+    // lock (>10 min, e.g. from an engine that died mid-scan) is atomically taken over.
+    match sqlx::query(&format!(
+        r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, {now})
+           ON CONFLICT (id) DO UPDATE SET "lockedAt" = {now}
+           WHERE {stale}"#,
+        now = db.now_expr(),
+        stale = db.older_than(r#""JobLock"."lockedAt""#, 600)
+    ))
+    .bind(lock_id)
+    .execute(&db.pool)
+    .await
+    {
+        Ok(r) if r.rows_affected() == 0 => {
+            log::warn!("[Scanner] Library scan for '{}' already in progress; skipping.", library_path);
+            return ScanRun::Skipped;
+        }
+        Err(e) => log::warn!("[Scanner] Non-fatal JobLock error, proceeding without lock: {:?}", e),
+        _ => {}
+    }
+
+    let start_time = std::time::Instant::now();
+    // The scan runs as its own task, so a panic inside it (#278: a str slice cut inside "á") comes
+    // back here as a JoinError instead of unwinding past the lock release below.
+    let outcome = match tokio::spawn(scan).await {
+        Ok(Ok(())) => ScanRun::Finished,
+        Ok(Err(e)) => {
+            log::error!("❌ Library scan failed: {:?}", e);
+            write_failed_joblog(db, "LIBRARY_SCAN", start_time.elapsed().as_millis() as i32, format!("Library scan failed: {:?}", e)).await;
+            ScanRun::Failed
+        }
+        Err(join_err) => {
+            let why = panic_text(join_err);
+            log::error!("❌ Library scan for '{}' crashed: {}", library_path, why);
+            write_failed_joblog(db, "LIBRARY_SCAN", start_time.elapsed().as_millis() as i32, format!("Library scan crashed: {}", why)).await;
+            ScanRun::Crashed
+        }
+    };
+
+    let _ = sqlx::query(r#"DELETE FROM "JobLock" WHERE id = $1"#).bind(lock_id).execute(&db.pool).await;
+    outcome
 }
 
 async fn handle_metadata_sync(

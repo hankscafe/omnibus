@@ -155,7 +155,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                                 </div>
                             ))}
                         </div>
-                        <p className="text-[11px] text-muted-foreground">Enabling <strong>Anna&apos;s Archive</strong> for automation requires a premium API key and a passing connection test — otherwise it reverts to disabled on save. Interactive search still works without a key (toggle below).</p>
+                        <p className="text-[11px] text-muted-foreground">Enabling <strong>Anna&apos;s Archive</strong> for automation requires a premium API key and a passing connection test — otherwise it reverts to disabled on save. Turning it on runs that test, which uses one of your fast downloads for the day. Interactive search still works without a key (toggle below).</p>
                     </div>
 
                     
@@ -316,6 +316,7 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                         <Button className="w-full h-12 sm:h-10 font-bold border-border hover:bg-muted text-foreground transition-colors" variant="outline" onClick={() => handleTest('annas_archive')} disabled={!!testing}>
                             {testing === 'annas_archive' ? <Loader2 className="w-5 h-5 sm:w-4 sm:h-4 animate-spin mr-2 text-primary"/> : <CheckCircle className="w-5 h-5 sm:w-4 sm:h-4 mr-2 text-primary"/>} Test API Key
                         </Button>
+                        <p className="text-[11px] text-muted-foreground">Testing the key asks Anna&apos;s Archive for a real download link (nothing is downloaded), so each test uses one of your fast downloads for the day. The result shows how many are left.</p>
                         <StatusBox result={testResults.annas_archive} />
                     </div>
 

@@ -162,6 +162,14 @@ describe('Settings tabs (Phase 1 reorganization)', () => {
         expect(screen.getByText(/Flag stalled requests/i)).toBeInTheDocument();
     });
 
+    // #277: the key test now asks Anna's Archive for a real download link, which counts as one of the
+    // account's fast downloads - and the same test runs when Anna's Archive automation is turned on.
+    it('DownloadsTab says that testing the Anna\'s Archive key, or turning automation on, uses a fast download', () => {
+        render(<DownloadsTab s={mkBag()} />);
+        expect(screen.getByText(/Testing the key asks Anna.s Archive for a real download link/)).toHaveTextContent(/uses one of your fast downloads/);
+        expect(screen.getByText(/requires a premium API key and a passing connection test/)).toHaveTextContent(/uses one of your fast downloads/);
+    });
+
     it('DiscoveryTab unifies the manga story: visibility, request gate, and detection lists', () => {
         render(<DiscoveryTab s={mkBag()} />);
         expect(screen.getByText(/Manga Visibility/i)).toBeInTheDocument();

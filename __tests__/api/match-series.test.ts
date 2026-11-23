@@ -891,6 +891,106 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
             expect((await res.json()).requestsClosed).toBe(2);
         });
     });
+
+    // #275 (CaptainEpix): the series row used to be repointed at the new folder BEFORE anything moved,
+    // so a move that failed (EACCES on a bind mount) left the series pointing at a folder that isn't
+    // there. The move now comes first; when it fails, nothing is written and the answer says why.
+    describe('a move that fails (#275)', () => {
+        const NEW_FOLDER = '/comics/DC Comics/Batman (2016)';
+        const eacces = (what: string) => Object.assign(new Error(`EACCES: permission denied, ${what}`), { code: 'EACCES' });
+        const expectNothingWritten = () => {
+            expect(mocks.updateSeries).not.toHaveBeenCalled();
+            expect(mocks.createSeries).not.toHaveBeenCalled();
+            expect(mocks.deleteSeries).not.toHaveBeenCalled();
+            expect(mocks.updateManyIssues).not.toHaveBeenCalled();
+            expect(vi.mocked(omnibusQueue.add).mock.calls.filter(c => c[0] === 'METADATA_SYNC')).toHaveLength(0);
+        };
+
+        it('a Fix Match whose folder move fails leaves the series where it was and says why', async () => {
+            // The series being re-matched owns the old folder (the #275 report: a fresh install's
+            // first match, fixed to the right volume).
+            mocks.findFirstSeries.mockResolvedValue({ id: 'series_9', folderPath: '/unmatched/Batman', libraryId: 'lib_1' });
+            // The error names neither folder (a mkdir of the publisher folder), so the answer has to.
+            mocks.safeRelocateFolder.mockRejectedValueOnce(eacces(`mkdir '/comics/DC Comics'`));
+
+            const res = await POST(createReq({
+                oldFolderPath: '/unmatched/Batman', metadataId: '4050-1234', name: 'Batman', year: 2016, publisher: 'DC Comics',
+            }));
+
+            expectNothingWritten();
+            expect(res.status).toBe(500);
+            const { error } = await res.json();
+            expect(error).toContain('/unmatched/Batman');
+            expect(error).toContain(NEW_FOLDER);
+            expect(error).toContain('EACCES');
+            expect(error).toMatch(/match wasn't saved/i);
+        });
+
+        it('a merge into the series that already has the volume moves nothing over in the database either', async () => {
+            mocks.findUniqueSeries.mockResolvedValue({ id: 'series_123', year: 2016, isManga: false });
+            mocks.findFirstSeries.mockResolvedValue({ id: 'series_9', folderPath: '/unmatched/Batman', libraryId: 'lib_1' });
+            mocks.safeRelocateFolder.mockRejectedValueOnce(eacces(`mkdir '${NEW_FOLDER}'`));
+
+            const res = await POST(createReq({
+                oldFolderPath: '/unmatched/Batman', metadataId: '4050-1234', name: 'Batman', year: 2016, publisher: 'DC Comics',
+            }));
+
+            expectNothingWritten();
+            expect(res.status).toBe(500);
+            expect((await res.json()).error).toMatch(/match wasn't saved/i);
+        });
+
+        it('a loose file that cannot be moved leaves the database untouched too', async () => {
+            vi.mocked(fs.promises.stat).mockResolvedValueOnce({ isFile: () => true } as any);
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p) === '/unmatched/Batman 001.cbz');
+            mocks.moveFileSafe.mockRejectedValueOnce(eacces('copyfile'));
+
+            const res = await POST(createReq({
+                oldFolderPath: '/unmatched/Batman 001.cbz', metadataId: '4050-1234', name: 'Batman', year: 2016, publisher: 'DC Comics',
+            }));
+
+            expectNothingWritten();
+            expect(res.status).toBe(500);
+            const { error } = await res.json();
+            expect(error).toContain('/unmatched/Batman 001.cbz');
+            expect(error).toMatch(/match wasn't saved/i);
+        });
+
+        it('a move that works still saves the series at the new folder', async () => {
+            mocks.findFirstSeries.mockResolvedValue({ id: 'series_9', folderPath: '/unmatched/Batman', libraryId: 'lib_1' });
+
+            const res = await POST(createReq({
+                oldFolderPath: '/unmatched/Batman', metadataId: '4050-1234', name: 'Batman', year: 2016, publisher: 'DC Comics',
+            }));
+
+            expect(res.status).toBe(200);
+            expect(mocks.safeRelocateFolder).toHaveBeenCalledWith('/unmatched/Batman', NEW_FOLDER, expect.any(String));
+            expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+                where: { id: 'series_9' }, data: expect.objectContaining({ folderPath: NEW_FOLDER }),
+            }));
+        });
+
+        it('a re-match that keeps its folder leaves the issue paths alone (nothing moved, nothing to follow)', async () => {
+            const logSpy = vi.spyOn(Logger, 'log').mockImplementation(() => undefined as any);
+            try {
+                mocks.findFirstSeries.mockResolvedValue({ id: 'series_9', folderPath: NEW_FOLDER, libraryId: 'lib_1' });
+                mocks.findManyIssues.mockResolvedValue([{ id: 'i1', filePath: `${NEW_FOLDER}/Batman 001.cbz` }]);
+
+                const res = await POST(createReq({
+                    oldFolderPath: NEW_FOLDER, metadataId: '4050-1234', name: 'Batman', year: 2016, publisher: 'DC Comics',
+                }));
+
+                expect(res.status).toBe(200);
+                expect(mocks.safeRelocateFolder).not.toHaveBeenCalled();
+                expect(mocks.findManyIssues).not.toHaveBeenCalledWith(expect.objectContaining({
+                    where: expect.objectContaining({ filePath: { startsWith: expect.any(String) } }),
+                }));
+                expect(logSpy.mock.calls.map(c => String(c[0]))).not.toContainEqual(expect.stringContaining('filePath'));
+            } finally {
+                logSpy.mockRestore();
+            }
+        });
+    });
 });
 
 // 2026-07-25 worklist item 5: matching used to recompute detectManga({name, publisher, year}) with

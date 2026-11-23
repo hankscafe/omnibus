@@ -357,6 +357,61 @@ export async function POST(request: Request) {
         ...(lockMetadata ? { hasCustomMetadata: true } : {})
     };
 
+    // #275 (CaptainEpix): the files move BEFORE the series row is written. The row used to be
+    // repointed at the new folder first, so a move that failed (EACCES on a bind mount, a full disk)
+    // left the series pointing at a folder that isn't there. A failed move now saves nothing and the
+    // answer says why. (A merge into a folder that already exists goes file by file, so one that fails
+    // part-way may have moved some files; the error names both folders.)
+    const oldStat = await fs.promises.stat(oldFolderPath);
+    const isFile = oldStat.isFile();
+
+    // Count duplicate files we refuse to overwrite (parity with the Standardize-names route). A non-zero
+    // count is returned + logged so a dupe is preserved instead of silently clobbered.
+    let conflicts = 0;
+    // True when a loose file couldn't be placed because a same-named file was already in the target —
+    // the matching file in the folder is then NOT ours, so the rename loop must leave it alone.
+    let looseFileConflict = false;
+
+    let activeFolderPath = oldFolderPath;
+    // A whole folder moved: the series' issue rows follow it once the row is written (below).
+    let relocatedFolder = false;
+    try {
+        if (isFile) {
+            if (!fs.existsSync(newFolderPath)) {
+                await ensureLibraryDir(newFolderPath);
+            }
+            activeFolderPath = newFolderPath;
+            const targetFilePath = path.join(newFolderPath, path.basename(oldFolderPath));
+            // Never overwrite a different file already sitting at the destination — leave the loose file where it is.
+            if (fs.existsSync(targetFilePath) && path.normalize(targetFilePath).toLowerCase() !== path.normalize(oldFolderPath).toLowerCase()) {
+                Logger.log(`[Match Series] Conflict: "${path.basename(targetFilePath)}" already exists in the target folder; left the source file in place: ${oldFolderPath}`, 'warn');
+                conflicts++;
+                looseFileConflict = true;
+            } else {
+                // Cross-device-safe: /unmatched and the library are separate mounts in most Docker setups,
+                // where a raw rename dies with EXDEV (discussion #169).
+                await moveFileSafe(oldFolderPath, targetFilePath);
+            }
+        } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
+            // Non-destructive folder relocate/merge: a pre-existing target is merged into, never deleted, and
+            // any colliding file is left in place + counted (safeRelocateFolder also handles a plain move when
+            // the destination doesn't exist, and cleans up the emptied source folder).
+            const srcRoot = [...libraries.map(l => l.path), unmatchedDir]
+                .find(r => path.normalize(oldFolderPath).toLowerCase().startsWith(path.normalize(r).toLowerCase()))
+                || path.dirname(oldFolderPath);
+            const { conflicts: folderConflicts } = await safeRelocateFolder(oldFolderPath, newFolderPath, srcRoot);
+            conflicts += folderConflicts;
+            activeFolderPath = newFolderPath;
+            relocatedFolder = true;
+        }
+    } catch (moveError) {
+        const reason = getErrorMessage(moveError);
+        Logger.log(`[Match Series] Couldn't move "${oldFolderPath}" to "${newFolderPath}": ${reason} - the match wasn't saved.`, 'error');
+        return NextResponse.json({
+            error: `Couldn't move "${oldFolderPath}" to "${newFolderPath}": ${reason}. The match wasn't saved. Check that Omnibus can write to the library folder, then match again.`,
+        }, { status: 500 });
+    }
+
     if (existingRecord) {
         if (unmatchedRecord && unmatchedRecord.id !== existingRecord.id) {
             await prisma.issue.updateMany({
@@ -383,44 +438,7 @@ export async function POST(request: Request) {
         title: realName, publisher: realPublisher, year: realYear.toString(), imageUrl: imageUrl, user: "Admin"
     }).catch(() => {});
 
-    const oldStat = await fs.promises.stat(oldFolderPath);
-    const isFile = oldStat.isFile();
-
-    // Count duplicate files we refuse to overwrite (parity with the Standardize-names route). A non-zero
-    // count is returned + logged so a dupe is preserved instead of silently clobbered.
-    let conflicts = 0;
-    // True when a loose file couldn't be placed because a same-named file was already in the target —
-    // the matching file in the folder is then NOT ours, so the rename loop must leave it alone.
-    let looseFileConflict = false;
-
-    let activeFolderPath = oldFolderPath;
-    if (isFile) {
-        if (!fs.existsSync(newFolderPath)) {
-            await ensureLibraryDir(newFolderPath);
-        }
-        activeFolderPath = newFolderPath;
-        const targetFilePath = path.join(newFolderPath, path.basename(oldFolderPath));
-        // Never overwrite a different file already sitting at the destination — leave the loose file where it is.
-        if (fs.existsSync(targetFilePath) && path.normalize(targetFilePath).toLowerCase() !== path.normalize(oldFolderPath).toLowerCase()) {
-            Logger.log(`[Match Series] Conflict: "${path.basename(targetFilePath)}" already exists in the target folder; left the source file in place: ${oldFolderPath}`, 'warn');
-            conflicts++;
-            looseFileConflict = true;
-        } else {
-            // Cross-device-safe: /unmatched and the library are separate mounts in most Docker setups,
-            // where a raw rename dies with EXDEV (discussion #169).
-            await moveFileSafe(oldFolderPath, targetFilePath);
-        }
-    } else if (path.normalize(oldFolderPath).toLowerCase() !== path.normalize(newFolderPath).toLowerCase()) {
-        // Non-destructive folder relocate/merge: a pre-existing target is merged into, never deleted, and
-        // any colliding file is left in place + counted (safeRelocateFolder also handles a plain move when
-        // the destination doesn't exist, and cleans up the emptied source folder).
-        const srcRoot = [...libraries.map(l => l.path), unmatchedDir]
-            .find(r => path.normalize(oldFolderPath).toLowerCase().startsWith(path.normalize(r).toLowerCase()))
-            || path.dirname(oldFolderPath);
-        const { conflicts: folderConflicts } = await safeRelocateFolder(oldFolderPath, newFolderPath, srcRoot);
-        conflicts += folderConflicts;
-        activeFolderPath = newFolderPath;
-
+    if (relocatedFolder) {
         // FIX (comicinfo-embed-stale-path): safeRelocateFolder only moves files on disk. The per-file
         // loop below only updates Issue.filePath for the single "clicked" target file (isTargetFile
         // guard) -- every sibling issue in a folder-level match is left with a filePath pointing at

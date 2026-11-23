@@ -1,6 +1,6 @@
 use crate::db::Db;
 use sqlx::Row;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -320,33 +320,96 @@ pub(crate) fn plan_rate_limit_retry(all_ids: &[String], halt_index: usize, attem
     Some(ids.to_vec())
 }
 
-/// Series ids with a metadata sync currently in flight, shared across every spawned sync task.
+/// Series ids with a metadata sync currently in flight, shared across every spawned sync task, each
+/// with the re-run its later triggers queued (None = none yet).
+///
 /// Two concurrent syncs of the same series interleave non-idempotent issue upserts and can
-/// cross-pair rows (issue #194) — the later trigger is always redundant, so it skips the series.
-fn in_flight_syncs() -> &'static Mutex<HashSet<String>> {
-    static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    SET.get_or_init(|| Mutex::new(HashSet::new()))
+/// cross-pair rows (issue #194), so a later trigger never runs alongside the first. It isn't always
+/// redundant, though (#275): after a re-match the running sync is still pairing against the volume it
+/// read when it started. A targeted trigger therefore queues a re-run, and the claim holder runs it,
+/// once, when its own pass ends.
+fn in_flight_syncs() -> &'static Mutex<HashMap<String, Option<SyncOptions>>> {
+    static MAP: OnceLock<Mutex<HashMap<String, Option<SyncOptions>>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// RAII claim on a series id in [`in_flight_syncs`]; released when the claim drops, including
-/// on error/early-continue paths.
-pub(crate) struct SyncClaim(String);
+fn lock_in_flight() -> std::sync::MutexGuard<'static, HashMap<String, Option<SyncOptions>>> {
+    in_flight_syncs().lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// One re-run for every trigger that arrived during a pass (#275): a full fetch or per-issue credits
+/// if any of them asked for it, and the newest write-to-file choice. A trigger with no choice of its
+/// own (None: the setting decides) doesn't erase an earlier trigger's explicit one.
+pub(crate) fn merge_rerun(queued: Option<SyncOptions>, newer: SyncOptions) -> SyncOptions {
+    match queued {
+        None => newer,
+        Some(q) => SyncOptions {
+            full_fetch: q.full_fetch || newer.full_fetch,
+            fetch_credits: q.fetch_credits || newer.fetch_credits,
+            write_comicinfo: newer.write_comicinfo.or(q.write_comicinfo),
+        },
+    }
+}
+
+/// RAII claim on a series id in [`in_flight_syncs`]; released when the claim drops, including on
+/// error/early-continue paths, or by [`SyncClaim::next_rerun`] when no re-run is queued.
+pub(crate) struct SyncClaim {
+    series_id: String,
+    released: bool,
+}
 
 impl SyncClaim {
-    /// Claims the series for syncing, or None when a sync for it is already in flight.
-    pub(crate) fn try_acquire(series_id: &str) -> Option<SyncClaim> {
-        let mut set = in_flight_syncs().lock().unwrap_or_else(|p| p.into_inner());
-        if set.insert(series_id.to_string()) {
-            Some(SyncClaim(series_id.to_string()))
-        } else {
-            None
+    /// Claims the series, or, when a sync for it is already in flight, queues `rerun` (if given) for
+    /// the holder and returns None. Re-runs queued during one pass merge into one ([`merge_rerun`]).
+    pub(crate) fn acquire_or_queue(series_id: &str, rerun: Option<SyncOptions>) -> Option<SyncClaim> {
+        let mut map = lock_in_flight();
+        match map.get_mut(series_id) {
+            Some(queued) => {
+                if let Some(request) = rerun {
+                    *queued = Some(merge_rerun(*queued, request));
+                }
+                None
+            }
+            None => {
+                map.insert(series_id.to_string(), None);
+                Some(SyncClaim { series_id: series_id.to_string(), released: false })
+            }
         }
+    }
+
+    /// Whether a trigger has queued a re-run during this pass.
+    pub(crate) fn rerun_pending(&self) -> bool {
+        lock_in_flight().get(&self.series_id).is_some_and(|q| q.is_some())
+    }
+
+    /// Ends the current pass. Some(options) when a re-run was queued meanwhile: the claim stays held
+    /// for it. None when nothing was: the claim is released in the same lock as the check, so a
+    /// trigger arriving now claims the series itself instead of queueing behind a pass that is over.
+    pub(crate) fn next_rerun(&mut self) -> Option<SyncOptions> {
+        if self.released {
+            return None;
+        }
+        let mut map = lock_in_flight();
+        if let Some(rerun) = map.get_mut(&self.series_id).and_then(|q| q.take()) {
+            return Some(rerun);
+        }
+        map.remove(&self.series_id);
+        self.released = true;
+        None
+    }
+
+    /// Releases the claim and hands back whatever re-run was queued (a rate-limit halt reschedules it).
+    pub(crate) fn release_with_queued(mut self) -> Option<SyncOptions> {
+        self.released = true;
+        lock_in_flight().remove(&self.series_id).flatten()
     }
 }
 
 impl Drop for SyncClaim {
     fn drop(&mut self) {
-        in_flight_syncs().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.0);
+        if !self.released {
+            lock_in_flight().remove(&self.series_id);
+        }
     }
 }
 
@@ -429,12 +492,8 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
     let cover_source: String = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'cover_source'"#)
         .fetch_optional(&db.pool).await.ok().flatten().unwrap_or_else(|| "metadata".to_string());
 
-    // Resolve target series records. hasCustomCover is CAST and lastMetadataSync read via the
-    // per-dialect ISO expression — SQLite's BOOLEAN/DATETIME decltypes have no Any-driver mapping.
-    let series_select = format!(
-        r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", {last_sync} as "lastMetadataSync" FROM "Series""#,
-        last_sync = db.iso_utc_expr(r#""lastMetadataSync""#)
-    );
+    // Resolve target series records.
+    let series_select = series_select_sql(&db);
     let series_list = match &series_ids {
         // Empty id list → no series (matches the old `= ANY('{}')`); `IN ()` is invalid SQL.
         Some(ids) if ids.is_empty() => Vec::new(),
@@ -493,16 +552,23 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
     // #251: "Write metadata to ComicInfo.xml" (metadata_write_comicinfo, absent = on). Off, a sync
     // refreshes the database and series.json but never rewrites an archive; an edit's own choice
     // (the Smart Matcher's toggle, SyncOptions.write_comicinfo) outranks the setting either way.
+    // Resolved per pass (sync_series_pass): a #275 re-run carries its own triggers' choice.
     let comicinfo_setting: Option<String> = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'metadata_write_comicinfo'"#)
         .fetch_optional(&db.pool).await.ok().flatten();
-    let write_comicinfo = crate::metadata_writer::writes_comicinfo(comicinfo_setting.as_deref(), opts.write_comicinfo);
 
     // metron_detail_credits (opt-in, quota-heavy): fetch per-issue credits via Metron detail calls —
     // one /issue/{id}/ call per owned issue still missing them, budgeted against the account's daily
     // window. Off: only when a person asks on the Refresh button (runs_detail_pass).
     let metron_detail_credits: bool = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'metron_detail_credits'"#)
         .fetch_optional(&db.pool).await.ok().flatten().as_deref() == Some("true");
-    let run_detail_pass = runs_detail_pass(metron_detail_credits, opts);
+
+    let batch = BatchSettings {
+        cv_api_key: cv_api_key.as_deref(),
+        cover_source: &cover_source,
+        file_priority,
+        comicinfo_setting: comicinfo_setting.as_deref(),
+        metron_detail_credits,
+    };
 
     let mut ok_count = 0usize;
     let mut fail_count = 0usize;
@@ -510,111 +576,39 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
     // re-queued (best-effort, in-process; the scheduled sweep is the durable backstop).
     let all_ids: Vec<String> = series_list.iter().map(|r| r.get::<String, _>("id")).collect();
     let mut halted_at: Option<usize> = None;
+    // #275: the re-run the halted series had queued, if any - rescheduled with its own options.
+    let mut halted_rerun: Option<SyncOptions> = None;
     for (series_idx, series) in series_list.iter().enumerate() {
-        let series_id: String = series.get("id");
-        let series_name: String = series.get("name");
+        let target = SeriesTarget::from_row(series);
 
         // Issue #194: a second trigger for a series mid-sync (double-queue, sweep overlap,
         // double-click) must not race the first — interleaved upserts cross-pair issue rows.
-        // `_claim` (not `_`, which would drop immediately) holds until the end of this iteration.
-        let _claim = match SyncClaim::try_acquire(&series_id) {
+        // #275: a targeted trigger isn't dropped, though - after a re-match it carries the new
+        // volume - so it queues a re-run that the claim holder runs when its pass ends. A sweep
+        // (or a sweep's rate-limit tail) has nothing newer to say and just skips, as before.
+        let claim = match SyncClaim::acquire_or_queue(&target.id, opts.full_fetch.then_some(opts)) {
             Some(claim) => claim,
+            None if opts.full_fetch => {
+                log::warn!("[Metadata] Sync already in flight for {} — it syncs once more when that one finishes.", target.name);
+                continue;
+            }
             None => {
-                log::warn!("[Metadata] Sync already in flight for {} — skipping duplicate trigger.", series_name);
+                log::warn!("[Metadata] Sync already in flight for {} — skipping duplicate trigger.", target.name);
                 continue;
             }
         };
 
-        let metadata_id: String = series.get("metadataId");
-        let metadata_source: String = series.try_get("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string());
-        let folder_path: String = series.try_get("folderPath").unwrap_or_default();
-        let current_year: i32 = series.try_get("year").unwrap_or(0);
-        let current_cover: Option<String> = series.try_get("coverUrl").unwrap_or(None);
-        let has_custom_cover: bool = series.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false);
-        // ISO timestamp of the last successful sync (UTC) — keys incremental fetches. None = never synced.
-        let last_sync: Option<String> = series.try_get("lastMetadataSync").unwrap_or(None);
-
-        log::info!("Syncing metadata for: {} ({} ID: {})", series_name, metadata_source, metadata_id);
-
-        claim_before_pairing(&db, &client, &series_id).await;
-
-        let fetch_result: anyhow::Result<i32> = match metadata_source.as_str() {
-            "COMICVINE" => match &cv_api_key {
-                Some(key) if !key.is_empty() => {
-                    fetch_comicvine(
-                        &db, &client, key, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover, full_fetch, has_custom_cover, &cover_source, file_priority,
-                    ).await
-                }
-                Some(_) => {
-                    log::warn!("[Metadata] cv_api_key is empty; skipping ComicVine fetch for {}", series_name);
-                    Ok(0)
-                }
-                None => {
-                    log::warn!("[Metadata] Missing cv_api_key; skipping ComicVine fetch for {}", series_name);
-                    Ok(0)
-                }
-            },
-            "METRON" => {
-                fetch_metron(
-                    &db, &client, &series_id, &series_name, &metadata_id, &folder_path, current_year, current_cover,
-                    last_sync.as_deref(), full_fetch, has_custom_cover, &cover_source, file_priority, run_detail_pass,
-                ).await
-            }
-            other => {
-                log::debug!("[Metadata] No provider fetch for source '{}' ({})", other, series_name);
-                Ok(0)
-            }
-        };
-
-        if let Err(e) = fetch_result {
-            let msg = e.to_string();
-            // Mirror Node's METADATA_SYNC batch halt: a ComicVine 429 or Metron FATAL_RATE_LIMIT means the
-            // provider has cut us off, so stop the entire batch to protect our IP instead of hammering the
-            // just-blocked API for every remaining series.
-            if msg.contains("FATAL_RATE_LIMIT") || msg.contains("429") {
-                log::warn!("[Metadata Sync] Halted batch due to rate limits to protect IP. ({})", msg);
-                halted_at = Some(series_idx);
-                break;
-            }
-            log::error!("[Metadata] {} fetch failed for {}: {:?}", metadata_source, series_name, e);
-            // Non-fatal: don't re-embed stale data for this series; move on to the next one.
-            fail_count += 1;
-            continue;
-        }
-        ok_count += 1;
-
-        // #203 Phase 1: the series' attached volumes (annuals) ride along with its own refresh —
-        // an id-anchored lane per attachment, run AFTER the parent volume so a newly-scanned annual
-        // file is already a row by the time the claim looks for it. Never fatal to the series.
-        crate::attached_volumes::sync_series_attachments(&db, &client, &series_id).await;
-
-        // Write the (now-refreshed) DB values into the series' files: the full-tag ComicInfo.xml
-        // embed (unified on metadata_writer::process_embed_job — no more duplicate 4-tag writer),
-        // or series.json alone while ComicInfo writing is off (#251).
-        match crate::metadata_writer::refresh_files_after_sync(&db, &series_id, write_comicinfo).await {
-            // FIX (comicinfo-embed-logging): this call's (success, fail, json_count) result used to be
-            // discarded entirely on the Ok path -- only the outer Err (a hard query/DB failure) ever
-            // got logged, so a batch that ran fine but embedded 0 of N files (e.g. every file's path
-            // was stale) looked identical in the log to one that embedded all of them.
-            Ok((success, fail, _json_count)) if fail > 0 => {
-                log::warn!("[Metadata] Embed for {} completed with failures: {} succeeded, {} failed.", series_name, success, fail);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("[Metadata] Embed failed for {}: {:?}", series_name, e);
-            }
-        }
-
-        if let Err(e) = sqlx::query(&format!(
-            r#"UPDATE "Series" SET "updatedAt" = {now}, "lastMetadataSync" = {now_utc} WHERE id = $1"#,
-            now = db.now_expr(),
-            now_utc = db.now_utc_ts_expr()
-        ))
-            .bind(&series_id)
-            .execute(&db.pool)
-            .await
-        {
-            log::error!("[Metadata] Failed to bump updatedAt for {}: {:?}", series_name, e);
+        let run = run_series_passes(&db, &client, &batch, target, opts, claim).await;
+        ok_count += run.synced;
+        fail_count += run.failed;
+        if let Some(halt) = run.halted {
+            // Mirror Node's METADATA_SYNC batch halt: a ComicVine 429 or Metron FATAL_RATE_LIMIT means
+            // the provider has cut us off, so stop the entire batch to protect our IP instead of
+            // hammering the just-blocked API for every remaining series.
+            log::warn!("[Metadata Sync] Halted batch due to rate limits to protect IP. ({})", halt.message);
+            halted_at = Some(series_idx);
+            halted_rerun = halt.queued_rerun;
+            break;
         }
     }
 
@@ -632,31 +626,270 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
     // unfinished tail here (delayed, attempt-capped). A retried batch runs the way the original did
     // (retry_options): a halted sweep tail stays incremental, a targeted batch stays full.
     if let Some(idx) = halted_at {
-        match plan_rate_limit_retry(&all_ids, idx, rate_limit_attempt) {
-            Some(retry_ids) => {
-                let attempt = rate_limit_attempt + 1;
-                let retry_db = db.clone();
-                let retry_opts = retry_options(opts);
-                log::info!(
-                    "[Metadata Sync] Re-queuing {} rate-limit-halted series in {}s (attempt {}/{}).",
-                    retry_ids.len(), RATE_LIMIT_RETRY_DELAY_SECS, attempt, MAX_RATE_LIMIT_RETRIES
-                );
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(RATE_LIMIT_RETRY_DELAY_SECS)).await;
-                    if let Err(e) = sync_metadata_attempt_boxed(retry_db, Some(retry_ids), retry_opts, attempt).await {
-                        log::error!("[Metadata Sync] Rate-limit retry attempt {} failed: {:?}", attempt, e);
-                    }
-                });
+        // #275: when the halted series had a re-run queued, that re-run's options are newer than
+        // this batch's (say, a Fix Match with "Write to file" off), so it retries on its own with
+        // them and the batch tail picks up after it. The retry re-reads the series either way.
+        let tail_start = match halted_rerun {
+            Some(rerun) => {
+                schedule_rate_limit_retry(&db, vec![all_ids[idx].clone()], rerun, rate_limit_attempt);
+                idx + 1
             }
-            None => log::warn!(
-                "[Metadata Sync] Rate-limit halt left {} series unfinished and the retry cap ({}) is spent — the scheduled sweep will finish them.",
-                all_ids.len() - idx, MAX_RATE_LIMIT_RETRIES
-            ),
+            None => idx,
+        };
+        if tail_start < all_ids.len() {
+            schedule_rate_limit_retry(&db, all_ids[tail_start..].to_vec(), retry_options(opts), rate_limit_attempt);
         }
     }
 
     log::info!("[Metadata] Sync batch complete: {} series synced, {} failed.", ok_count, fail_count);
     Ok(())
+}
+
+/// Re-queues rate-limit-halted series after [`RATE_LIMIT_RETRY_DELAY_SECS`] (attempt-capped by
+/// [`plan_rate_limit_retry`]; past the cap the scheduled sweep finishes them).
+fn schedule_rate_limit_retry(db: &Db, ids: Vec<String>, opts: SyncOptions, rate_limit_attempt: u32) {
+    let count = ids.len();
+    match plan_rate_limit_retry(&ids, 0, rate_limit_attempt) {
+        Some(retry_ids) => {
+            let attempt = rate_limit_attempt + 1;
+            let retry_db = db.clone();
+            log::info!(
+                "[Metadata Sync] Re-queuing {} rate-limit-halted series in {}s (attempt {}/{}).",
+                retry_ids.len(), RATE_LIMIT_RETRY_DELAY_SECS, attempt, MAX_RATE_LIMIT_RETRIES
+            );
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(RATE_LIMIT_RETRY_DELAY_SECS)).await;
+                if let Err(e) = sync_metadata_attempt_boxed(retry_db, Some(retry_ids), opts, attempt).await {
+                    log::error!("[Metadata Sync] Rate-limit retry attempt {} failed: {:?}", attempt, e);
+                }
+            });
+        }
+        None => log::warn!(
+            "[Metadata Sync] Rate-limit halt left {} series unfinished and the retry cap ({}) is spent — the scheduled sweep will finish them.",
+            count, MAX_RATE_LIMIT_RETRIES
+        ),
+    }
+}
+
+/// The series select every sync reads its targets through (the batch, and a #275 re-run's fresh
+/// read). hasCustomCover is CAST and lastMetadataSync read via the per-dialect ISO expression —
+/// SQLite's BOOLEAN/DATETIME decltypes have no Any-driver mapping.
+fn series_select_sql(db: &Db) -> String {
+    format!(
+        r#"SELECT id, name, "metadataId", "metadataSource", "folderPath", year, "coverUrl", CAST("hasCustomCover" AS INTEGER) AS "hasCustomCover", {last_sync} as "lastMetadataSync" FROM "Series""#,
+        last_sync = db.iso_utc_expr(r#""lastMetadataSync""#)
+    )
+}
+
+/// One series as a sync pass needs it, read through [`series_select_sql`].
+struct SeriesTarget {
+    id: String,
+    name: String,
+    metadata_id: String,
+    metadata_source: String,
+    folder_path: String,
+    year: i32,
+    cover_url: Option<String>,
+    has_custom_cover: bool,
+    /// ISO timestamp of the last successful sync (UTC) — keys incremental fetches. None = never synced.
+    last_sync: Option<String>,
+}
+
+impl SeriesTarget {
+    fn from_row(series: &sqlx::any::AnyRow) -> Self {
+        SeriesTarget {
+            id: series.get("id"),
+            name: series.get("name"),
+            metadata_id: series.get("metadataId"),
+            metadata_source: series.try_get("metadataSource").unwrap_or_else(|_| "COMICVINE".to_string()),
+            folder_path: series.try_get("folderPath").unwrap_or_default(),
+            year: series.try_get("year").unwrap_or(0),
+            cover_url: series.try_get("coverUrl").unwrap_or(None),
+            has_custom_cover: series.try_get::<i64, _>("hasCustomCover").map(|v| v != 0).unwrap_or(false),
+            last_sync: series.try_get("lastMetadataSync").unwrap_or(None),
+        }
+    }
+}
+
+/// A #275 re-run's fresh read: the series by id, through the batch's select and its
+/// `"metadataId" IS NOT NULL` filter. None = gone, or no longer matched.
+async fn load_series_target(db: &Db, series_id: &str) -> anyhow::Result<Option<SeriesTarget>> {
+    let sql = format!(r#"{} WHERE id = $1 AND "metadataId" IS NOT NULL"#, series_select_sql(db));
+    let row = sqlx::query(&sql).bind(series_id).fetch_optional(&db.pool).await?;
+    Ok(row.as_ref().map(SeriesTarget::from_row))
+}
+
+/// The settings a sync batch reads once and every pass shares.
+struct BatchSettings<'a> {
+    cv_api_key: Option<&'a str>,
+    cover_source: &'a str,
+    file_priority: bool,
+    comicinfo_setting: Option<&'a str>,
+    metron_detail_credits: bool,
+}
+
+/// What a claimed series' passes came to: its own pass plus any #275 re-runs.
+struct SeriesRun {
+    synced: usize,
+    failed: usize,
+    halted: Option<RateLimitHalt>,
+}
+
+/// A rate-limit halt, with the re-run the series had queued (rescheduled with its own options).
+struct RateLimitHalt {
+    message: String,
+    queued_rerun: Option<SyncOptions>,
+}
+
+/// Runs a claimed series' pass, then every re-run queued meanwhile (#275), until none is left; the
+/// claim is released on return. A re-run follows a failed fetch too, since the newer trigger may
+/// name a different volume, and each re-run reads the series fresh by id through the batch's select,
+/// so one whose match was cleared meanwhile is skipped.
+async fn run_series_passes(db: &Db, client: &Client, batch: &BatchSettings<'_>, mut target: SeriesTarget, opts: SyncOptions, mut claim: SyncClaim) -> SeriesRun {
+    let mut run = SeriesRun { synced: 0, failed: 0, halted: None };
+    let mut pass_opts = opts;
+    let mut rerun_pass = false;
+    'series: loop {
+        match sync_series_pass(db, client, batch, &target, pass_opts, &claim).await {
+            PassOutcome::Synced => run.synced += 1,
+            PassOutcome::Failed => run.failed += 1,
+            PassOutcome::RateLimited(message) => {
+                let queued_rerun = rerun_after_halt(pass_opts, rerun_pass, claim.release_with_queued());
+                run.halted = Some(RateLimitHalt { message, queued_rerun });
+                return run;
+            }
+        }
+        loop {
+            let Some(rerun) = claim.next_rerun() else { break 'series };
+            match load_series_target(db, &target.id).await {
+                Ok(Some(fresh)) => {
+                    log::info!("[Metadata] {} was triggered again while syncing — syncing it once more with the current match (#275).", fresh.name);
+                    target = fresh;
+                    pass_opts = rerun;
+                    rerun_pass = true;
+                    continue 'series;
+                }
+                Ok(None) => log::info!("[Metadata] {} is no longer matched — skipping its queued re-run.", target.name),
+                Err(e) => log::error!("[Metadata] Couldn't re-read {} for its queued re-run: {:?}", target.name, e),
+            }
+        }
+    }
+    run
+}
+
+/// What a rate-limit halt reschedules for the halted series on its own: the halted pass's options when
+/// that pass was itself a #275 re-run (so a Fix Match's "Write to file" off survives the halt), merged
+/// with anything queued since; otherwise just the queued re-run, if any (None: the batch tail retries
+/// it with the batch's options).
+fn rerun_after_halt(pass_opts: SyncOptions, rerun_pass: bool, queued: Option<SyncOptions>) -> Option<SyncOptions> {
+    match (rerun_pass, queued) {
+        (true, Some(q)) => Some(merge_rerun(Some(pass_opts), q)),
+        (true, None) => Some(pass_opts),
+        (false, queued) => queued,
+    }
+}
+
+/// How one series pass ended.
+enum PassOutcome {
+    Synced,
+    Failed,
+    /// The provider cut us off (ComicVine 429, Metron FATAL_RATE_LIMIT); the batch halts.
+    RateLimited(String),
+}
+
+/// One sync of one series: the provider fetch, its attached volumes, the files, the timestamp.
+/// `opts` is this pass's own (the batch's, or a #275 re-run's merged options).
+async fn sync_series_pass(db: &Db, client: &Client, batch: &BatchSettings<'_>, target: &SeriesTarget, opts: SyncOptions, claim: &SyncClaim) -> PassOutcome {
+    let series_id = &target.id;
+    let series_name = &target.name;
+    let full_fetch = opts.full_fetch;
+    let run_detail_pass = runs_detail_pass(batch.metron_detail_credits, opts);
+    let write_comicinfo = crate::metadata_writer::writes_comicinfo(batch.comicinfo_setting, opts.write_comicinfo);
+
+    log::info!("Syncing metadata for: {} ({} ID: {})", series_name, target.metadata_source, target.metadata_id);
+
+    claim_before_pairing(db, client, series_id).await;
+
+    let fetch_result: anyhow::Result<i32> = match target.metadata_source.as_str() {
+        "COMICVINE" => match batch.cv_api_key {
+            Some(key) if !key.is_empty() => {
+                fetch_comicvine(
+                    db, client, key, series_id, series_name, &target.metadata_id, &target.folder_path, target.year, target.cover_url.clone(),
+                    full_fetch, target.has_custom_cover, batch.cover_source, batch.file_priority,
+                ).await
+            }
+            Some(_) => {
+                log::warn!("[Metadata] cv_api_key is empty; skipping ComicVine fetch for {}", series_name);
+                Ok(0)
+            }
+            None => {
+                log::warn!("[Metadata] Missing cv_api_key; skipping ComicVine fetch for {}", series_name);
+                Ok(0)
+            }
+        },
+        "METRON" => {
+            fetch_metron(
+                db, client, series_id, series_name, &target.metadata_id, &target.folder_path, target.year, target.cover_url.clone(),
+                target.last_sync.as_deref(), full_fetch, target.has_custom_cover, batch.cover_source, batch.file_priority, run_detail_pass,
+            ).await
+        }
+        other => {
+            log::debug!("[Metadata] No provider fetch for source '{}' ({})", other, series_name);
+            Ok(0)
+        }
+    };
+
+    if let Err(e) = fetch_result {
+        let msg = e.to_string();
+        if msg.contains("FATAL_RATE_LIMIT") || msg.contains("429") {
+            return PassOutcome::RateLimited(msg);
+        }
+        log::error!("[Metadata] {} fetch failed for {}: {:?}", target.metadata_source, series_name, e);
+        // Non-fatal: don't re-embed stale data for this series; move on to the next one.
+        return PassOutcome::Failed;
+    }
+
+    // #203 Phase 1: the series' attached volumes (annuals) ride along with its own refresh —
+    // an id-anchored lane per attachment, run AFTER the parent volume so a newly-scanned annual
+    // file is already a row by the time the claim looks for it. Never fatal to the series.
+    crate::attached_volumes::sync_series_attachments(db, client, series_id).await;
+
+    // #275: a re-run is already queued (say, a Fix Match landed while this pass was fetching the old
+    // volume), and it rewrites the files from the fresh data - so this pass leaves them alone rather
+    // than write the old volume's data into every archive first.
+    if claim.rerun_pending() {
+        log::info!("[Metadata] {} has a newer sync queued — leaving its files for that one.", series_name);
+    } else {
+        // Write the (now-refreshed) DB values into the series' files: the full-tag ComicInfo.xml
+        // embed (unified on metadata_writer::process_embed_job — no more duplicate 4-tag writer),
+        // or series.json alone while ComicInfo writing is off (#251).
+        match crate::metadata_writer::refresh_files_after_sync(db, series_id, write_comicinfo).await {
+            // FIX (comicinfo-embed-logging): this call's (success, fail, json_count) result used to be
+            // discarded entirely on the Ok path -- only the outer Err (a hard query/DB failure) ever
+            // got logged, so a batch that ran fine but embedded 0 of N files (e.g. every file's path
+            // was stale) looked identical in the log to one that embedded all of them.
+            Ok((success, fail, _json_count)) if fail > 0 => {
+                log::warn!("[Metadata] Embed for {} completed with failures: {} succeeded, {} failed.", series_name, success, fail);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("[Metadata] Embed failed for {}: {:?}", series_name, e);
+            }
+        }
+    }
+
+    if let Err(e) = sqlx::query(&format!(
+        r#"UPDATE "Series" SET "updatedAt" = {now}, "lastMetadataSync" = {now_utc} WHERE id = $1"#,
+        now = db.now_expr(),
+        now_utc = db.now_utc_ts_expr()
+    ))
+        .bind(series_id)
+        .execute(&db.pool)
+        .await
+    {
+        log::error!("[Metadata] Failed to bump updatedAt for {}: {:?}", series_name, e);
+    }
+    PassOutcome::Synced
 }
 
 /// The ComicVine series UPDATE. `locked` (curated, or file priority): the cover plus blank-fills only;
@@ -2374,15 +2607,96 @@ mod tests {
 
     #[test]
     fn sync_claim_blocks_second_acquire_until_dropped() {
-        let claim = SyncClaim::try_acquire("claim-test-194");
+        let claim = SyncClaim::acquire_or_queue("claim-test-194", None);
         assert!(claim.is_some());
         // A second trigger while the first is in flight is refused…
-        assert!(SyncClaim::try_acquire("claim-test-194").is_none());
+        assert!(SyncClaim::acquire_or_queue("claim-test-194", None).is_none());
         // …an unrelated series is unaffected…
-        assert!(SyncClaim::try_acquire("claim-test-other").is_some());
+        assert!(SyncClaim::acquire_or_queue("claim-test-other", None).is_some());
         // …and dropping the claim frees the series for the next legitimate sync.
         drop(claim);
-        assert!(SyncClaim::try_acquire("claim-test-194").is_some());
+        assert!(SyncClaim::acquire_or_queue("claim-test-194", None).is_some());
+    }
+
+    // ==== Issue #275: a refused trigger isn't always redundant - after a re-match it carries the
+    // new volume. A targeted trigger queues one re-run for the claim holder instead of being dropped. ====
+
+    const TARGETED: SyncOptions = SyncOptions { full_fetch: true, fetch_credits: false, write_comicinfo: None };
+
+    #[test]
+    fn a_trigger_during_a_sync_gives_exactly_one_rerun() {
+        let mut claim = SyncClaim::acquire_or_queue("claim-test-275-one", None).expect("first trigger claims");
+        assert!(!claim.rerun_pending());
+        let fix_match = SyncOptions { write_comicinfo: Some(false), ..TARGETED };
+        assert!(SyncClaim::acquire_or_queue("claim-test-275-one", Some(fix_match)).is_none(), "still never two at once (#194)");
+        assert!(claim.rerun_pending());
+        assert_eq!(claim.next_rerun(), Some(fix_match), "the queued re-run, with that trigger's options");
+        // The re-run runs under the same claim: a trigger now still queues rather than starting a second sync.
+        assert!(SyncClaim::acquire_or_queue("claim-test-275-one", None).is_none());
+        assert_eq!(claim.next_rerun(), None, "nothing more was queued: the pass ends and the claim is released");
+        assert_eq!(claim.next_rerun(), None, "and stays released");
+        let next = SyncClaim::acquire_or_queue("claim-test-275-one", Some(TARGETED));
+        assert!(next.is_some(), "a trigger after the last pass claims the series itself");
+        drop(claim);
+        assert!(SyncClaim::acquire_or_queue("claim-test-275-one", None).is_none(), "the old claim's drop leaves the new one alone");
+    }
+
+    #[test]
+    fn several_triggers_during_a_sync_still_give_one_rerun() {
+        let mut claim = SyncClaim::acquire_or_queue("claim-test-275-many", None).expect("claims");
+        for _ in 0..3 {
+            assert!(SyncClaim::acquire_or_queue("claim-test-275-many", Some(TARGETED)).is_none());
+        }
+        assert_eq!(claim.next_rerun(), Some(TARGETED));
+        assert_eq!(claim.next_rerun(), None);
+    }
+
+    #[test]
+    fn a_sweep_trigger_skips_without_queueing_a_rerun() {
+        let mut claim = SyncClaim::acquire_or_queue("claim-test-275-sweep", None).expect("claims");
+        assert!(SyncClaim::acquire_or_queue("claim-test-275-sweep", None).is_none());
+        assert!(!claim.rerun_pending());
+        assert_eq!(claim.next_rerun(), None);
+    }
+
+    #[test]
+    fn queued_reruns_merge_their_options() {
+        let credits = SyncOptions { fetch_credits: true, write_comicinfo: Some(true), ..TARGETED };
+        let write_off = SyncOptions { write_comicinfo: Some(false), ..TARGETED };
+        let no_choice = SyncOptions { full_fetch: false, write_comicinfo: None, ..TARGETED };
+        // Credits or a full fetch if any trigger asked; the newest write-to-file choice wins...
+        let merged = merge_rerun(Some(credits), write_off);
+        assert_eq!(merged, SyncOptions { full_fetch: true, fetch_credits: true, write_comicinfo: Some(false) });
+        // ...and a later trigger with no choice of its own doesn't erase it.
+        assert_eq!(merge_rerun(Some(merged), no_choice), merged);
+        assert_eq!(merge_rerun(None, no_choice), no_choice, "the first queued trigger is taken as is");
+
+        // The same through the claim.
+        let mut claim = SyncClaim::acquire_or_queue("claim-test-275-merge", None).expect("claims");
+        for trigger in [credits, write_off, no_choice] {
+            assert!(SyncClaim::acquire_or_queue("claim-test-275-merge", Some(trigger)).is_none());
+        }
+        assert_eq!(claim.next_rerun(), Some(merged));
+    }
+
+    #[test]
+    fn a_rate_limit_halt_hands_back_the_queued_rerun_and_releases() {
+        let claim = SyncClaim::acquire_or_queue("claim-test-275-halt", None).expect("claims");
+        assert!(SyncClaim::acquire_or_queue("claim-test-275-halt", Some(TARGETED)).is_none());
+        assert_eq!(claim.release_with_queued(), Some(TARGETED));
+        assert!(SyncClaim::acquire_or_queue("claim-test-275-halt", None).is_some(), "released");
+    }
+
+    #[test]
+    fn a_halt_during_a_rerun_keeps_that_reruns_options() {
+        let write_off = SyncOptions { write_comicinfo: Some(false), ..TARGETED };
+        let credits = SyncOptions { fetch_credits: true, ..TARGETED };
+        // The halted pass was the batch's own: only a queued re-run is rescheduled on its own.
+        assert_eq!(rerun_after_halt(TARGETED, false, None), None);
+        assert_eq!(rerun_after_halt(TARGETED, false, Some(write_off)), Some(write_off));
+        // The halted pass was a re-run: its options survive, merged with anything queued since.
+        assert_eq!(rerun_after_halt(write_off, true, None), Some(write_off));
+        assert_eq!(rerun_after_halt(write_off, true, Some(credits)), Some(SyncOptions { fetch_credits: true, write_comicinfo: Some(false), ..TARGETED }));
     }
 
     // ==== Library-aware recommendations (Beta A): volume-level credits. The parser rules are the
@@ -3071,14 +3385,19 @@ mod tests {
             "a hand-edited issue keeps its date whatever else holds");
     }
 
-    // #251: with "Write metadata to ComicInfo.xml" off, only the Edit Metadata dialog held back -
-    // every series sync still rewrote the archives. A LOCAL series skips the provider fetch, so this
-    // drives the real sync end to end with no network: the setting, an edit's own choice, the file
-    // step and the lastMetadataSync bump.
-    #[tokio::test]
-    async fn a_sync_leaves_the_archives_alone_while_comicinfo_writing_is_off() {
-        use std::io::{Read as _, Write as _};
-        let base = std::env::temp_dir().join(format!("omnibus_sync_251_{}", std::process::id()));
+    /// A LOCAL series `s{tag}` (one archive, `i{tag}`, with no ComicInfo.xml) in a file-backed SQLite
+    /// with the columns a sync reads. A LOCAL series skips the provider fetch, so tests drive the real
+    /// sync with no network (#251, #275). The tag keeps parallel tests off each other's sync claims.
+    struct LocalSyncFixture {
+        db: Db,
+        base: std::path::PathBuf,
+        folder: std::path::PathBuf,
+        cbz: std::path::PathBuf,
+    }
+
+    async fn local_sync_fixture(tag: &str) -> LocalSyncFixture {
+        use std::io::Write as _;
+        let base = std::env::temp_dir().join(format!("omnibus_sync_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let folder = base.join("Saga (2012)");
         std::fs::create_dir_all(&folder).unwrap();
@@ -3089,13 +3408,6 @@ mod tests {
             zw.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             zw.finish().unwrap();
         }
-        let comicinfo = |p: &std::path::Path| -> Option<String> {
-            let mut za = zip::ZipArchive::new(std::fs::File::open(p).unwrap()).unwrap();
-            let mut entry = za.by_name("ComicInfo.xml").ok()?;
-            let mut xml = String::new();
-            entry.read_to_string(&mut xml).unwrap();
-            Some(xml)
-        };
 
         let db_file = base.join("sync.db");
         std::fs::File::create(&db_file).unwrap();
@@ -3136,12 +3448,33 @@ mod tests {
         }
         sqlx::query(
             r#"INSERT INTO "Series" (id, name, publisher, year, "folderPath", "metadataId", "metadataSource", status)
-               VALUES ('s251', 'Saga', 'Image', 2012, $1, 'local-1', 'LOCAL', 'Ongoing')"#,
-        ).bind(folder.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+               VALUES ($2, 'Saga', 'Image', 2012, $1, 'local-1', 'LOCAL', 'Ongoing')"#,
+        ).bind(folder.to_string_lossy().replace('\\', "/")).bind(format!("s{tag}")).execute(&db.pool).await.unwrap();
         sqlx::query(
             r#"INSERT INTO "Issue" (id, "seriesId", "filePath", number, name, "metadataSource")
-               VALUES ('i251', 's251', $1, '1', 'Chapter One', 'LOCAL')"#,
-        ).bind(cbz.to_string_lossy().replace('\\', "/")).execute(&db.pool).await.unwrap();
+               VALUES ($2, $3, $1, '1', 'Chapter One', 'LOCAL')"#,
+        ).bind(cbz.to_string_lossy().replace('\\', "/")).bind(format!("i{tag}")).bind(format!("s{tag}")).execute(&db.pool).await.unwrap();
+        LocalSyncFixture { db, base, folder, cbz }
+    }
+
+    /// The archive's ComicInfo.xml, if it has one.
+    fn comicinfo_of(p: &std::path::Path) -> Option<String> {
+        use std::io::Read as _;
+        let mut za = zip::ZipArchive::new(std::fs::File::open(p).unwrap()).unwrap();
+        let mut entry = za.by_name("ComicInfo.xml").ok()?;
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml).unwrap();
+        Some(xml)
+    }
+
+    // #251: with "Write metadata to ComicInfo.xml" off, only the Edit Metadata dialog held back -
+    // every series sync still rewrote the archives. A LOCAL series skips the provider fetch, so this
+    // drives the real sync end to end with no network: the setting, an edit's own choice, the file
+    // step and the lastMetadataSync bump.
+    #[tokio::test]
+    async fn a_sync_leaves_the_archives_alone_while_comicinfo_writing_is_off() {
+        let LocalSyncFixture { db, base, folder, cbz } = local_sync_fixture("251").await;
+        let comicinfo = comicinfo_of;
         sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('metadata_write_comicinfo', 'false')"#)
             .execute(&db.pool).await.unwrap();
 
@@ -3171,6 +3504,70 @@ mod tests {
         sync_metadata(db.clone(), Some(vec!["s251".into()]), false, None).await.expect("sync, setting on");
         assert!(comicinfo(&cbz).unwrap().contains("<Title>Renamed In Omnibus</Title>"));
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ComicInfo writing on (the setting's default), no ComicVine key: what a LOCAL test series needs.
+    fn local_batch() -> BatchSettings<'static> {
+        BatchSettings { cv_api_key: None, cover_source: "metadata", file_priority: false, comicinfo_setting: None, metron_detail_credits: false }
+    }
+
+    // #275: a pass that finds a newer sync queued leaves the files to it - otherwise the running sync
+    // writes the old volume's data into every archive before the re-run writes the new one.
+    #[tokio::test]
+    async fn a_pass_with_a_rerun_queued_leaves_the_files_for_it() {
+        let LocalSyncFixture { db, base, cbz, .. } = local_sync_fixture("275a").await;
+        let client = Client::new();
+        let target = load_series_target(&db, "s275a").await.unwrap().expect("the matched series");
+        let mut claim = SyncClaim::acquire_or_queue("s275a", None).expect("claims");
+        assert!(SyncClaim::acquire_or_queue("s275a", Some(TARGETED)).is_none(), "a Fix Match lands mid-pass");
+
+        let untouched = std::fs::read(&cbz).unwrap();
+        assert!(matches!(sync_series_pass(&db, &client, &local_batch(), &target, TARGETED, &claim).await, PassOutcome::Synced));
+        assert_eq!(std::fs::read(&cbz).unwrap(), untouched, "the files wait for the queued re-run");
+
+        let rerun = claim.next_rerun().expect("the queued re-run");
+        assert!(matches!(sync_series_pass(&db, &client, &local_batch(), &target, rerun, &claim).await, PassOutcome::Synced));
+        assert!(comicinfo_of(&cbz).is_some(), "the last pass writes the files as usual");
+        assert_eq!(claim.next_rerun(), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #275: the series' passes run the queued re-run with that trigger's own options - a Fix Match with
+    // "Write to file" off (#251) leaves the archives alone even though the setting is on.
+    #[tokio::test]
+    async fn the_rerun_runs_once_with_the_newest_triggers_options() {
+        let LocalSyncFixture { db, base, cbz, .. } = local_sync_fixture("275b").await;
+        let client = Client::new();
+        let target = load_series_target(&db, "s275b").await.unwrap().expect("the matched series");
+        let claim = SyncClaim::acquire_or_queue("s275b", None).expect("claims");
+        let fix_match = SyncOptions { write_comicinfo: Some(false), ..TARGETED };
+        assert!(SyncClaim::acquire_or_queue("s275b", Some(fix_match)).is_none());
+
+        let untouched = std::fs::read(&cbz).unwrap();
+        let run = run_series_passes(&db, &client, &local_batch(), target, TARGETED, claim).await;
+        assert_eq!((run.synced, run.failed), (2, 0), "its own pass and exactly one re-run");
+        assert!(run.halted.is_none());
+        assert_eq!(std::fs::read(&cbz).unwrap(), untouched, "neither pass wrote the archive");
+        assert!(SyncClaim::acquire_or_queue("s275b", None).is_some(), "the claim is released afterwards");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #275: the re-run reads the series fresh by id; one whose match was cleared meanwhile is skipped.
+    #[tokio::test]
+    async fn the_rerun_skips_a_series_whose_match_was_cleared() {
+        let LocalSyncFixture { db, base, cbz, .. } = local_sync_fixture("275c").await;
+        let client = Client::new();
+        let target = load_series_target(&db, "s275c").await.unwrap().expect("the matched series");
+        let claim = SyncClaim::acquire_or_queue("s275c", None).expect("claims");
+        assert!(SyncClaim::acquire_or_queue("s275c", Some(TARGETED)).is_none());
+        sqlx::query(r#"UPDATE "Series" SET "metadataId" = NULL WHERE id = 's275c'"#).execute(&db.pool).await.unwrap();
+        assert!(load_series_target(&db, "s275c").await.unwrap().is_none(), "the select's own filter");
+
+        let run = run_series_passes(&db, &client, &local_batch(), target, TARGETED, claim).await;
+        assert_eq!((run.synced, run.failed), (1, 0), "the running pass finishes; the re-run is skipped");
+        assert!(comicinfo_of(&cbz).is_none(), "and the pass left the files for a re-run that never came");
+        assert!(SyncClaim::acquire_or_queue("s275c", None).is_some(), "the claim is released");
         let _ = std::fs::remove_dir_all(&base);
     }
 

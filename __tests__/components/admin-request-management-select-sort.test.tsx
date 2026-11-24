@@ -156,7 +156,12 @@ describe('Request Management on a phone: Sort (#265)', () => {
     });
 });
 
-describe('Request Management: Select all covers the page on screen (#265)', () => {
+// These two render 24+ rows and re-render them on every click and page change: about 2.4-3 s and 1-2 s
+// on their own, and each click is React re-rendering 24 table rows and 24 cards in jsdom - work, not
+// a hang. A full local run slows this file 4-9x (38-82 s against 9 s alone, measured 2026-11-24 from the
+// gate logs), so the 48-row test kept timing out at the suite's 15 s. 60 s leaves twice the worst seen
+// and still fails a test that hangs.
+describe('Request Management: Select all covers the page on screen (#265)', { timeout: 60_000 }, () => {
     it("a full page 1 doesn't tick page 2's box, and ticking it adds page 2 instead of clearing", async () => {
         requests = many(48);
         await renderList();

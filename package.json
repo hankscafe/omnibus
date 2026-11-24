@@ -1,6 +1,6 @@
 {
   "name": "omnibus",
-  "version": "1.4.11-beta.054",
+  "version": "1.4.11-beta.055",
   "private": true,
   "scripts": {
     "dev": "next dev",

@@ -1,5 +1,4 @@
 use crate::db::{Db, Dialect};
-use jwalk::WalkDir;
 use sqlx::Row;
 use std::collections::{HashSet, HashMap};
 use std::fs::File;
@@ -1849,6 +1848,21 @@ async fn begin_write_tx(db: &Db, phase: &str) -> Option<sqlx::Transaction<'stati
 // Main scan
 // ============================================================================
 
+/// Every comic archive under `scan_root` whose extension is one of `valid_extensions` (lowercase),
+/// hidden entries skipped. The disk step of a scan: new files are the ones no Issue row has yet.
+fn comic_files_on_disk(scan_root: &str, valid_extensions: &[&str]) -> Vec<std::path::PathBuf> {
+    crate::walk::parallel(Path::new(scan_root))
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| valid_extensions.contains(&ext.to_lowercase().as_str()))
+        })
+        .collect()
+}
+
 pub async fn scan_library(db: Db, library_path: String, library_id: String, specific_path: Option<String>) -> anyhow::Result<()> {
     log::info!("Starting fast parallel scan of: {}", library_path);
     let start_time = std::time::Instant::now();
@@ -2092,26 +2106,19 @@ pub async fn scan_library(db: Db, library_path: String, library_id: String, spec
     let mut new_folders: HashMap<String, Vec<String>> = HashMap::new();
     let mut new_issues_existing_series: Vec<(String, String)> = Vec::new();
 
-    for dir_entry in WalkDir::new(&scan_root).skip_hidden(true).into_iter().flatten() {
-        let path = dir_entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if valid_extensions.contains(&ext.to_lowercase().as_str()) {
-                    let file_str = path.to_string_lossy().replace('\\', "/");
-                    let file_lower = file_str.to_lowercase();
+    for path in comic_files_on_disk(&scan_root, &valid_extensions) {
+        let file_str = path.to_string_lossy().replace('\\', "/");
+        let file_lower = file_str.to_lowercase();
 
-                    if !existing_files.contains(&file_lower) {
-                        if let Some(parent) = path.parent() {
-                            let parent_str = parent.to_string_lossy().replace('\\', "/");
-                            let parent_lower = parent_str.to_lowercase();
+        if !existing_files.contains(&file_lower) {
+            if let Some(parent) = path.parent() {
+                let parent_str = parent.to_string_lossy().replace('\\', "/");
+                let parent_lower = parent_str.to_lowercase();
 
-                            if let Some(series_id) = existing_series.get(&parent_lower) {
-                                new_issues_existing_series.push((series_id.clone(), file_str));
-                            } else {
-                                new_folders.entry(parent_str).or_default().push(file_str);
-                            }
-                        }
-                    }
+                if let Some(series_id) = existing_series.get(&parent_lower) {
+                    new_issues_existing_series.push((series_id.clone(), file_str));
+                } else {
+                    new_folders.entry(parent_str).or_default().push(file_str);
                 }
             }
         }
@@ -3371,6 +3378,18 @@ async fn delete_issue(db: &Db, issue_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #282: while rayon's shared pool was busy, the disk walk came back empty and a scan found no new
+    // files ("Disk scan found 0 new folder(s)...").
+    #[test]
+    fn the_disk_step_finds_every_archive_while_the_pool_is_busy() {
+        use crate::walk::test_support::{busy_pool, file_names, walk_tree};
+        let root = walk_tree();
+        let path = root.to_string_lossy().to_string();
+        let found = busy_pool(|| comic_files_on_disk(&path, &["cbz", "cbr", "zip"]));
+        assert_eq!(file_names(found), ["a.cbz", "b.cbr", "c.zip"], "notes.txt and the hidden folder left out");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     // ==== #203 Phase 1: attached volumes — the zero-API restore reads its own namespaced block. ====
 

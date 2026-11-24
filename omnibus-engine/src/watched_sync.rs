@@ -184,21 +184,27 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     sweep_folders(db, watched_dir, unmatched_dir).await
 }
 
+/// Every comic file in the watched folder (hidden entries skipped). A folder that can't be read
+/// fails the sweep.
+fn watched_comic_files(watched_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in crate::walk::parallel(watched_dir) {
+        let path = entry?.path();
+        if path.is_file() {
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            if matches!(ext.as_str(), "cbz" | "cbr" | "zip" | "rar" | "cb7" | "epub") {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
+}
+
 async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Result<(i32, i32, String)> {
     std::fs::create_dir_all(&watched_dir)?;
     std::fs::create_dir_all(&unmatched_dir)?;
 
-    let mut files_to_process = Vec::new();
-    for entry in jwalk::WalkDir::new(&watched_dir) {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-            if matches!(ext.as_str(), "cbz" | "cbr" | "zip" | "rar" | "cb7" | "epub") {
-                files_to_process.push(path);
-            }
-        }
-    }
+    let files_to_process = watched_comic_files(Path::new(&watched_dir))?;
 
     if files_to_process.is_empty() {
         return Ok((0, 0, "No files found in watched folder.".to_string()));
@@ -876,8 +882,7 @@ fn probe_reaches(watched: &Path, unmatched: &Path) -> bool {
         // Nothing can be parked in a folder nothing can be written to, so there is nothing to stop.
         return false;
     }
-    let seen = jwalk::WalkDir::new(watched)
-        .into_iter()
+    let seen = crate::walk::parallel(watched)
         .filter_map(|entry| entry.ok())
         .any(|entry| entry.file_name().to_str() == Some(name.as_str()));
     let _ = std::fs::remove_file(&probe);
@@ -1145,6 +1150,30 @@ mod tests {
         let base = std::env::temp_dir().join(format!("omnibus_probe_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&base).unwrap();
         base
+    }
+
+    // #282: while rayon's shared pool was busy, the watched-folder walk failed the whole sweep with
+    // "rayon thread-pool too busy", and the probe walk missed an unmatched folder inside the watched one.
+
+    #[test]
+    fn the_sweep_lists_the_watched_folder_while_the_pool_is_busy() {
+        use crate::walk::test_support::{busy_pool, file_names, walk_tree};
+        let root = walk_tree();
+        let found = busy_pool(|| watched_comic_files(&root)).expect("a busy pool doesn't fail the sweep");
+        assert_eq!(file_names(found), ["a.cbz", "b.cbr", "c.zip"]);
+        assert!(watched_comic_files(&root.join("missing")).is_err(), "a folder that can't be read still fails it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_probe_sees_unmatched_inside_the_watched_folder_while_the_pool_is_busy() {
+        let base = probe_fixture();
+        let watched = base.join("watched");
+        let unmatched = watched.join("deeper").join("unmatched");
+        std::fs::create_dir_all(&unmatched).unwrap();
+
+        assert!(crate::walk::test_support::busy_pool(|| probe_reaches(&watched, &unmatched)));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

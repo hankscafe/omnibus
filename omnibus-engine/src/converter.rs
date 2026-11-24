@@ -285,7 +285,7 @@ pub fn convert_cbr_to_cbz(cbr_path: &Path) -> Result<PathBuf> {
         let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         // 3. Walk the temporary directory and stream files into the new ZIP
-        for entry in jwalk::WalkDir::new(&temp_dir) {
+        for entry in crate::walk::serial(&temp_dir) {
             let entry = entry?;
             let path = entry.path();
 
@@ -1616,7 +1616,7 @@ fn repack_rar_without_pages(path: &Path, remove_set: &std::collections::HashSet<
         }
 
         // Adjust any ComicInfo.xml in place before the rezip.
-        for entry in jwalk::WalkDir::new(&temp_dir) {
+        for entry in crate::walk::serial(&temp_dir) {
             let entry = entry?;
             let p = entry.path();
             if p.is_file() && p.file_name().map(|n| n.to_string_lossy().eq_ignore_ascii_case("comicinfo.xml")).unwrap_or(false) {
@@ -1629,7 +1629,7 @@ fn repack_rar_without_pages(path: &Path, remove_set: &std::collections::HashSet<
         let tmp_file = File::create(tmp_path).context("Failed to create temp archive")?;
         let mut writer = ZipWriter::new(tmp_file);
         let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        for entry in jwalk::WalkDir::new(&temp_dir) {
+        for entry in crate::walk::serial(&temp_dir) {
             let entry = entry?;
             let p = entry.path();
             if p.is_file() {
@@ -2473,6 +2473,39 @@ mod tests {
         assert_eq!(remaining, 2);
         assert!(!cbr.exists(), "original .cbr retired");
 
+        let mut archive = zip::ZipArchive::new(File::open(&final_path).unwrap()).unwrap();
+        assert_eq!(sorted_image_entries(&mut archive), vec!["01.png", "02.png"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // #282: these walk their extraction folder from their own blocking thread. On rayon's shared pool,
+    // a busy pool (another conversion's page jobs) failed them with "rayon thread-pool too busy".
+
+    #[test]
+    fn a_cbr_converts_while_the_pool_is_busy() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+        std::env::set_var("OMNIBUS_CACHE_DIR", std::env::temp_dir());
+        let dir = scratch_dir();
+        let cbr = dir.join("busy_convert.cbr");
+        fs::copy(reader_rar_fixture(), &cbr).unwrap();
+
+        let cbz = crate::walk::test_support::busy_pool(|| convert_cbr_to_cbz(&cbr)).expect("a busy pool doesn't fail the conversion");
+        let mut archive = zip::ZipArchive::new(File::open(&cbz).unwrap()).unwrap();
+        assert_eq!(sorted_image_entries(&mut archive), vec!["01.png", "02.png", "10.png"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pages_come_out_of_a_cbr_while_the_pool_is_busy() {
+        if !unrar_available() { eprintln!("skipping: unrar not on PATH"); return; }
+        std::env::set_var("OMNIBUS_CACHE_DIR", std::env::temp_dir());
+        let dir = scratch_dir();
+        let cbr = dir.join("busy_pages.cbr");
+        fs::copy(reader_rar_fixture(), &cbr).unwrap();
+
+        let (final_path, remaining) = crate::walk::test_support::busy_pool(|| remove_pages_from_archive(&cbr, &["10.png".to_string()]))
+            .expect("a busy pool doesn't fail the page removal");
+        assert_eq!(remaining, 2);
         let mut archive = zip::ZipArchive::new(File::open(&final_path).unwrap()).unwrap();
         assert_eq!(sorted_image_entries(&mut archive), vec!["01.png", "02.png"]);
         let _ = fs::remove_dir_all(&dir);

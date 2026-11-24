@@ -30,6 +30,7 @@ mod log_forward;
 mod renamer;
 mod secret_crypto;
 mod server_paths;
+mod walk;
 
 use axum::{routing::{get, post}, Router, Json, extract::{State, Request}, http::{StatusCode, header}, middleware::{self, Next}, response::Response};
 use serde::{Deserialize, Serialize};
@@ -505,6 +506,59 @@ mod umask_tests {
     }
 }
 
+/// Stack size for rayon's threads (#282). Rust's default is 2 MiB, and jobs on this pool run on top of
+/// one another while a thread waits (walks started side by side, a conversion's pages). It's reserved
+/// address space: memory is only used as the stack grows.
+const RAYON_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Rayon's global pool: the converter's page jobs and jwalk's directory reads run on it. Its threads
+/// are named so a crash on one says which pool it was (#282 only got `thread '<unknown>'`).
+fn rayon_pool_builder(threads: usize) -> rayon::ThreadPoolBuilder {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|i| format!("omnibus-rayon-{i}"))
+        .stack_size(RAYON_STACK_BYTES)
+}
+
+#[cfg(test)]
+mod rayon_pool_tests {
+    use super::*;
+
+    // #282: the engine died with `thread '<unknown>' (26) has overflowed its stack` - an unnamed thread
+    // of this pool (its 24 threads are the first the engine creates after start-up).
+
+    #[test]
+    fn the_pool_names_its_threads() {
+        let pool = rayon_pool_builder(2).build().unwrap();
+        let name = pool.install(|| std::thread::current().name().map(str::to_owned));
+        let name = name.expect("a crash on this pool says which thread it was");
+        assert!(name.starts_with("omnibus-rayon-"), "{name}");
+    }
+
+    /// Recurses until the stack is `bytes` below `top` (measured, so debug and release builds use the
+    /// same amount whatever their frame sizes). Each frame stays in use across the call below it, so
+    /// the recursion can't be turned into a loop.
+    #[inline(never)]
+    fn use_stack(top: usize, bytes: usize) -> u64 {
+        let frame = std::hint::black_box([1u8; 16 * 1024]);
+        let here = &frame as *const _ as usize;
+        let deeper = if top.saturating_sub(here) >= bytes { 0 } else { use_stack(top, bytes) };
+        std::hint::black_box(&frame);
+        deeper + frame[frame.len() - 1] as u64
+    }
+
+    #[test]
+    fn the_pool_runs_a_job_that_needs_more_than_rusts_default_2_mib_of_stack() {
+        // 4 MiB: overflows a default 2 MiB thread (and aborts the test binary), fits the pool's 8 MiB.
+        let pool = rayon_pool_builder(1).build().unwrap();
+        let used = pool.install(|| {
+            let top = std::hint::black_box(0u8);
+            use_stack(&top as *const u8 as usize, 4 * 1024 * 1024)
+        });
+        assert!(used > 0);
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     // Installs the global logger: prints to stdout as before AND mirrors lines to the Node app's
@@ -552,7 +606,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Size rayon's global pool (used for per-page WebP encoding in the converter) to the CPU cap.
-    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(cfg.cpu_cap).build_global() {
+    if let Err(e) = rayon_pool_builder(cfg.cpu_cap).build_global() {
         log::warn!("[Config] Could not set the rayon global pool size: {}", e);
     }
 

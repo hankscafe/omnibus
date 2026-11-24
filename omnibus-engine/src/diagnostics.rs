@@ -86,6 +86,21 @@ pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
     Ok((total_checked, missing_count, format!("Ghost check complete. Scanned {} files. Found {} missing.", total_checked, missing_count)))
 }
 
+/// The bytes in every file under `folder` (hidden entries skipped); 0 when it doesn't exist. Each
+/// series' walk already has a blocking thread of its own (up to scan_workers at once), so it walks
+/// there rather than on rayon's shared pool, where the walks ran on top of each other (#282).
+fn folder_size(folder: &str) -> u64 {
+    if !Path::new(folder).exists() {
+        return 0;
+    }
+    crate::walk::serial(Path::new(folder))
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum()
+}
+
 pub async fn run_storage_scan(db: Db) -> Result<(i32, u64, String)> {
     // Pull the fields the dashboard needs (name/publisher/isManga/issueCount) in one grouped query.
     let series = sqlx::query(
@@ -124,17 +139,7 @@ pub async fn run_storage_scan(db: Db) -> Result<(i32, u64, String)> {
             // panicked walk still yields a valid (size 0) entry rather than losing the row.
             let size_bytes = tokio::task::spawn_blocking(move || {
                 log::debug!("[Storage Scan Debug] Calculating size for \"{}\" at {}", nm, fp);
-                let mut sz: u64 = 0;
-                if Path::new(&fp).exists() {
-                    for e in jwalk::WalkDir::new(&fp).into_iter().flatten() {
-                        if e.file_type().is_file() {
-                            if let Ok(m) = e.metadata() {
-                                sz += m.len();
-                            }
-                        }
-                    }
-                }
-                sz
+                folder_size(&fp)
             })
             .await
             .unwrap_or(0);
@@ -223,6 +228,24 @@ fn compute_orphans(
     physical.into_iter().filter(|p| !db_lower.contains(&p.to_lowercase())).collect()
 }
 
+/// The orphan-scan candidates under one library root, with forward slashes. Node's getPhysicalFiles
+/// matches /\.(cbz|cbr|zip)$/i — .rar is excluded (it is tracked as .cbr or pending conversion, not an
+/// orphan candidate).
+fn physical_comic_files(lib_path: &str) -> Vec<String> {
+    if !Path::new(lib_path).exists() {
+        return Vec::new();
+    }
+    crate::walk::parallel(Path::new(lib_path))
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            let ext = e.path().extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            matches!(ext.as_str(), "cbz" | "cbr" | "zip")
+        })
+        .map(|e| e.path().to_string_lossy().replace("\\", "/"))
+        .collect()
+}
+
 pub async fn run_orphan_scan(db: Db) -> Result<Vec<String>> {
     let libs = sqlx::query(r#"SELECT path FROM "Library""#).fetch_all(&db.pool).await?;
     let mut all_physical_files = std::collections::HashSet::new();
@@ -230,18 +253,7 @@ pub async fn run_orphan_scan(db: Db) -> Result<Vec<String>> {
     // 1. Walk the physical hard drives and collect all comic files
     for lib in libs {
         let lib_path: String = lib.get("path");
-        if Path::new(&lib_path).exists() {
-            for e in jwalk::WalkDir::new(&lib_path).into_iter().flatten() {
-                if e.file_type().is_file() {
-                    let ext = e.path().extension().unwrap_or_default().to_string_lossy().to_lowercase();
-                    // Node's getPhysicalFiles matches /\.(cbz|cbr|zip)$/i — .rar is excluded (it is
-                    // tracked as .cbr or pending conversion, not an orphan candidate).
-                    if matches!(ext.as_str(), "cbz" | "cbr" | "zip") {
-                        all_physical_files.insert(e.path().to_string_lossy().replace("\\", "/"));
-                    }
-                }
-            }
-        }
+        all_physical_files.extend(physical_comic_files(&lib_path));
     }
 
     // 2. Get all DB file paths, normalized + lowercased for case-insensitive comparison (parity with
@@ -336,5 +348,44 @@ mod tests {
             .iter().map(|s| s.to_string()).collect();
         let orphans = compute_orphans(physical, &db_lower);
         assert_eq!(orphans, vec!["C:/Lib/Extra/C.cbz".to_string()]);
+    }
+
+    // #282: while rayon's shared pool was busy, a walk came back empty: the Deep Storage Scan wrote
+    // a size of 0 for the series and the orphan scan found nothing.
+
+    #[test]
+    fn a_series_folder_is_measured_while_the_pool_is_busy() {
+        use crate::walk::test_support::{busy_pool, walk_tree};
+        let root = walk_tree();
+        let path = root.to_string_lossy().to_string();
+        assert_eq!(busy_pool(|| folder_size(&path)), 3 + 5 + 7 + 11, "every file but the hidden one");
+        assert_eq!(folder_size(&path), 26);
+        assert_eq!(folder_size(&root.join("missing").to_string_lossy()), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_series_folder_is_measured_without_waiting_for_a_busy_pool() {
+        // Each series walks on its own blocking thread, not on the shared pool: a walk that went to a
+        // busy pool would wait jwalk's full second before walking here anyway - per series folder.
+        use crate::walk::test_support::{busy_pool, walk_tree};
+        let root = walk_tree();
+        let path = root.to_string_lossy().to_string();
+        let started = std::time::Instant::now();
+        assert_eq!(busy_pool(|| folder_size(&path)), 26);
+        assert!(started.elapsed() < std::time::Duration::from_millis(900), "took {:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_orphan_scan_lists_a_library_while_the_pool_is_busy() {
+        use crate::walk::test_support::{busy_pool, walk_tree};
+        let root = walk_tree();
+        let path = root.to_string_lossy().to_string();
+        let mut found = busy_pool(|| physical_comic_files(&path));
+        found.sort();
+        let base = path.replace('\\', "/");
+        assert_eq!(found, vec![format!("{base}/a.cbz"), format!("{base}/sub/b.cbr"), format!("{base}/sub/deeper/c.zip")]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -300,11 +300,11 @@ export function DownloadsTab({ s }: { s: SettingsBag }) {
                             <Input
                                 id="annas_archive_formats"
                                 value={config.annas_archive_formats || ""}
-                                placeholder="cbz,cbr,pdf,epub"
+                                placeholder="cbz,cbr,epub"
                                 onChange={(e) => setConfig({ ...config, annas_archive_formats: e.target.value })}
                                 className="h-12 sm:h-10 bg-background border-border text-foreground"
                             />
-                            <p className="text-[11px] text-muted-foreground mt-1">Comma-separated file extensions to include in Anna&apos;s Archive searches. Leave blank for the default (cbz, cbr, pdf, epub).</p>
+                            <p className="text-[11px] text-muted-foreground mt-1">Comma-separated file extensions to include in Anna&apos;s Archive searches. Leave blank for the default (cbz, cbr, epub). Formats Omnibus can&apos;t import yet, such as PDF, are left out even if listed.</p>
                         </div>
 
                         {!configuredHosters.find(c => c.hoster === 'annas_archive')?.apiKey && (

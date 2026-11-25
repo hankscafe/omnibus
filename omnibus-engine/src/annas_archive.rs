@@ -23,7 +23,10 @@ use crate::prowlarr::ProwlarrResult;
 // AA rotates domains under takedown pressure: .org was suspended (Jan 2026), .se/.li are gone; .gl is
 // the current stable mirror (mid-2026). Admin-overridable via `annas_archive_base_url` for the next one.
 const DEFAULT_BASE_URL: &str = "https://annas-archive.gl";
-const DEFAULT_FORMATS: &str = "cbz,cbr,pdf,epub";
+const DEFAULT_FORMATS: &str = "cbz,cbr,epub";
+/// The formats a download can be imported in: the importer's COMIC_EXTENSIONS (src/lib/utils/formats.ts)
+/// and the watched folder's list. PDF isn't one yet (#290), so a search never asks for it.
+const IMPORTABLE_FORMATS: [&str; 6] = ["cbz", "cbr", "cb7", "zip", "rar", "epub"];
 
 /// Known Anna's Archive mirror hosts to fail over to when the configured base is unreachable. AA rotates
 /// domains under takedown pressure (.org/.se/.li were lost through 2026; .gl is current), so this list is
@@ -56,13 +59,28 @@ async fn base_url(db: &sqlx::AnyPool) -> String {
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
 
-/// The comic file formats to search for (default cbz,cbr,pdf,epub), lowercased + de-dotted.
+/// The comic file formats to search for (default cbz,cbr,epub), lowercased + de-dotted.
 async fn formats(db: &sqlx::AnyPool) -> Vec<String> {
     let raw = sqlx::query_scalar::<_, String>(r#"SELECT value FROM "SystemSetting" WHERE key = 'annas_archive_formats'"#)
-        .fetch_optional(db).await.ok().flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_FORMATS.to_string());
-    raw.split(',').map(|s| s.trim().trim_start_matches('.').to_lowercase()).filter(|s| !s.is_empty()).collect()
+        .fetch_optional(db).await.ok().flatten();
+    search_formats(raw.as_deref())
+}
+
+/// The saved `annas_archive_formats` value as the list of formats to search for. Pure. Only formats a
+/// download can be imported in count (#290: the old default, saved by every install that saved
+/// Settings, still lists pdf); a list with none of them falls back to the default rather than leaving
+/// the search unfiltered.
+fn search_formats(saved: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in saved.unwrap_or_default().split(',').map(|s| s.trim().trim_start_matches('.').to_lowercase()) {
+        if IMPORTABLE_FORMATS.contains(&f.as_str()) && !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    if out.is_empty() {
+        return DEFAULT_FORMATS.split(',').map(str::to_string).collect();
+    }
+    out
 }
 
 /// Whether Anna's Archive is enabled for INTERACTIVE search. Ungated (no API key needed) and OFF by
@@ -346,6 +364,37 @@ mod tests {
         assert_eq!(parse_format("English [en] · EPUB · 0.7MB").as_deref(), Some("epub"));
         assert_eq!(parse_format("pdf").as_deref(), Some("pdf"));
         assert_eq!(parse_format("no format here"), None);
+    }
+
+    // #290: PDF isn't a library format yet (the importer and the watched folder skip it), so Anna's
+    // Archive never searches for a format Omnibus can't import: not by default, and not when the saved
+    // list still names it. Every install that ever saved Settings stored the old default with pdf in it.
+    #[test]
+    fn search_formats_leave_out_what_omnibus_cannot_import() {
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(search_formats(None), v(&["cbz", "cbr", "epub"]), "the default");
+        assert_eq!(search_formats(Some("  ")), v(&["cbz", "cbr", "epub"]), "blank is the default");
+        assert_eq!(search_formats(Some("cbz,cbr,pdf,epub")), v(&["cbz", "cbr", "epub"]), "the old default, as saved");
+        assert_eq!(search_formats(Some(".CBZ, cb7 ,mobi,cbz,zip")), v(&["cbz", "cb7", "zip"]), "de-dotted, lowercased, once each");
+        assert_eq!(search_formats(Some("pdf, djvu")), v(&["cbz", "cbr", "epub"]), "never an empty filter, which would search every format");
+    }
+
+    // #290: the search reads the saved setting through search_formats.
+    #[tokio::test]
+    async fn formats_reads_the_saved_setting_and_leaves_pdf_out() {
+        let base = std::env::temp_dir().join(format!("omnibus_aa_formats_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db_file = base.join("aa.db");
+        std::fs::File::create(&db_file).unwrap();
+        let db = crate::db::Db::connect(&format!("file:{}", db_file.to_string_lossy().replace('\\', "/")), 2).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "SystemSetting" (key TEXT PRIMARY KEY, value TEXT)"#).execute(&db.pool).await.unwrap();
+        assert_eq!(formats(&db.pool).await, vec!["cbz", "cbr", "epub"], "no row: the default");
+        sqlx::query(r#"INSERT INTO "SystemSetting" (key, value) VALUES ('annas_archive_formats', 'cbz,cbr,pdf,epub')"#).execute(&db.pool).await.unwrap();
+        assert_eq!(formats(&db.pool).await, vec!["cbz", "cbr", "epub"], "the old default, as saved");
+        sqlx::query(r#"UPDATE "SystemSetting" SET value = 'cb7' WHERE key = 'annas_archive_formats'"#).execute(&db.pool).await.unwrap();
+        assert_eq!(formats(&db.pool).await, vec!["cb7"], "a custom list is honoured");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

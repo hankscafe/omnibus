@@ -558,7 +558,7 @@ A meticulously organized, highly performant view of your physical files, built t
 * **Advanced Search Syntax:** Use prefix modifiers in the search bar (e.g., `character:"Spider-Man"`, `team:"X-Men"`, `arc:"Secret Wars"`) to pinpoint exact crossovers and appearances across your entire collection.
 * **Multi-Library Routing:** Map distinct folders for standard Comics and Manga. Omnibus automatically detects Manga based on publishers, AniList cross-referencing, and tags to route them to the correct directory.
 * **Automated File Standardization:** Enforce clean, uniform file names across your entire server (e.g., [Publisher]/Series (Year)/Series - #Issue.cbz).
-* **"Watched" Folder Auto-Ingestion:** Automate your library building by dropping loose `.cbz`, `.cbr`, `.zip`, and `.rar` files into a designated `watched` folder. Omnibus runs a scheduled background job to detect these files, read their `ComicInfo.xml` metadata, convert legacy formats, standardize the filenames, and perfectly sort them into your main library.
+* **"Watched" Folder Auto-Ingestion:** Automate your library building by dropping loose `.cbz`, `.cbr`, `.cb7`, `.zip`, `.rar`, and `.epub` files into a designated `watched` folder (PDF isn't supported yet; see below). Omnibus runs a scheduled background job to detect these files, read their `ComicInfo.xml` metadata, convert legacy formats, standardize the filenames, and perfectly sort them into your main library.
 * **"Awaiting Match" Drop Queue:** If dropped files lack the necessary metadata for auto-ingestion, they are safely routed to an `unmatched` directory. Admins can review these loose files in the Smart Matcher UI, apply the correct metadata with one click, and seamlessly inject them into the main library.
 * **Manual File Upload:** No filesystem access to your server? Admins can upload single or multiple comic files directly from the browser into the **Watched** folder (auto-imported and matched) or the **Unmatched** folder (held for the Smart Matcher) — the easiest way to hand off files you downloaded by hand, including Cloudflare-gated releases.
 * **Deep Filtering & Sorting:** Filter by Publisher, Genre, Format, Era (1980s, 1990s, etc.), and Read Status.
@@ -634,6 +634,7 @@ A completely custom, zero-friction reading experience built natively into the br
 </p>
 
 * **Universal Format Support:** Native, blazing-fast extraction and rendering for `.cbz`, `.epub`, **and** `.cbr`/`.rar` archives — the Rust engine reads RAR directly, so legacy archives are readable the moment they land. The CBR→CBZ auto-converter stays on by default (CBZ reads fastest, works everywhere, and is required for metadata embedding), but it's now a choice, not a requirement.
+* **PDF Support (Planned):** PDF files can't be imported or read yet; the watched folder and the importer skip them. PDF support is planned ([#290](https://github.com/hankscafe/omnibus/issues/290)).
 * **Reading Directions:** One-click toggles for Left-to-Right (Standard Comics), Right-to-Left (Manga), and continuous Vertical Scrolling (Webtoons).
 * **Dynamic Page Layouts:** Single Page, Double Page, or "Double Page (No Cover)" to preserve correct spread alignments.
   * Adjust the gutter gap between 2-page spreads (Seamless, Small, Large).

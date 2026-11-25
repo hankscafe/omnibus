@@ -170,6 +170,16 @@ describe('Settings tabs (Phase 1 reorganization)', () => {
         expect(screen.getByText(/requires a premium API key and a passing connection test/)).toHaveTextContent(/uses one of your fast downloads/);
     });
 
+    // #290: PDF isn't a library format yet, so Anna's Archive's default formats leave it out, and the
+    // help says a format Omnibus can't import is left out even when it's listed.
+    it('DownloadsTab says Anna\'s Archive leaves PDF out until Omnibus can import it', () => {
+        render(<DownloadsTab s={mkBag()} />);
+        expect(screen.getByLabelText(/Comic File Formats/i)).toHaveAttribute('placeholder', 'cbz,cbr,epub');
+        const help = screen.getByText(/Comma-separated file extensions to include in Anna.s Archive searches/);
+        expect(help).toHaveTextContent(/default \(cbz, cbr, epub\)/);
+        expect(help).toHaveTextContent(/can.t import yet, such as PDF, are left out even if listed/);
+    });
+
     it('DiscoveryTab unifies the manga story: visibility, request gate, and detection lists', () => {
         render(<DiscoveryTab s={mkBag()} />);
         expect(screen.getByText(/Manga Visibility/i)).toBeInTheDocument();

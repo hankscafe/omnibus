@@ -150,7 +150,7 @@ export default function SettingsPage() {
     ddl_enabled: "true",
     getcomics_interactive_pages: "4",
     getcomics_automated_pages: "5",
-    annas_archive_interactive_enabled: "false", annas_archive_base_url: "", annas_archive_formats: "cbz,cbr,pdf,epub",
+    annas_archive_interactive_enabled: "false", annas_archive_base_url: "", annas_archive_formats: "cbz,cbr,epub",
     engine_max_scan_workers: "", engine_max_convert_workers: "", engine_cpu_cap: "",
     engine_max_blocking_threads: "", engine_memory_ceiling_mb: "", engine_max_db_connections: ""
   })

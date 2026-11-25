@@ -3571,6 +3571,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    // #275: the batch itself - a sweep (or a sweep's rate-limit tail) that finds the series busy skips,
+    // a targeted trigger queues a re-run with its own options.
+    #[tokio::test]
+    async fn the_batch_queues_a_targeted_trigger_and_skips_a_sweep() {
+        let LocalSyncFixture { db, base, .. } = local_sync_fixture("275d").await;
+        let mut claim = SyncClaim::acquire_or_queue("s275d", None).expect("a sync is in flight");
+        let sweep_tail = SyncOptions { full_fetch: false, fetch_credits: false, write_comicinfo: None };
+        sync_metadata_attempt(db.clone(), Some(vec!["s275d".into()]), sweep_tail, 1).await.expect("sweep tail");
+        assert!(!claim.rerun_pending(), "a sweep has nothing newer to say");
+        sync_metadata(db.clone(), Some(vec!["s275d".into()]), false, Some(false)).await.expect("Fix Match");
+        assert_eq!(claim.next_rerun(), Some(SyncOptions { write_comicinfo: Some(false), ..TARGETED }), "the Fix Match's own options");
+        assert_eq!(claim.next_rerun(), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[tokio::test]
     async fn detail_pass_candidates_are_metron_issues_on_disk_still_missing_details() {
         static INIT: std::sync::Once = std::sync::Once::new();

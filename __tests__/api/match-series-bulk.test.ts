@@ -68,6 +68,20 @@ describe('API Route: bulk match accept (/api/library/match-series/bulk)', () => 
         expect(JSON.parse(await firstInner.text())).toMatchObject({ oldFolderPath: '/unmatched/A' });
     });
 
+    // #293: a file whose issue already has one went back to the awaiting-match folder, so its card
+    // must stay in Accept All's list, saying why.
+    it('reports a copy of an issue that already has its file as not filed, naming that file', async () => {
+        mocks.singlePost.mockResolvedValueOnce(new Response(JSON.stringify({
+            success: true, conflicts: 1, duplicateOf: { issueNumber: '1', filePath: '/comics/Series A (2016)/Series A #001 (2016).cbz' },
+        }), { status: 200 }));
+
+        const data = await (await POST(req({ items: [item('/unmatched/Series A 001.cbz')] }))).json();
+
+        expect(data.results).toEqual([
+            { ok: false, error: 'issue #1 already has a file, "Series A #001 (2016).cbz"; this copy stays in the awaiting-match folder' },
+        ]);
+    });
+
     it('captures a thrown inner error as a failed item and keeps processing the rest', async () => {
         mocks.singlePost
             .mockRejectedValueOnce(new Error('EXDEV: cross-device link'))

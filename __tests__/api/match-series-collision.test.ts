@@ -149,3 +149,132 @@ describe('match-series — folder collision guard', () => {
         expect((await res.json()).error).toMatch(/engine is unreachable/);
     });
 });
+
+// #285 (Tobechukwu-Njoku): the volume is already in the library as series B, in a folder of its own.
+// Matching folder A to it used to repoint B at A's folder with no warning, leaving B's issue rows
+// pointing at B's old folder. Now nothing is written until the admin merges A into B (A's files move
+// into B's folder, B keeps it) or cancels.
+describe('match-series — the volume already belongs to another series', () => {
+    const B = { id: 'sB', name: 'Series B', year: 2016, publisher: 'Pub', metadataSource: 'COMICVINE', metadataId: '12345', folderPath: '/comics/Pub/Series B (2016)', isManga: false, libraryId: 'lib_1', imprint: null, hasCustomCover: false };
+    const A_FOLDER = '/comics/Pub/Series A (2016)';
+    const matchA = (extra: any = {}) => ({ oldFolderPath: A_FOLDER, metadataId: '12345', metadataSource: 'COMICVINE', name: 'Series A', year: '2016', publisher: 'Pub', ...extra });
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(fs.existsSync).mockReturnValue(true);
+        vi.mocked(fs.promises.stat).mockResolvedValue({ isFile: () => false } as any);
+        process.env.OMNIBUS_AWAITING_MATCH_DIR = '/unmatched';
+        mocks.findManyLibraries.mockResolvedValue([{ id: 'lib_1', path: '/comics', isDefault: true, isManga: false }]);
+        mocks.findUniqueSetting.mockResolvedValue(null);
+        mocks.findUniqueSeries.mockResolvedValue(B);
+        mocks.findFirstSeries.mockResolvedValue({ id: 'sA', folderPath: A_FOLDER, libraryId: 'lib_1', isManga: false });
+        mocks.findManySettings.mockResolvedValue([]);
+        mocks.findManyRequests.mockResolvedValue([]);
+        mocks.findManyIssues.mockResolvedValue([]);
+        mocks.findFirstIssue.mockResolvedValue(null);
+        mocks.updateManyIssues.mockResolvedValue({ count: 0 });
+        mocks.deleteSeries.mockResolvedValue({});
+        mocks.updateSeries.mockResolvedValue({ ...B });
+        mocks.safeRelocateFolder.mockResolvedValue({ conflicts: 0 });
+        mocks.moveFileSafe.mockResolvedValue(undefined);
+        mocks.folderOwner.mockResolvedValue(null);
+    });
+
+    it('refuses with a 409 that names the series and its folder, and writes nothing', async () => {
+        const res = await POST(createReq(matchA()));
+        const body = await res.json();
+
+        expect(res.status).toBe(409);
+        expect(body.collision).toEqual(expect.objectContaining({
+            kind: 'volume', seriesId: 'sB', seriesName: 'Series B', year: 2016, folderPath: '/comics/Pub/Series B (2016)',
+            metadataSource: 'COMICVINE', metadataId: '12345', volumeName: 'Series A', sourceIsFile: false,
+        }));
+        expect(body.error).toMatch(/already in your library as Series B \(2016\)/);
+        expect(mocks.updateSeries).not.toHaveBeenCalled();
+        expect(mocks.deleteSeries).not.toHaveBeenCalled();
+        expect(mocks.updateManyIssues).not.toHaveBeenCalled();
+        expect(mocks.safeRelocateFolder).not.toHaveBeenCalled();
+        expect(mocks.moveFileSafe).not.toHaveBeenCalled();
+    });
+
+    it('a folder-collision answer (attach or rename) still does not get past it', async () => {
+        for (const collision of [{ mode: 'attach' }, { mode: 'rename', folderName: 'Series A (2016) (2)' }]) {
+            const res = await POST(createReq(matchA({ collision })));
+            expect(res.status).toBe(409);
+            expect((await res.json()).collision.kind).toBe('volume');
+        }
+        expect(mocks.attachAsCollected).not.toHaveBeenCalled();
+        expect(mocks.updateSeries).not.toHaveBeenCalled();
+    });
+
+    it('merges the folder into that series when asked: the files move into its folder and it keeps that folder', async () => {
+        const res = await POST(createReq(matchA({ collision: { mode: 'merge' } })));
+        const body = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(mocks.safeRelocateFolder).toHaveBeenCalledWith(A_FOLDER, '/comics/Pub/Series B (2016)', expect.any(String));
+        expect(mocks.updateManyIssues).toHaveBeenCalledWith({ where: { seriesId: 'sA' }, data: { seriesId: 'sB' } });
+        expect(mocks.deleteSeries).toHaveBeenCalledWith({ where: { id: 'sA' } });
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'sB' }, data: expect.objectContaining({ folderPath: '/comics/Pub/Series B (2016)' }),
+        }));
+        expect(body.newPath).toBe('/comics/Pub/Series B (2016)');
+    });
+
+    it('a loose file is asked about too, and merged into that series\' folder', async () => {
+        vi.mocked(fs.promises.stat).mockResolvedValue({ isFile: () => true } as any);
+        mocks.findFirstSeries.mockResolvedValue(null); // a loose file has no row of its own
+        // path.join answers with "\" on Windows.
+        vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p).replace(/\\/g, '/') !== '/comics/Pub/Series B (2016)/Series A 003.cbz');
+        const file = { oldFolderPath: '/unmatched/Series A 003.cbz' };
+
+        const refused = await POST(createReq(matchA(file)));
+        expect(refused.status).toBe(409);
+        expect((await refused.json()).collision).toEqual(expect.objectContaining({ kind: 'volume', seriesId: 'sB', sourceIsFile: true }));
+        expect(mocks.moveFileSafe).not.toHaveBeenCalled();
+
+        const merged = await POST(createReq(matchA({ ...file, collision: { mode: 'merge' } })));
+        expect(merged.status).toBe(200);
+        expect(mocks.moveFileSafe).toHaveBeenCalledWith('/unmatched/Series A 003.cbz', expect.stringMatching(/^[\\/]comics[\\/]Pub[\\/]Series B \(2016\)[\\/]Series A 003\.cbz$/));
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'sB' }, data: expect.objectContaining({ folderPath: '/comics/Pub/Series B (2016)' }),
+        }));
+    });
+
+    it('does not ask when the folder the match computes IS that series\' folder (the everyday merge)', async () => {
+        mocks.findUniqueSeries.mockResolvedValue({ ...B, folderPath: '/comics/Pub/Series A (2016)' });
+        mocks.findFirstSeries.mockResolvedValue({ id: 'sU', folderPath: '/unmatched/Series A', libraryId: null, isManga: false });
+
+        const res = await POST(createReq(matchA({ oldFolderPath: '/unmatched/Series A' })));
+        expect(res.status).toBe(200);
+        expect(mocks.safeRelocateFolder).toHaveBeenCalledWith('/unmatched/Series A', '/comics/Pub/Series A (2016)', expect.any(String));
+    });
+
+    it('does not ask when that series\' folder is gone from disk: the series takes the new one', async () => {
+        vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p) !== '/comics/Pub/Series B (2016)');
+
+        const res = await POST(createReq(matchA()));
+        expect(res.status).toBe(200);
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'sB' }, data: expect.objectContaining({ folderPath: A_FOLDER }),
+        }));
+    });
+
+    it('does not ask when the folder being matched is that series\' own (a Fix Match that renames its folder)', async () => {
+        mocks.findFirstSeries.mockResolvedValue({ ...B });
+
+        const res = await POST(createReq(matchA({ oldFolderPath: '/comics/Pub/Series B (2016)' })));
+        expect(res.status).toBe(200);
+        expect(mocks.safeRelocateFolder).toHaveBeenCalledWith('/comics/Pub/Series B (2016)', A_FOLDER, expect.any(String));
+    });
+
+    it('nor when its own folder comes spelled another way, so the row lookup by path finds nothing', async () => {
+        mocks.findFirstSeries.mockResolvedValue(null);
+
+        const res = await POST(createReq(matchA({ oldFolderPath: '/comics/Pub/Series B (2016)/' })));
+        expect(res.status).toBe(200);
+        expect(mocks.updateSeries).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: 'sB' }, data: expect.objectContaining({ folderPath: A_FOLDER }),
+        }));
+    });
+});

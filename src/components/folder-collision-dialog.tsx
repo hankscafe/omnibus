@@ -8,7 +8,7 @@
 "use client"
 
 import { useEffect, useState } from "react";
-import { BookMarked, FolderPlus, Loader2 } from "lucide-react";
+import { BookMarked, FolderPlus, GitMerge, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,8 @@ import type { FolderCollision } from "@/types/api/smart-match";
 // The 409 body's `collision` (match-series builds it); its home is the route's payload types.
 export type { FolderCollision };
 
-export type CollisionResolution = { mode: 'attach' } | { mode: 'rename'; folderName: string };
+// 'merge' answers a `volume` collision (#285): the source joins the series that already has the volume.
+export type CollisionResolution = { mode: 'attach' } | { mode: 'rename'; folderName: string } | { mode: 'merge' };
 
 interface FolderCollisionDialogProps {
     open: boolean;
@@ -38,6 +39,44 @@ export function FolderCollisionDialog({ open, collision, busy, onCancel, onResol
     if (!collision) return null;
     const ownerLabel = collision.year ? `${collision.seriesName} (${collision.year})` : collision.seriesName;
     const trimmed = folderName.trim();
+
+    if (collision.kind === 'volume') {
+        // #285: the volume is already in the library as another series, in a folder of its own. A
+        // collected-edition attach or a new folder name would make it a second copy of that series,
+        // so the only ways on are merging into it or cancelling.
+        const source = collision.sourceIsFile ? 'this file' : 'this folder';
+        return (
+            <Dialog open={open} onOpenChange={(o) => { if (!o && !busy) onCancel(); }}>
+                <DialogContent className="sm:max-w-lg bg-background border-border">
+                    <DialogHeader>
+                        <DialogTitle>This volume is already in your library</DialogTitle>
+                        <DialogDescription>
+                            &ldquo;{collision.volumeName}&rdquo; is already in your library as <strong className="text-foreground">{ownerLabel}</strong>, in its own folder <span className="font-mono text-foreground">{basename(collision.folderPath)}</span>. If {collision.seriesName} isn&apos;t this volume, cancel and fix its match first.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="py-2">
+                        <Button
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => onResolve({ mode: 'merge' })}
+                            className="w-full h-auto py-3 justify-start text-left whitespace-normal bg-primary text-primary-foreground hover:bg-primary/90"
+                        >
+                            {busy ? <Loader2 className="w-5 h-5 mr-3 shrink-0 animate-spin" /> : <GitMerge className="w-5 h-5 mr-3 shrink-0" />}
+                            <span className="min-w-0">
+                                <span className="block font-bold">Merge {source} into {collision.seriesName}</span>
+                                <span className="block text-xs opacity-80 font-normal">{collision.sourceIsFile ? 'The file moves' : 'Its files move'} into <span className="font-mono">{basename(collision.folderPath)}</span>, and {collision.seriesName} keeps its folder. A file whose name is already taken there is left where it is.</span>
+                            </span>
+                        </Button>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        );
+    }
 
     return (
         <Dialog open={open} onOpenChange={(o) => { if (!o && !busy) onCancel(); }}>

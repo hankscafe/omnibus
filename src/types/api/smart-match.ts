@@ -83,8 +83,13 @@ export interface ArchivePreviewInfo {
 
 // --- POST /api/library/match-series (+ /bulk) -------------------------------------------------------
 
-/** The series already filed in the folder a match would take (409 from match-series). */
+/** A 409 from match-series. `folder` (the default): another series is already filed in the folder the
+ *  match would take. `volume` (#285): the volume itself is already in the library as another series,
+ *  filed in a folder of its own; the only ways on are merging into that series or cancelling. */
 export interface FolderCollision {
+    kind?: 'folder' | 'volume';
+    /** `volume` only: the match was for a single loose file, not a folder. */
+    sourceIsFile?: boolean;
     seriesId: string;
     seriesName: string;
     year: number | null;
@@ -106,6 +111,9 @@ export interface MatchSeriesOk {
     conflicts: number;
     /** Open requests the match closed (plain accepts). */
     requestsClosed?: number;
+    /** #293: the issue the file matched already has its own file on disk, so this copy wasn't filed
+     *  (a loose file went back to the awaiting-match folder). Counted in `conflicts` too. */
+    duplicateOf?: { issueNumber: string; filePath: string };
     attachedTo?: { id: string; name: string; folderPath: string };
     attachmentId?: string;
     moved?: number;

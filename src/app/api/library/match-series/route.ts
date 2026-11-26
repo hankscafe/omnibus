@@ -31,6 +31,11 @@ import { issueFileName, issuePaddingFromSetting, issueTitleForName, seriesFolder
 import { ANNUAL_FILE_PATTERN } from '@/lib/utils/file-pattern';
 import type { MatchSeriesFailure, MatchSeriesOk } from '@/types/api/smart-match';
 
+// One place on disk however it's spelled (slash form, a trailing separator, case), the way this
+// route compares paths elsewhere.
+const samePlace = (a: string, b: string): boolean =>
+    path.normalize(a).replace(/[\\/]+$/, '').toLowerCase() === path.normalize(b).replace(/[\\/]+$/, '').toLowerCase();
+
 // #199 round 4 Beta B: only non-empty credit groups become columns (never write a literal '[]' —
 // issue #179), stringified to the Issue JSON-array convention.
 const creditColumns = (groups: Record<string, string[] | undefined>): Record<string, string> =>
@@ -228,6 +233,40 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "The folder naming pattern doesn't produce a folder inside the library for this series. Check Settings > Library & Files." }, { status: 400 });
     }
     let newFolderPath = path.join(targetLib.path, ...folderParts).replace(/\\/g, '/');
+    const resolution = req.collision && typeof req.collision === 'object' ? req.collision : null;
+    const oldStat = await fs.promises.stat(oldFolderPath);
+    const isFile = oldStat.isFile();
+
+    // #285 (Tobechukwu-Njoku): the volume is already in the library as ANOTHER series, filed in a
+    // folder of its own that is still there. The match used to repoint that series at this folder
+    // with no warning, its own issue rows left pointing at its old folder. Nothing is written now
+    // until the admin answers: merge this folder (or file) into that series, which keeps its folder,
+    // or cancel (and fix that series' match first if it's the wrong volume). Not "another series":
+    // the series whose folder IS the one being matched (its own Fix Match, however the path is
+    // spelled), one whose folder IS the computed one (the everyday merge), and one whose folder is
+    // gone (it takes the new one).
+    const volumeHome = existingRecord && existingRecord.folderPath?.trim()
+        && !samePlace(existingRecord.folderPath, oldFolderPath)
+        && !samePlace(existingRecord.folderPath, newFolderPath)
+        && fs.existsSync(existingRecord.folderPath)
+        ? existingRecord.folderPath : null;
+    if (existingRecord && volumeHome) {
+        const ownerLabel = existingRecord.year ? `${existingRecord.name} (${existingRecord.year})` : existingRecord.name;
+        if (resolution?.mode !== 'merge') {
+            Logger.log(`[Match Series] ${targetSource} ${targetMetaId} is already ${ownerLabel} in "${volumeHome}"; nothing was written for "${oldFolderPath}" (merge it in, or cancel).`, 'info');
+            return NextResponse.json({
+                error: `"${realName}" is already in your library as ${ownerLabel}, in its own folder "${path.basename(volumeHome)}". Accept it on its own to merge it into that series, or fix that series' match first if it's the wrong volume.`,
+                collision: {
+                    kind: 'volume', sourceIsFile: isFile,
+                    seriesId: existingRecord.id, seriesName: existingRecord.name, year: existingRecord.year ?? null, publisher: existingRecord.publisher ?? null,
+                    metadataSource: existingRecord.metadataSource || targetSource, metadataId: existingRecord.metadataId ?? null, folderPath: volumeHome,
+                    suggestedFolderName: '', volumeName: realName, volumeYear: realYear || null,
+                },
+            } satisfies MatchSeriesFailure, { status: 409 });
+        }
+        Logger.log(`[Match Series] Merging "${oldFolderPath}" into ${ownerLabel}, which already has ${targetSource} ${targetMetaId}; it keeps its folder "${volumeHome}".`, 'info');
+        newFolderPath = volumeHome.replace(/\\/g, '/');
+    }
 
     // Folder collision (field report by robotshavehearts2, "Image does it a lot"): a run and its
     // collected editions are separate provider volumes that often share a name AND a year, so the
@@ -237,7 +276,6 @@ export async function POST(request: Request) {
     // the volume to that series as a collected edition (the usual answer), or take a folder name of
     // its own. The rows this match legitimately repoints are not "another series".
     const excludeIds = [unmatchedRecord?.id, existingRecord?.id].filter((x): x is string => !!x);
-    const resolution = req.collision && typeof req.collision === 'object' ? req.collision : null;
     if (resolution?.mode === 'rename') {
         const folderName = typeof resolution.folderName === 'string' ? resolution.folderName.trim() : '';
         if (!folderName || /[\\/]/.test(folderName) || folderName === '.' || folderName === '..') {
@@ -362,8 +400,6 @@ export async function POST(request: Request) {
     // left the series pointing at a folder that isn't there. A failed move now saves nothing and the
     // answer says why. (A merge into a folder that already exists goes file by file, so one that fails
     // part-way may have moved some files; the error names both folders.)
-    const oldStat = await fs.promises.stat(oldFolderPath);
-    const isFile = oldStat.isFile();
 
     // Count duplicate files we refuse to overwrite (parity with the Standardize-names route). A non-zero
     // count is returned + logged so a dupe is preserved instead of silently clobbered.
@@ -371,6 +407,8 @@ export async function POST(request: Request) {
     // True when a loose file couldn't be placed because a same-named file was already in the target —
     // the matching file in the folder is then NOT ours, so the rename loop must leave it alone.
     let looseFileConflict = false;
+    // #293: the matched issue's own file, when it already had one on disk and this copy wasn't filed.
+    let duplicateOf: { issueNumber: string; filePath: string } | undefined;
 
     let activeFolderPath = oldFolderPath;
     // A whole folder moved: the series' issue rows follow it once the row is written (below).
@@ -576,7 +614,7 @@ export async function POST(request: Request) {
                     // release date is the file's {IssueYear} (#243 - this used the series' year), and
                     // the adopt-or-create below reuses the same rows.
                     // #203: find within the SAME domain — "Annual #1" must never adopt the main run's "#1" row.
-                    let domainRows: Array<{ id: string; number: string; name: string | null; releaseDate: string | null }> = [];
+                    let domainRows: Array<{ id: string; number: string; name: string | null; releaseDate: string | null; filePath: string | null }> = [];
                     if (existingRecord) {
                         try {
                             domainRows = await prisma.issue.findMany({
@@ -584,7 +622,7 @@ export async function POST(request: Request) {
                                 where: isAnnualFile
                                     ? { seriesId: existingRecord.id, isAnnual: true }
                                     : { seriesId: existingRecord.id, isAnnual: false, attachedVolumeId: null },
-                                select: { id: true, number: true, name: true, releaseDate: true },
+                                select: { id: true, number: true, name: true, releaseDate: true, filePath: true },
                             });
                         } catch (e) {
                             Logger.log(`[Match Series] Could not read the series' issues for ${file}: ${getErrorMessage(e)}`, 'warn');
@@ -604,6 +642,20 @@ export async function POST(request: Request) {
 
                     const oldFilePath = path.join(activeFolderPath, file);
                     const newFilePath = path.join(activeFolderPath, newFileName);
+
+                    // #293 (Tobechukwu-Njoku): the issue already holds its own file, under another name
+                    // than this one would get (a year token, an older pattern). Only the new name was
+                    // checked, so the row was repointed at this copy and its file lost its row, with 0
+                    // conflicts reported. It's a duplicate now: the row keeps its file, this copy isn't
+                    // filed (a loose file goes back where it came from) and the reply names the file.
+                    const heldFile = matchedRow?.filePath;
+                    if (matchedRow && heldFile && ![oldFilePath, newFilePath, oldFolderPath].some(p => samePlace(p, heldFile)) && fs.existsSync(heldFile)) {
+                        Logger.log(`[Match Series] Conflict: issue #${matchedRow.number} of "${realName}" already has a file, "${heldFile}"; "${file}" was not filed as a second copy${isFile ? ' and went back to the awaiting-match folder' : ''}.`, 'warn');
+                        conflicts++;
+                        duplicateOf = { issueNumber: matchedRow.number, filePath: heldFile };
+                        if (isFile) { try { await moveFileSafe(oldFilePath, oldFolderPath); } catch (e) {} }
+                        continue;
+                    }
 
                     // 1. Handle OS Rename — never overwrite a different existing file (case-only differences
                     //    are treated as already-correct). On a real collision, leave the duplicate in place,
@@ -841,7 +893,7 @@ export async function POST(request: Request) {
     }
 
     revalidateTag('library'); revalidatePath('/library'); revalidatePath('/library/series');
-    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts, requestsClosed } satisfies MatchSeriesOk);
+    return NextResponse.json({ success: true, newPath: activeFolderPath, metadataId: targetMetaId, conflicts, requestsClosed, ...(duplicateOf ? { duplicateOf } : {}) } satisfies MatchSeriesOk);
 
   } catch (error: unknown) {
     Logger.log(`[Match Series API] Error: ${getErrorMessage(error)}`, 'error');

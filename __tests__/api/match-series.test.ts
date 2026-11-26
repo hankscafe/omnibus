@@ -808,6 +808,81 @@ describe('API Route: Smart Matcher (/api/library/match-series)', () => {
         expect(vi.mocked(fs.promises.rename)).not.toHaveBeenCalled();
     });
 
+    // #293 (Tobechukwu-Njoku): the issue a file is matched to already has its own file, under another
+    // name (here the year token). The only check was whether the NEW name existed, so the row was
+    // repointed at the incoming copy, the old file lost its row, and the match reported 0 conflicts.
+    describe('#293: the matched issue already has a file', () => {
+        const EXISTING = '/comics/Series A (2016)/Series A #001 (2016).cbz';
+        const setup = (existingOnDisk: boolean) => {
+            vi.mocked(fs.promises.stat).mockResolvedValueOnce({ isFile: () => true } as any);
+            vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+                const s = String(p).replace(/\\/g, '/'); // path.join answers with "\" on Windows
+                if (s === EXISTING) return existingOnDisk;
+                if (s === '/unmatched/Series A 001.cbz') return true;
+                // The loose file's spot in the series folder, and its new name there, are both free.
+                return !s.endsWith('/Series A 001.cbz') && !s.endsWith('/Series A #001.cbz');
+            });
+            vi.mocked(fs.promises.readdir).mockResolvedValueOnce(['Series A 001.cbz'] as any);
+            mocks.findFirstSeries.mockResolvedValue({ id: 's1' });
+            mocks.updateSeries.mockResolvedValue({ id: 's1', year: 2016 });
+            mocks.findManyIssues.mockImplementation(async (args: any) =>
+                args?.where?.seriesId === 's1' && args?.where?.isAnnual === false
+                    ? [{ id: 'i1', number: '1', name: null, releaseDate: null, filePath: EXISTING }]
+                    : []
+            );
+        };
+        const accept = () => POST(createReq({ oldFolderPath: '/unmatched/Series A 001.cbz', metadataId: '777', name: 'Series A', year: 2016 }));
+
+        it('is a conflict that names the existing file: the row keeps it and the new copy goes back to unmatched', async () => {
+            setup(true);
+            const logSpy = vi.spyOn(Logger, 'log').mockImplementation(() => undefined as any);
+
+            const res = await accept();
+            expect(res.status).toBe(200);
+            const data = await res.json();
+
+            expect(data.conflicts).toBe(1);
+            expect(data.duplicateOf).toEqual({ issueNumber: '1', filePath: EXISTING });
+            // The row is neither repointed nor twinned.
+            expect(mocks.updateIssue.mock.calls.find(c => c[0]?.where?.id === 'i1')).toBeUndefined();
+            expect(mocks.createIssue).not.toHaveBeenCalled();
+            // The incoming copy went into the folder, then back where it came from.
+            expect(mocks.moveFileSafe.mock.calls.at(-1)).toEqual([expect.stringMatching(/[\\/]Series A 001\.cbz$/), '/unmatched/Series A 001.cbz']);
+            expect(mocks.moveFileSafe.mock.calls.map(c => String(c[1]))).not.toContainEqual(expect.stringMatching(/Series A #001\.cbz$/));
+            expect(logSpy.mock.calls.map(c => String(c[0]))).toContainEqual(expect.stringContaining(EXISTING));
+            logSpy.mockRestore();
+        });
+
+        it('the file the issue already holds is matched again, not refused as a copy of itself', async () => {
+            setup(true);
+            mocks.findManyIssues.mockImplementation(async (args: any) =>
+                args?.where?.seriesId === 's1' && args?.where?.isAnnual === false
+                    ? [{ id: 'i1', number: '1', name: null, releaseDate: null, filePath: '/unmatched/Series A 001.cbz' }]
+                    : []
+            );
+
+            const data = await (await accept()).json();
+
+            expect(data.conflicts).toBe(0);
+            expect(data.duplicateOf).toBeUndefined();
+            const adopt = mocks.updateIssue.mock.calls.map(c => c[0]).find(c => c?.where?.id === 'i1');
+            expect(adopt?.data).toEqual(expect.objectContaining({ filePath: expect.stringMatching(/Series A #001\.cbz$/) }));
+        });
+
+        it('a matched issue whose file is gone from disk takes the new one, as before', async () => {
+            setup(false);
+
+            const res = await accept();
+            expect(res.status).toBe(200);
+            const data = await res.json();
+
+            expect(data.conflicts).toBe(0);
+            expect(data.duplicateOf).toBeUndefined();
+            const adopt = mocks.updateIssue.mock.calls.map(c => c[0]).find(c => c?.where?.id === 'i1');
+            expect(adopt?.data).toEqual(expect.objectContaining({ filePath: expect.stringMatching(/Series A #001\.cbz$/), status: 'DOWNLOADED' }));
+        });
+    });
+
     it('should store the raw provider name in the DB while paths use the sanitized form (#194 e)', async () => {
         mocks.findUniqueSetting.mockResolvedValueOnce({ value: 'cv_api_key' });
         vi.mocked(axios.get).mockResolvedValueOnce({

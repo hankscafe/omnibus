@@ -53,7 +53,12 @@ export async function POST(request: NextRequest) {
             const res = await applySingleMatch(inner);
             // The single handler's reply; {} when its body isn't JSON (the status then speaks).
             const body: Partial<MatchSeriesOk & MatchSeriesFailure> = await res.json().catch(() => ({}));
-            if (res.ok) {
+            if (res.ok && body.duplicateOf) {
+                // #293: that copy wasn't filed (a loose file went back to the awaiting-match folder),
+                // so its card stays in the list, saying why.
+                const existing = body.duplicateOf.filePath.replace(/\\/g, '/').split('/').pop();
+                results.push({ ok: false, error: `issue #${body.duplicateOf.issueNumber} already has a file, "${existing}"; this copy stays in the awaiting-match folder` });
+            } else if (res.ok) {
                 // beta.010: the requests each accept closed, for Accept All's summary.
                 results.push({ ok: true, conflicts: body.conflicts || 0, requestsClosed: body.requestsClosed || 0 });
             } else {

@@ -56,4 +56,36 @@ describe('FolderCollisionDialog', () => {
         expect((screen.getByRole('button', { name: /Add it to Saga as a collected edition/ }) as HTMLButtonElement).disabled).toBe(true);
         expect((screen.getByRole('button', { name: /Use this folder name/ }) as HTMLButtonElement).disabled).toBe(true);
     });
+
+    // #285: the volume itself already belongs to another series in a folder of its own. The only
+    // ways on are merging into that series or cancelling - no collected-edition attach, no new name.
+    describe('the volume is already in the library', () => {
+        const volume = {
+            kind: 'volume' as const, sourceIsFile: false,
+            seriesId: 'sB', seriesName: 'Series B', year: 2016, publisher: 'Pub', metadataSource: 'COMICVINE', metadataId: '12345',
+            folderPath: '/comics/Pub/Series B (2016)', suggestedFolderName: '', volumeName: 'Series A', volumeYear: 2016,
+        };
+
+        it('names the series and its folder, offers only a merge, and resolves as one', () => {
+            const onResolve = vi.fn();
+            render(<FolderCollisionDialog open collision={volume} onCancel={vi.fn()} onResolve={onResolve} busy={false} />);
+
+            expect(screen.getByText('This volume is already in your library')).toBeTruthy();
+            expect(screen.getAllByText(/Series B \(2016\)/).length).toBeGreaterThan(0);
+            expect(screen.getByText(/fix its match first/)).toBeTruthy();
+            expect(screen.queryByRole('button', { name: /collected edition/ })).toBeNull();
+            expect(screen.queryByLabelText('Folder name')).toBeNull();
+
+            fireEvent.click(screen.getByRole('button', { name: /Merge this folder into Series B/ }));
+            expect(onResolve).toHaveBeenLastCalledWith({ mode: 'merge' });
+        });
+
+        it('says "this file" for a loose file, and locks the merge while it runs', () => {
+            const { rerender } = render(<FolderCollisionDialog open collision={{ ...volume, sourceIsFile: true }} onCancel={vi.fn()} onResolve={vi.fn()} busy={false} />);
+            expect(screen.getByRole('button', { name: /Merge this file into Series B/ })).toBeTruthy();
+
+            rerender(<FolderCollisionDialog open collision={{ ...volume, sourceIsFile: true }} onCancel={vi.fn()} onResolve={vi.fn()} busy />);
+            expect((screen.getByRole('button', { name: /Merge this file into Series B/ }) as HTMLButtonElement).disabled).toBe(true);
+        });
+    });
 });

@@ -6,7 +6,7 @@
 // (they pass on the page before the batch too).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
-import { ok, stubFetchRouter, stubImmediateTimers } from '../../helpers/fetch';
+import { ok, err, stubFetchRouter, stubImmediateTimers } from '../../helpers/fetch';
 
 const { toast, dialogProps } = vi.hoisted(() => ({ toast: vi.fn(), dialogProps: [] as any[] }));
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast }) }));
@@ -128,6 +128,69 @@ describe('Smart Matcher - a row\'s suggestion', () => {
         // A saved override with only a Series Group: the preview takes the rest from the suggestion.
         act(() => { lastDialog().onSave({ seriesGroup: 'Bonelli' }); });
         await screen.findByText('Sergio Bonelli Editore/Conan & Dragonero (2026)');
+    });
+});
+
+// #285 / #293: what an Accept does with the two new answers from match-series.
+describe('Smart Matcher - an Accept the route turns down or files only in part', () => {
+    const scanAndAccept = async (matchReply: (body: any) => any) => {
+        // Radix Dialog polyfills for jsdom (the set folder-collision-dialog.test.tsx installs).
+        (global as any).ResizeObserver = vi.fn().mockImplementation(() => ({ observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() }));
+        window.HTMLElement.prototype.scrollIntoView = vi.fn();
+        window.HTMLElement.prototype.hasPointerCapture = vi.fn();
+        window.HTMLElement.prototype.releasePointerCapture = vi.fn();
+        const bodies: any[] = [];
+        stubFetchRouter([
+            ['/api/admin/unmatched', () => ok([RAW('Conan & Dragonero 001')])],
+            ['/api/admin/config', () => CONFIG('METRON')],
+            ['/api/admin/sweep', () => ok({})],
+            ['/api/admin/match-prefill', () => ok({ hasContent: false, prefill: null })],
+            ['/api/search', () => ok({ results: [{ ...METRON_RESULT, metadataSource: 'COMICVINE' }], hasMore: false })],
+            ['/api/library/match-series', (_u, init) => { const body = JSON.parse(init.body); bodies.push(body); return matchReply(body); }],
+        ]);
+        render(<SmartMatchPage />);
+        await screen.findByText('Conan & Dragonero 001');
+        fireEvent.click(screen.getByRole('button', { name: /Start Auto-Scan/ }));
+        await screen.findByText('Sergio Bonelli Editore • 2026');
+        fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+        return bodies;
+    };
+
+    it('#293: a copy of an issue that already has its file says so, and its card stays', async () => {
+        await scanAndAccept(() => ok({
+            success: true, conflicts: 1, newPath: '/comics/x', metadataId: '16180',
+            duplicateOf: { issueNumber: '1', filePath: '/comics/Sergio Bonelli Editore/Conan & Dragonero (2026)/Conan & Dragonero #001 (2026).cbz' },
+        }));
+
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+            title: 'Not filed: that issue already has a file',
+            description: expect.stringContaining('"Conan & Dragonero #001 (2026).cbz"'),
+            variant: 'destructive',
+        })));
+        expect(screen.getByText('Conan & Dragonero 001')).toBeTruthy();
+    });
+
+    it('#285: a volume already in the library opens the merge question, and Merge sends the answer back', async () => {
+        const bodies = await scanAndAccept((body) => body.collision?.mode === 'merge'
+            ? ok({ success: true, conflicts: 0, newPath: '/comics/Pub/Series B (2016)', metadataId: '16180' })
+            : err(409, {
+                error: 'already in your library',
+                collision: {
+                    kind: 'volume', sourceIsFile: true, seriesId: 'sB', seriesName: 'Series B', year: 2016, publisher: 'Pub',
+                    metadataSource: 'COMICVINE', metadataId: '16180', folderPath: '/comics/Pub/Series B (2016)',
+                    suggestedFolderName: '', volumeName: 'Conan & Dragonero', volumeYear: 2026,
+                },
+            }));
+
+        await screen.findByText('This volume is already in your library');
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0].collision).toBeUndefined();
+
+        fireEvent.click(screen.getByRole('button', { name: /Merge this file into Series B/ }));
+        await waitFor(() => expect(bodies).toHaveLength(2));
+        expect(bodies[1].collision).toEqual({ mode: 'merge' });
+        await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Matched Successfully!' })));
+        await waitFor(() => expect(screen.queryByText('This volume is already in your library')).toBeNull());
     });
 });
 

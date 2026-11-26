@@ -587,6 +587,13 @@ export default function SmartMatchPage() {
 
             if (res.ok) {
                 const result: MatchSeriesOk = await res.json().catch(() => ({}));
+                if (result.duplicateOf) {
+                    // #293: the issue already has its own file, so this copy wasn't filed; it went back
+                    // to the awaiting-match folder, and its card stays.
+                    const existing = result.duplicateOf.filePath.replace(/\\/g, '/').split('/').pop();
+                    toast({ title: "Not filed: that issue already has a file", description: `Issue #${result.duplicateOf.issueNumber} of ${suggestion.name} already has "${existing}", so this copy wasn't added. It stays in the awaiting-match folder.`, variant: "destructive" });
+                    return false;
+                }
                 if (result.attachedTo) {
                     // The collision's usual answer: the volume went UNDER the series that owns the folder.
                     toast({

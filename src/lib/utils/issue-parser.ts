@@ -133,6 +133,12 @@ export function describeIssueFromFilename(filename: string, seriesName?: string)
     // 1. Strip years explicitly
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
 
+    // #292: cover counts are not issue numbers. A bracket that names covers ("(2 Covers)",
+    // "[4 covers]", "(2 Variant Covers)", "(1 of 2 Covers)") goes whole; without brackets only the
+    // count and the word go, so "Series C 05 of 06 covers" keeps its 05. Parity: scanner.rs.
+    clean = clean.replace(/[\[(][^[\]()]*\d[^[\]()]*(?<![a-zA-Z])covers?(?![a-zA-Z])[^[\]()]*[\])]/gi, '');
+    clean = clean.replace(/(?<![a-zA-Z0-9.])\d+\s+(?:variant\s+)?covers?(?![a-zA-Z])/gi, '');
+
     // 2. Smartly strip cross-references
     const crossRefRegex = /[\[\(][^[\]()]*[a-zA-Z]+[^[\]()]*\d+[^[\]()]*[\]\)]/g;
     clean = clean.replace(crossRefRegex, (match) => {
@@ -173,6 +179,11 @@ export function describeIssueFromFilename(filename: string, seriesName?: string)
         if (!volumeNum) volumeNum = p1.replace(/^0+(?=\d)/, '');
         return ''; 
     });
+
+    // #292: a bare "NN of MM" is issue NN, ranked after an explicit "#"/"Issue" (and after the
+    // volume tokens are hidden, so "Vol 2 of 3" keeps its old reading). Parity: scanner.rs.
+    const ofMatch = noVolString.match(/(?<![a-zA-Z0-9.])0*(\d+(?:\.\d+)?)\s+of\s+\d+(?![a-zA-Z0-9])/i);
+    if (ofMatch) return { number: ofMatch[1].replace(/^0+(?=\d)/, ''), isAnnual };
 
     // 5. SECONDARY PRIORITY: Standalone numbers
     // Note: We DO NOT capture negative signs here anymore. This ensures standalone

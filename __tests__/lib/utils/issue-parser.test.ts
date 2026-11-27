@@ -252,3 +252,19 @@ describe('#271: a Format-only annual that carries a run issue\'s id', () => {
         expect(annualFlagAfterRunGuard(file({ format: null, number: 'Annual 2' }), '2', rows)).toBe(true);
     });
 });
+
+describe('#292: cover counts and bare "NN of MM"', () => {
+    it.each([
+        ['Series A 001 (2 Covers).cbz', '1'],
+        ['Series B 003 (4 covers).cbz', '3'],
+        ['Series C 01 of 02 covers.cbz', '1'],
+        ['Series A 001 (2016) (2 Covers) (Digital).cbz', '1'],
+        ['Batman 01 of 06.cbz', '1'],
+        ['Series C 05 of 06 covers.cbz', '5'],
+        ['Series B 003 [4 covers].cbz', '3'],
+        ['Series B 003 (2 Variant Covers).cbz', '3'],
+        ['Series B 003 (1 of 2 Covers).cbz', '3'],
+    ])('%s reads as #%s (parity: scanner.rs issue_number_ignores_cover_counts_292)', (name, num) => {
+        expect(extractIssueNumber(name)).toBe(num);
+    });
+});

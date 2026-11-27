@@ -20,22 +20,39 @@ struct StorageEntry {
     size_bytes: u64,
 }
 
-/// Sets `ids` back to DOWNLOADED in one bulk UPDATE, but only the rows whose status is `from` at the
-/// time of the write: a row whose status changed since it was read is never touched. Returns the rows
-/// changed. Portable IN (...) list, as for the MISSING/CORRUPTED writes below.
-async fn clear_status(db: &Db, from: &str, ids: &[String]) -> Result<u64> {
-    if ids.is_empty() {
+const CLEAR_STATUS_CHUNK_SIZE: usize = 1_000;
+
+/// Restores DOWNLOADED only when the status and checked path still match.
+/// Each statement binds one status plus two values per issue.
+async fn clear_status(db: &Db, from: &str, checked_files: &[(String, String)]) -> Result<u64> {
+    if checked_files.is_empty() {
         return Ok(0);
     }
-    let sql = format!(
-        r#"UPDATE "Issue" SET status = 'DOWNLOADED' WHERE status = $1 AND id IN ({})"#,
-        Db::in_placeholders(2, ids.len())
-    );
-    let mut q = sqlx::query(&sql).bind(from);
-    for id in ids {
-        q = q.bind(id);
+
+    let mut tx = db.pool.begin().await?;
+    let mut cleared = 0;
+    for chunk in checked_files.chunks(CLEAR_STATUS_CHUNK_SIZE) {
+        // IN (VALUES ...) supports composite matching on SQLite and Postgres.
+        let pairs = (0..chunk.len())
+            .map(|i| {
+                let id_param = 2 + i * 2;
+                let path_param = id_param + 1;
+                format!("(${id_param}, ${path_param})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"UPDATE "Issue" SET status = 'DOWNLOADED'
+               WHERE status = $1 AND (id, "filePath") IN (VALUES {pairs})"#
+        );
+        let mut query = sqlx::query(&sql).bind(from);
+        for (id, file_path) in chunk {
+            query = query.bind(id).bind(file_path);
+        }
+        cleared += query.execute(&mut *tx).await?.rows_affected();
     }
-    Ok(q.execute(&db.pool).await?.rows_affected())
+    tx.commit().await?;
+    Ok(cleared)
 }
 
 pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
@@ -77,7 +94,7 @@ pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
 
     let mut total_checked = 0;
     let mut missing_ids: Vec<String> = Vec::new();
-    let mut found_ids: Vec<String> = Vec::new();
+    let mut found_files = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
         if let Ok((id, file_path, exists, was_missing)) = res {
@@ -87,17 +104,15 @@ pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
                 missing_ids.push(id);
             } else if was_missing {
                 log::debug!("[Ghost Check Debug] File is back -> clearing MISSING: {}", file_path);
-                found_ids.push(id);
+                found_files.push((id, file_path));
             }
         }
     }
 
-    // Issue #294: a file that is back (a NAS mount that was down during an earlier check, say) leaves
-    // MISSING. Only rows that are MISSING now are changed, so any other status is left alone.
-    match clear_status(&db, "MISSING", &found_ids).await {
+    match clear_status(&db, "MISSING", &found_files).await {
         Ok(n) if n > 0 => log::info!("[Ghost Check] Cleared MISSING on {} issues whose file exists again.", n),
         Ok(_) => {}
-        Err(e) => log::error!("[Ghost Check] Failed to clear MISSING on {} issues: {:?}", found_ids.len(), e),
+        Err(e) => log::error!("[Ghost Check] Failed to clear MISSING on {} issues: {:?}", found_files.len(), e),
     }
 
     // One bulk UPDATE instead of one-per-missing-issue. Portable IN (...) list — `= ANY($1)`
@@ -336,7 +351,7 @@ pub async fn run_integrity_scan(db: Db) -> Result<(i32, i32, String)> {
 
     let mut scanned = 0;
     let mut corrupted_ids: Vec<String> = Vec::new();
-    let mut repaired_ids: Vec<String> = Vec::new();
+    let mut repaired_files = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
         // Only count + act on files that were actually tested (Some); missing files (None) are skipped.
@@ -347,17 +362,15 @@ pub async fn run_integrity_scan(db: Db) -> Result<(i32, i32, String)> {
                 corrupted_ids.push(id);
             } else if was_corrupted {
                 log::debug!("[Integrity Scan Debug] Archive opens again -> clearing CORRUPTED: {}", file_path);
-                repaired_ids.push(id);
+                repaired_files.push((id, file_path));
             }
         }
     }
 
-    // Issue #294: a repaired file passes the check, so it leaves CORRUPTED. Only rows that are
-    // CORRUPTED now are changed, so any other status is left alone.
-    match clear_status(&db, "CORRUPTED", &repaired_ids).await {
+    match clear_status(&db, "CORRUPTED", &repaired_files).await {
         Ok(n) if n > 0 => log::info!("[Integrity Scan] Cleared CORRUPTED on {} issues that pass the check again.", n),
         Ok(_) => {}
-        Err(e) => log::error!("[Integrity Scan] Failed to clear CORRUPTED on {} issues: {:?}", repaired_ids.len(), e),
+        Err(e) => log::error!("[Integrity Scan] Failed to clear CORRUPTED on {} issues: {:?}", repaired_files.len(), e),
     }
 
     // One bulk UPDATE instead of one-per-corrupted-issue.
@@ -525,11 +538,57 @@ mod tests {
         add_issue(&db, "a", p, "CORRUPTED").await;
         add_issue(&db, "b", p, "DOWNLOADING").await;
 
-        let n = clear_status(&db, "CORRUPTED", &["a".to_string(), "b".to_string()]).await.unwrap();
+        let checked_files = ["a", "b"].map(|id| (id.to_owned(), p.to_str().unwrap().to_owned()));
+        let n = clear_status(&db, "CORRUPTED", &checked_files).await.unwrap();
 
         assert_eq!(n, 1);
         assert_eq!(status_of(&db, "a").await, "DOWNLOADED");
         assert_eq!(status_of(&db, "b").await, "DOWNLOADING");
         assert_eq!(clear_status(&db, "CORRUPTED", &[]).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn clear_status_updates_every_chunk() {
+        let db = status_db().await;
+        let mut checked_files = Vec::new();
+        for i in 0..=CLEAR_STATUS_CHUNK_SIZE {
+            let id = i.to_string();
+            let path = format!("/library/{id}.cbz");
+            add_issue(&db, &id, Path::new(&path), "MISSING").await;
+            checked_files.push((id, path));
+        }
+
+        let cleared = clear_status(&db, "MISSING", &checked_files).await.unwrap();
+        let downloaded: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE status = 'DOWNLOADED'"#)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(cleared, checked_files.len() as u64);
+        assert_eq!(downloaded, checked_files.len() as i64);
+    }
+
+    #[tokio::test]
+    async fn clear_status_skips_a_row_relinked_since_the_check() {
+        let db = status_db().await;
+        let old_path = "/library/old.cbz";
+        let new_path = "/library/new.cbz";
+        add_issue(&db, "relinked", Path::new(old_path), "CORRUPTED").await;
+        add_issue(&db, "unchanged", Path::new(new_path), "CORRUPTED").await;
+        let checked_files = [
+            ("relinked".to_owned(), old_path.to_owned()),
+            ("unchanged".to_owned(), new_path.to_owned()),
+        ];
+        sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = 'relinked'"#)
+            .bind(new_path)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let cleared = clear_status(&db, "CORRUPTED", &checked_files).await.unwrap();
+
+        assert_eq!(cleared, 1);
+        assert_eq!(status_of(&db, "relinked").await, "CORRUPTED");
+        assert_eq!(status_of(&db, "unchanged").await, "DOWNLOADED");
     }
 }

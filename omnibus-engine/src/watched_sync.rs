@@ -184,27 +184,55 @@ pub async fn process_watched_folder(db: Db) -> Result<(i32, i32, String)> {
     sweep_folders(db, watched_dir, unmatched_dir).await
 }
 
-/// Every comic file in the watched folder (hidden entries skipped). A folder that can't be read
-/// fails the sweep.
-fn watched_comic_files(watched_dir: &Path) -> Result<Vec<PathBuf>> {
+/// Every comic file in the watched folder (hidden entries skipped), plus the other files it skipped.
+/// A folder that can't be read fails the sweep.
+fn watched_comic_files(watched_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
     let mut files = Vec::new();
+    let mut skipped = Vec::new();
     for entry in crate::walk::parallel(watched_dir) {
         let path = entry?.path();
         if path.is_file() {
             let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
             if matches!(ext.as_str(), "cbz" | "cbr" | "zip" | "rar" | "cb7" | "epub") {
                 files.push(path);
+            } else {
+                skipped.push(path);
             }
         }
     }
-    Ok(files)
+    Ok((files, skipped))
+}
+
+/// How many skipped-file names the summary line lists.
+const SKIPPED_NAMES_SHOWN: usize = 5;
+
+/// #290: one line per sweep for the files it can't import, or `None` when nothing was skipped.
+fn skipped_summary(skipped: &[PathBuf]) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for path in skipped {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "no extension".to_string());
+        *counts.entry(ext).or_default() += 1;
+    }
+    let counts = counts.iter().map(|(ext, n)| format!("{ext}: {n}")).collect::<Vec<_>>().join(", ");
+    let mut names = skipped.iter().take(SKIPPED_NAMES_SHOWN).map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned()).collect::<Vec<_>>().join(", ");
+    if skipped.len() > SKIPPED_NAMES_SHOWN {
+        names.push_str(&format!(" and {} more", skipped.len() - SKIPPED_NAMES_SHOWN));
+    }
+    let noun = if skipped.len() == 1 { "file" } else { "files" };
+    Some(format!("Skipped {} unsupported {noun} in the watched folder ({counts}): {names}", skipped.len()))
 }
 
 async fn sweep_folders(db: Db, watched_dir: String, unmatched_dir: String) -> Result<(i32, i32, String)> {
     std::fs::create_dir_all(&watched_dir)?;
     std::fs::create_dir_all(&unmatched_dir)?;
 
-    let files_to_process = watched_comic_files(Path::new(&watched_dir))?;
+    let (files_to_process, skipped) = watched_comic_files(Path::new(&watched_dir))?;
+    if let Some(line) = skipped_summary(&skipped) {
+        log::info!("[Watched Sync] {}", line);
+    }
 
     if files_to_process.is_empty() {
         return Ok((0, 0, "No files found in watched folder.".to_string()));
@@ -1074,6 +1102,29 @@ mod tests {
         (base, src, to)
     }
 
+    #[test]
+    fn skipped_summary_is_silent_when_nothing_was_skipped() {
+        assert_eq!(skipped_summary(&[]), None);
+    }
+
+    #[test]
+    fn skipped_summary_counts_each_extension() {
+        let skipped: Vec<PathBuf> = ["a.pdf", "b.PDF", "notes.txt", "README"].iter().map(PathBuf::from).collect();
+        assert_eq!(
+            skipped_summary(&skipped).as_deref(),
+            Some("Skipped 4 unsupported files in the watched folder (no extension: 1, pdf: 2, txt: 1): a.pdf, b.PDF, notes.txt, README")
+        );
+    }
+
+    #[test]
+    fn skipped_summary_caps_the_names() {
+        let skipped: Vec<PathBuf> = (1..=7).map(|i| PathBuf::from(format!("dir/{i}.pdf"))).collect();
+        assert_eq!(
+            skipped_summary(&skipped).as_deref(),
+            Some("Skipped 7 unsupported files in the watched folder (pdf: 7): 1.pdf, 2.pdf, 3.pdf, 4.pdf, 5.pdf and 2 more")
+        );
+    }
+
     fn names_in(dir: &Path) -> Vec<String> {
         let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string()).collect();
@@ -1159,7 +1210,7 @@ mod tests {
     fn the_sweep_lists_the_watched_folder_while_the_pool_is_busy() {
         use crate::walk::test_support::{busy_pool, file_names, walk_tree};
         let root = walk_tree();
-        let found = busy_pool(|| watched_comic_files(&root)).expect("a busy pool doesn't fail the sweep");
+        let found = busy_pool(|| watched_comic_files(&root)).expect("a busy pool doesn't fail the sweep").0;
         assert_eq!(file_names(found), ["a.cbz", "b.cbr", "c.zip"]);
         assert!(watched_comic_files(&root.join("missing")).is_err(), "a folder that can't be read still fails it");
         let _ = std::fs::remove_dir_all(&root);

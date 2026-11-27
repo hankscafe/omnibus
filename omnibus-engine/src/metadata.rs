@@ -463,7 +463,7 @@ const DETAIL_PASS_CANDIDATES: &str = r#"SELECT id, "metadataId", number, name, w
 /// `write_comicinfo`: an edit's own write-to-file choice (#251); None = the setting decides.
 pub async fn sync_metadata(db: Db, series_ids: Option<Vec<String>>, fetch_credits: bool, write_comicinfo: Option<bool>) -> anyhow::Result<()> {
     let opts = SyncOptions { write_comicinfo, ..SyncOptions::for_request(&series_ids, fetch_credits) };
-    sync_metadata_attempt(db, series_ids, opts, 0).await
+    sync_metadata_attempt(db, series_ids, opts, 0).await.map(|_| ())
 }
 
 /// Boxed indirection for the retry recursion — an async fn cannot await itself directly; the
@@ -473,13 +473,14 @@ fn sync_metadata_attempt_boxed(
     series_ids: Option<Vec<String>>,
     opts: SyncOptions,
     attempt: u32,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<BatchTally>> + Send>> {
     Box::pin(sync_metadata_attempt(db, series_ids, opts, attempt))
 }
 
 /// Body of [`sync_metadata`]. `rate_limit_attempt` counts how many times this batch has already
-/// re-queued itself after a provider rate-limit halt (0 = the original request).
-async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: SyncOptions, rate_limit_attempt: u32) -> anyhow::Result<()> {
+/// re-queued itself after a provider rate-limit halt (0 = the original request). Returns the batch's
+/// tally, the numbers its "Sync batch complete" line logs.
+async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: SyncOptions, rate_limit_attempt: u32) -> anyhow::Result<BatchTally> {
     // ComicVine API key (Metron series don't need it, so this is optional).
     let cv_api_key: Option<String> = sqlx::query_scalar(r#"SELECT value FROM "SystemSetting" WHERE key = 'cv_api_key'"#)
         .fetch_optional(&db.pool)
@@ -570,8 +571,7 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
         metron_detail_credits,
     };
 
-    let mut ok_count = 0usize;
-    let mut fail_count = 0usize;
+    let mut tally = BatchTally::default();
     // Batch order snapshot — on a rate-limit halt, the tail from the halted series onward is
     // re-queued (best-effort, in-process; the scheduled sweep is the durable backstop).
     let all_ids: Vec<String> = series_list.iter().map(|r| r.get::<String, _>("id")).collect();
@@ -599,8 +599,7 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
         };
 
         let run = run_series_passes(&db, &client, &batch, target, opts, claim).await;
-        ok_count += run.synced;
-        fail_count += run.failed;
+        tally.add(&run);
         if let Some(halt) = run.halted {
             // Mirror Node's METADATA_SYNC batch halt: a ComicVine 429 or Metron FATAL_RATE_LIMIT means
             // the provider has cut us off, so stop the entire batch to protect our IP instead of
@@ -641,8 +640,8 @@ async fn sync_metadata_attempt(db: Db, series_ids: Option<Vec<String>>, opts: Sy
         }
     }
 
-    log::info!("[Metadata] Sync batch complete: {} series synced, {} failed.", ok_count, fail_count);
-    Ok(())
+    log::info!("[Metadata] Sync batch complete: {}", tally.summary());
+    Ok(tally)
 }
 
 /// Re-queues rate-limit-halted series after [`RATE_LIMIT_RETRY_DELAY_SECS`] (attempt-capped by
@@ -730,9 +729,42 @@ struct BatchSettings<'a> {
 
 /// What a claimed series' passes came to: its own pass plus any #275 re-runs.
 struct SeriesRun {
+    /// How the series' last finished pass ended (true = synced) - the one with the current match.
+    /// None when no pass finished (a rate-limit halt on its first).
+    last_pass_synced: Option<bool>,
+    /// #275 re-runs that finished after the series' own pass.
+    reruns: usize,
+    halted: Option<RateLimitHalt>,
+}
+
+/// A sync batch's counts. Each series counts once, by its last finished pass, so a #275 re-run
+/// doesn't read as a second series; re-runs are counted beside it.
+#[derive(Debug, Default, PartialEq)]
+struct BatchTally {
     synced: usize,
     failed: usize,
-    halted: Option<RateLimitHalt>,
+    reruns: usize,
+}
+
+impl BatchTally {
+    fn add(&mut self, run: &SeriesRun) {
+        match run.last_pass_synced {
+            Some(true) => self.synced += 1,
+            Some(false) => self.failed += 1,
+            None => {}
+        }
+        self.reruns += run.reruns;
+    }
+
+    /// "1 series synced, 0 failed (+1 re-run)." - the re-run note only when there was one.
+    fn summary(&self) -> String {
+        let counts = format!("{} series synced, {} failed", self.synced, self.failed);
+        match self.reruns {
+            0 => format!("{counts}."),
+            1 => format!("{counts} (+1 re-run)."),
+            n => format!("{counts} (+{n} re-runs)."),
+        }
+    }
 }
 
 /// A rate-limit halt, with the re-run the series had queued (rescheduled with its own options).
@@ -746,18 +778,21 @@ struct RateLimitHalt {
 /// name a different volume, and each re-run reads the series fresh by id through the batch's select,
 /// so one whose match was cleared meanwhile is skipped.
 async fn run_series_passes(db: &Db, client: &Client, batch: &BatchSettings<'_>, mut target: SeriesTarget, opts: SyncOptions, mut claim: SyncClaim) -> SeriesRun {
-    let mut run = SeriesRun { synced: 0, failed: 0, halted: None };
+    let mut run = SeriesRun { last_pass_synced: None, reruns: 0, halted: None };
     let mut pass_opts = opts;
     let mut rerun_pass = false;
     'series: loop {
         match sync_series_pass(db, client, batch, &target, pass_opts, &claim).await {
-            PassOutcome::Synced => run.synced += 1,
-            PassOutcome::Failed => run.failed += 1,
+            PassOutcome::Synced => run.last_pass_synced = Some(true),
+            PassOutcome::Failed => run.last_pass_synced = Some(false),
             PassOutcome::RateLimited(message) => {
                 let queued_rerun = rerun_after_halt(pass_opts, rerun_pass, claim.release_with_queued());
                 run.halted = Some(RateLimitHalt { message, queued_rerun });
                 return run;
             }
+        }
+        if rerun_pass {
+            run.reruns += 1;
         }
         loop {
             let Some(rerun) = claim.next_rerun() else { break 'series };
@@ -3546,7 +3581,7 @@ mod tests {
 
         let untouched = std::fs::read(&cbz).unwrap();
         let run = run_series_passes(&db, &client, &local_batch(), target, TARGETED, claim).await;
-        assert_eq!((run.synced, run.failed), (2, 0), "its own pass and exactly one re-run");
+        assert_eq!((run.last_pass_synced, run.reruns), (Some(true), 1), "its own pass and exactly one re-run");
         assert!(run.halted.is_none());
         assert_eq!(std::fs::read(&cbz).unwrap(), untouched, "neither pass wrote the archive");
         assert!(SyncClaim::acquire_or_queue("s275b", None).is_some(), "the claim is released afterwards");
@@ -3565,7 +3600,7 @@ mod tests {
         assert!(load_series_target(&db, "s275c").await.unwrap().is_none(), "the select's own filter");
 
         let run = run_series_passes(&db, &client, &local_batch(), target, TARGETED, claim).await;
-        assert_eq!((run.synced, run.failed), (1, 0), "the running pass finishes; the re-run is skipped");
+        assert_eq!((run.last_pass_synced, run.reruns), (Some(true), 0), "the running pass finishes; the re-run is skipped");
         assert!(comicinfo_of(&cbz).is_none(), "and the pass left the files for a re-run that never came");
         assert!(SyncClaim::acquire_or_queue("s275c", None).is_some(), "the claim is released");
         let _ = std::fs::remove_dir_all(&base);
@@ -3583,6 +3618,33 @@ mod tests {
         sync_metadata(db.clone(), Some(vec!["s275d".into()]), false, Some(false)).await.expect("Fix Match");
         assert_eq!(claim.next_rerun(), Some(SyncOptions { write_comicinfo: Some(false), ..TARGETED }), "the Fix Match's own options");
         assert_eq!(claim.next_rerun(), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // #281 follow-up: a series counts once in the batch's tally, by its last finished pass, and its
+    // re-runs are counted beside it - "1 series synced, 0 failed (+1 re-run)", not "2 series synced".
+    #[test]
+    fn the_batch_tally_counts_a_series_once_and_its_reruns_beside_it() {
+        let run = |last_pass_synced, reruns| SeriesRun { last_pass_synced, reruns, halted: None };
+        let mut tally = BatchTally::default();
+        assert_eq!(tally.summary(), "0 series synced, 0 failed.");
+        tally.add(&run(Some(true), 0));
+        assert_eq!(tally.summary(), "1 series synced, 0 failed.", "no re-run, no note: the usual line is unchanged");
+        tally.add(&run(Some(true), 1));
+        assert_eq!(tally.summary(), "2 series synced, 0 failed (+1 re-run).");
+        tally.add(&run(Some(false), 2));
+        assert_eq!(tally.summary(), "2 series synced, 1 failed (+3 re-runs).", "the last pass decides: a failed re-run is a failed series");
+        tally.add(&run(None, 0));
+        assert_eq!(tally, BatchTally { synced: 2, failed: 1, reruns: 3 }, "a series halted on its first pass counts as neither");
+    }
+
+    // #281 follow-up: the batch adds each series to its tally - a plain targeted sync of the LOCAL
+    // fixture comes back as one series synced, no re-run.
+    #[tokio::test]
+    async fn the_batch_returns_its_tally() {
+        let LocalSyncFixture { db, base, .. } = local_sync_fixture("281a").await;
+        let tally = sync_metadata_attempt(db.clone(), Some(vec!["s281a".into()]), TARGETED, 0).await.expect("sync");
+        assert_eq!(tally, BatchTally { synced: 1, failed: 0, reruns: 0 });
         let _ = std::fs::remove_dir_all(&base);
     }
 

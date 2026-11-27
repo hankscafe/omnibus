@@ -20,6 +20,41 @@ struct StorageEntry {
     size_bytes: u64,
 }
 
+const CLEAR_STATUS_CHUNK_SIZE: usize = 1_000;
+
+/// Restores DOWNLOADED only when the status and checked path still match.
+/// Each statement binds one status plus two values per issue.
+async fn clear_status(db: &Db, from: &str, checked_files: &[(String, String)]) -> Result<u64> {
+    if checked_files.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = db.pool.begin().await?;
+    let mut cleared = 0;
+    for chunk in checked_files.chunks(CLEAR_STATUS_CHUNK_SIZE) {
+        // IN (VALUES ...) supports composite matching on SQLite and Postgres.
+        let pairs = (0..chunk.len())
+            .map(|i| {
+                let id_param = 2 + i * 2;
+                let path_param = id_param + 1;
+                format!("(${id_param}, ${path_param})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"UPDATE "Issue" SET status = 'DOWNLOADED'
+               WHERE status = $1 AND (id, "filePath") IN (VALUES {pairs})"#
+        );
+        let mut query = sqlx::query(&sql).bind(from);
+        for (id, file_path) in chunk {
+            query = query.bind(id).bind(file_path);
+        }
+        cleared += query.execute(&mut *tx).await?.rows_affected();
+    }
+    tx.commit().await?;
+    Ok(cleared)
+}
+
 pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
     // Drive-online guard (parity with the Node DIAGNOSTICS job's drivesOnline check): if ANY configured
     // library drive is offline, skip the whole pass. Otherwise an unmounted/disconnected volume makes
@@ -34,7 +69,7 @@ pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
         }
     }
 
-    let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE "filePath" IS NOT NULL"#)
+    let issues = sqlx::query(r#"SELECT id, "filePath", status FROM "Issue" WHERE "filePath" IS NOT NULL"#)
         .fetch_all(&db.pool).await?;
 
     let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
@@ -44,29 +79,40 @@ pub async fn run_ghost_check(db: Db) -> Result<(i32, i32, String)> {
     for row in issues {
         let id: String = row.get("id");
         let file_path: String = row.get("filePath");
+        let was_missing = row.try_get::<Option<String>, _>("status").ok().flatten().as_deref() == Some("MISSING");
         let sem = sem.clone();
         join_set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             tokio::task::spawn_blocking(move || {
                 let exists = Path::new(&file_path).exists();
-                (id, file_path, exists)
+                (id, file_path, exists, was_missing)
             })
                 .await
-                .unwrap_or((String::new(), String::new(), true))
+                .unwrap_or((String::new(), String::new(), true, false))
         });
     }
 
     let mut total_checked = 0;
     let mut missing_ids: Vec<String> = Vec::new();
+    let mut found_files = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
-        if let Ok((id, file_path, exists)) = res {
+        if let Ok((id, file_path, exists, was_missing)) = res {
             total_checked += 1;
             if !exists {
                 log::debug!("[Ghost Check Debug] File is missing -> marking MISSING: {}", file_path);
                 missing_ids.push(id);
+            } else if was_missing {
+                log::debug!("[Ghost Check Debug] File is back -> clearing MISSING: {}", file_path);
+                found_files.push((id, file_path));
             }
         }
+    }
+
+    match clear_status(&db, "MISSING", &found_files).await {
+        Ok(n) if n > 0 => log::info!("[Ghost Check] Cleared MISSING on {} issues whose file exists again.", n),
+        Ok(_) => {}
+        Err(e) => log::error!("[Ghost Check] Failed to clear MISSING on {} issues: {:?}", found_files.len(), e),
     }
 
     // One bulk UPDATE instead of one-per-missing-issue. Portable IN (...) list — `= ANY($1)`
@@ -273,7 +319,7 @@ pub async fn run_orphan_scan(db: Db) -> Result<Vec<String>> {
 pub async fn run_integrity_scan(db: Db) -> Result<(i32, i32, String)> {
     // Only test existing .cbz archives (case-insensitive), matching Node's existsSync + endsWith('.cbz').
     // LOWER(...) LIKE replaces Postgres-only ILIKE (identical semantics for this ASCII pattern).
-    let issues = sqlx::query(r#"SELECT id, "filePath" FROM "Issue" WHERE LOWER("filePath") LIKE '%.cbz'"#).fetch_all(&db.pool).await?;
+    let issues = sqlx::query(r#"SELECT id, "filePath", status FROM "Issue" WHERE LOWER("filePath") LIKE '%.cbz'"#).fetch_all(&db.pool).await?;
     let cfg = crate::engine_config::EngineConfig::load(&db.pool).await;
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(cfg.scan_workers));
     let mut join_set = JoinSet::new();
@@ -281,6 +327,7 @@ pub async fn run_integrity_scan(db: Db) -> Result<(i32, i32, String)> {
     for row in issues {
         let id: String = row.get("id");
         let file_path: String = row.get("filePath");
+        let was_corrupted = row.try_get::<Option<String>, _>("status").ok().flatten().as_deref() == Some("CORRUPTED");
         let sem = sem.clone();
         // Bounded spawn_blocking: test ZIP headers natively without exhausting the blocking pool.
         join_set.spawn(async move {
@@ -289,31 +336,41 @@ pub async fn run_integrity_scan(db: Db) -> Result<(i32, i32, String)> {
                 // Skip files that don't exist — a missing file is the ghost scan's concern, not a
                 // corrupt archive (Node only inspects files that exist). None = skipped, not counted.
                 if !Path::new(&file_path).exists() {
-                    return (id, file_path, None);
+                    return (id, file_path, None, was_corrupted);
                 }
                 let corrupted = match std::fs::File::open(&file_path) {
                     Ok(file) => zip::ZipArchive::new(file).is_err(),
                     Err(_) => true,
                 };
-                (id, file_path, Some(corrupted))
+                (id, file_path, Some(corrupted), was_corrupted)
             })
             .await
-            .unwrap_or((String::new(), String::new(), None))
+            .unwrap_or((String::new(), String::new(), None, false))
         });
     }
 
     let mut scanned = 0;
     let mut corrupted_ids: Vec<String> = Vec::new();
+    let mut repaired_files = Vec::new();
 
     while let Some(res) = join_set.join_next().await {
         // Only count + act on files that were actually tested (Some); missing files (None) are skipped.
-        if let Ok((id, file_path, Some(is_corrupted))) = res {
+        if let Ok((id, file_path, Some(is_corrupted), was_corrupted)) = res {
             scanned += 1;
             if is_corrupted {
                 log::debug!("[Integrity Scan Debug] Archive failed to open -> marking CORRUPTED: {}", file_path);
                 corrupted_ids.push(id);
+            } else if was_corrupted {
+                log::debug!("[Integrity Scan Debug] Archive opens again -> clearing CORRUPTED: {}", file_path);
+                repaired_files.push((id, file_path));
             }
         }
+    }
+
+    match clear_status(&db, "CORRUPTED", &repaired_files).await {
+        Ok(n) if n > 0 => log::info!("[Integrity Scan] Cleared CORRUPTED on {} issues that pass the check again.", n),
+        Ok(_) => {}
+        Err(e) => log::error!("[Integrity Scan] Failed to clear CORRUPTED on {} issues: {:?}", repaired_files.len(), e),
     }
 
     // One bulk UPDATE instead of one-per-corrupted-issue.
@@ -387,5 +444,151 @@ mod tests {
         let base = path.replace('\\', "/");
         assert_eq!(found, vec![format!("{base}/a.cbz"), format!("{base}/sub/b.cbr"), format!("{base}/sub/deeper/c.zip")]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ==== Issue #294: a passing file leaves CORRUPTED / MISSING; nothing else changes. ====
+
+    async fn status_db() -> Db {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1) // each :memory: connection is its own DB — keep exactly one
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Issue" (id TEXT PRIMARY KEY, "filePath" TEXT, status TEXT NOT NULL)"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "Library" (path TEXT)"#).execute(&pool).await.unwrap();
+        Db { pool, dialect: crate::db::Dialect::Sqlite }
+    }
+
+    async fn add_issue(db: &Db, id: &str, path: &std::path::Path, status: &str) {
+        sqlx::query(r#"INSERT INTO "Issue" (id, "filePath", status) VALUES ($1, $2, $3)"#)
+            .bind(id).bind(path.to_string_lossy().to_string()).bind(status)
+            .execute(&db.pool).await.unwrap();
+    }
+
+    async fn status_of(db: &Db, id: &str) -> String {
+        sqlx::query_scalar(r#"SELECT status FROM "Issue" WHERE id = $1"#)
+            .bind(id).fetch_one(&db.pool).await.unwrap()
+    }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("omnibus_diag_{}_{}", tag, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn write_valid_cbz(path: &std::path::Path) {
+        let mut zw = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        zw.start_file("001.jpg", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zw, b"page").unwrap();
+        zw.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn integrity_scan_clears_corrupted_only_on_a_repaired_file() {
+        let db = status_db().await;
+        let dir = scratch_dir("integrity");
+        let repaired = dir.join("repaired.cbz");
+        let broken = dir.join("broken.cbz");
+        let other = dir.join("other.cbz");
+        write_valid_cbz(&repaired);
+        std::fs::write(&broken, b"not a zip").unwrap();
+        write_valid_cbz(&other);
+        add_issue(&db, "repaired", &repaired, "CORRUPTED").await;
+        add_issue(&db, "broken", &broken, "CORRUPTED").await;
+        add_issue(&db, "other", &other, "WANTED").await;
+
+        let (scanned, corrupted, _) = run_integrity_scan(db.clone()).await.unwrap();
+
+        assert_eq!((scanned, corrupted), (3, 1));
+        assert_eq!(status_of(&db, "repaired").await, "DOWNLOADED");
+        assert_eq!(status_of(&db, "broken").await, "CORRUPTED");
+        assert_eq!(status_of(&db, "other").await, "WANTED", "a row that isn't CORRUPTED is never changed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ghost_check_clears_missing_only_when_the_file_is_back() {
+        let db = status_db().await;
+        let dir = scratch_dir("ghost");
+        sqlx::query(r#"INSERT INTO "Library" (path) VALUES ($1)"#)
+            .bind(dir.to_string_lossy().to_string()).execute(&db.pool).await.unwrap();
+        let back = dir.join("back.cbz");
+        let gone = dir.join("gone.cbz");
+        let other = dir.join("other.cbz");
+        std::fs::write(&back, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        add_issue(&db, "back", &back, "MISSING").await;
+        add_issue(&db, "gone", &gone, "MISSING").await;
+        add_issue(&db, "other", &other, "CORRUPTED").await;
+
+        let (checked, missing, _) = run_ghost_check(db.clone()).await.unwrap();
+
+        assert_eq!((checked, missing), (3, 1));
+        assert_eq!(status_of(&db, "back").await, "DOWNLOADED");
+        assert_eq!(status_of(&db, "gone").await, "MISSING");
+        assert_eq!(status_of(&db, "other").await, "CORRUPTED", "a row that isn't MISSING is never changed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn clear_status_skips_a_row_whose_status_changed_since_the_read() {
+        let db = status_db().await;
+        let p = std::path::Path::new("/nonexistent/a.cbz");
+        add_issue(&db, "a", p, "CORRUPTED").await;
+        add_issue(&db, "b", p, "DOWNLOADING").await;
+
+        let checked_files = ["a", "b"].map(|id| (id.to_owned(), p.to_str().unwrap().to_owned()));
+        let n = clear_status(&db, "CORRUPTED", &checked_files).await.unwrap();
+
+        assert_eq!(n, 1);
+        assert_eq!(status_of(&db, "a").await, "DOWNLOADED");
+        assert_eq!(status_of(&db, "b").await, "DOWNLOADING");
+        assert_eq!(clear_status(&db, "CORRUPTED", &[]).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn clear_status_updates_every_chunk() {
+        let db = status_db().await;
+        let mut checked_files = Vec::new();
+        for i in 0..=CLEAR_STATUS_CHUNK_SIZE {
+            let id = i.to_string();
+            let path = format!("/library/{id}.cbz");
+            add_issue(&db, &id, Path::new(&path), "MISSING").await;
+            checked_files.push((id, path));
+        }
+
+        let cleared = clear_status(&db, "MISSING", &checked_files).await.unwrap();
+        let downloaded: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Issue" WHERE status = 'DOWNLOADED'"#)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(cleared, checked_files.len() as u64);
+        assert_eq!(downloaded, checked_files.len() as i64);
+    }
+
+    #[tokio::test]
+    async fn clear_status_skips_a_row_relinked_since_the_check() {
+        let db = status_db().await;
+        let old_path = "/library/old.cbz";
+        let new_path = "/library/new.cbz";
+        add_issue(&db, "relinked", Path::new(old_path), "CORRUPTED").await;
+        add_issue(&db, "unchanged", Path::new(new_path), "CORRUPTED").await;
+        let checked_files = [
+            ("relinked".to_owned(), old_path.to_owned()),
+            ("unchanged".to_owned(), new_path.to_owned()),
+        ];
+        sqlx::query(r#"UPDATE "Issue" SET "filePath" = $1 WHERE id = 'relinked'"#)
+            .bind(new_path)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let cleared = clear_status(&db, "CORRUPTED", &checked_files).await.unwrap();
+
+        assert_eq!(cleared, 1);
+        assert_eq!(status_of(&db, "relinked").await, "CORRUPTED");
+        assert_eq!(status_of(&db, "unchanged").await, "DOWNLOADED");
     }
 }

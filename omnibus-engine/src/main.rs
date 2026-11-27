@@ -374,6 +374,26 @@ mod scan_lock_tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    // #283: a scan lock left by the previous engine process is cleared at start-up; other locks stay.
+    #[tokio::test]
+    async fn engine_start_clears_only_library_scan_locks() {
+        let (db, base) = scan_db("startup").await;
+        for id in [LOCK, "LIBRARY_SCAN_lib2", "LIBRARYXSCANXlib3", "METADATA_SYNC", "library_scan_x"] {
+            sqlx::query(&format!(r#"INSERT INTO "JobLock" (id, "lockedAt") VALUES ($1, {})"#, db.now_expr()))
+                .bind(id).execute(&db.pool).await.unwrap();
+        }
+
+        assert_eq!(clear_stale_scan_locks(&db).await, 2);
+        let left: Vec<String> = sqlx::query_scalar(r#"SELECT id FROM "JobLock" ORDER BY id"#).fetch_all(&db.pool).await.unwrap();
+        assert_eq!(left, ["LIBRARYXSCANXlib3", "METADATA_SYNC", "library_scan_x"]);
+
+        // The library whose lock was left behind scans straight away.
+        let ran = Arc::new(AtomicBool::new(false));
+        assert_eq!(run_locked_scan(&db, LOCK, "/comics", flagging_scan(ran.clone())).await, ScanRun::Finished);
+        assert!(ran.load(Ordering::SeqCst));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[tokio::test]
     async fn a_lock_older_than_ten_minutes_is_taken_over() {
         let (db, base) = scan_db("stale").await;
@@ -763,6 +783,8 @@ async fn run(db_url: String, db_connections: u32) -> anyhow::Result<()> {
     let db = connect_with_retry(&db_url, db_connections).await?;
 
     log::info!("✅ Connected to the database ({:?})!", db.dialect);
+
+    clear_stale_scan_locks(&db).await;
 
     let limiter = Arc::new(rate_limiter::RateLimiter::new());
 
@@ -1575,6 +1597,22 @@ fn panic_text(err: tokio::task::JoinError) -> String {
         .map(|s| s.to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "unknown panic".to_string())
+}
+
+/// Deletes every library-scan JobLock at engine start (#283). Only the engine takes these locks and
+/// there is one engine, so any row still there was left by the previous process and would otherwise
+/// skip that library's scans until it is 10 minutes old.
+async fn clear_stale_scan_locks(db: &db::Db) -> u64 {
+    match sqlx::query(r#"DELETE FROM "JobLock" WHERE substr(id, 1, 13) = 'LIBRARY_SCAN_'"#).execute(&db.pool).await {
+        Ok(r) => {
+            log::info!("[Scanner] Cleared {} library scan lock(s) left from before the restart.", r.rows_affected());
+            r.rows_affected()
+        }
+        Err(e) => {
+            log::warn!("[Scanner] Could not clear library scan locks at startup: {:?}", e);
+            0
+        }
+    }
 }
 
 /// Runs one library scan under its per-library JobLock and always lets go of the lock afterwards,

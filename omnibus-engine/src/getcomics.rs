@@ -280,35 +280,52 @@ pub(crate) fn is_challenge_timeout_response(data: &serde_json::Value) -> bool {
     status.eq_ignore_ascii_case("error") && message.contains("Error solving the challenge")
 }
 
-async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
-    // Bounded 429 handling (Kapowarr-parity): honor Retry-After (else exponential backoff), flag
-    // the throttle for the UI, and after the budget give up with an error — a rate limit means the
-    // source yields nothing THIS round; it is never a blocklist event and never fails the request.
-    let mut res = client.get(url).send().await?;
+/// The longest Retry-After a GetComics call waits out in place. Sleeping out a longer ban inside a
+/// search or a download would stall the whole queue, so the call gives up and a later retry comes back.
+const MAX_429_WAIT_S: u64 = 90;
+
+/// How long to wait before sending again after GetComics' `attempt`-th 429 (0-based): its
+/// Retry-After seconds when it sent a number, else 5 s doubling. None = longer than MAX_429_WAIT_S.
+pub(crate) fn wait_after_429(retry_after: Option<&str>, attempt: u32) -> Option<u64> {
+    let wait = retry_after
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(5 * 2u64.pow(attempt));
+    (wait <= MAX_429_WAIT_S).then_some(wait)
+}
+
+/// Bounded 429 handling (Kapowarr-parity), shared by the page fetch and the /dls/ redirect (#287):
+/// sends `request`, and while GetComics answers 429, waits (wait_after_429) and sends again, twice
+/// at most. Every 429 stamps the rate-limit flag for the health panel. Still 429 after that, or asked
+/// to wait longer than MAX_429_WAIT_S: an error that says "rate limited (429)". A rate limit means
+/// the source yields nothing THIS round; it is never a blocklist event, and the download side keeps
+/// such a request for a later retry instead of holding it for a manual click.
+async fn send_with_429_backoff<F>(db: &sqlx::AnyPool, what: &str, request: F) -> anyhow::Result<reqwest::Response>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let mut res = request().send().await?;
     for attempt in 0..2u32 {
         if res.status() != 429 {
-            break;
+            return Ok(res);
         }
         mark_getcomics_rate_limit_flag(db).await;
-        let wait = res
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(5 * 2u64.pow(attempt));
-        if wait > 90 {
-            // Sleeping out a long ban inside a search would stall the whole queue — bail now and
-            // let the scheduled retry sweeps come back later.
-            anyhow::bail!("GetComics rate limited (429) for {}; server asked for {}s — deferring", url, wait);
-        }
-        log::warn!("[GetComics] 429 rate limited for {}; backing off {}s (attempt {}/2).", url, wait, attempt + 1);
+        let asked = res.headers().get("retry-after").and_then(|v| v.to_str().ok()).map(|s| s.trim().to_string());
+        let Some(wait) = wait_after_429(asked.as_deref(), attempt) else {
+            anyhow::bail!("GetComics rate limited (429) {}; it asked for {}s, deferring", what, asked.unwrap_or_default());
+        };
+        log::warn!("[GetComics] 429 rate limited {}; backing off {}s (attempt {}/2).", what, wait, attempt + 1);
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-        res = client.get(url).send().await?;
+        res = request().send().await?;
     }
     if res.status() == 429 {
         mark_getcomics_rate_limit_flag(db).await;
-        anyhow::bail!("GetComics rate limited (429) for {} after backoff retries", url);
+        anyhow::bail!("GetComics rate limited (429) {} after backoff retries", what);
     }
+    Ok(res)
+}
+
+async fn fetch_html(client: &Client, db: &sqlx::AnyPool, url: &str, flaresolverr: Option<&str>) -> anyhow::Result<String> {
+    let res = send_with_429_backoff(db, &format!("for {}", url), || client.get(url)).await?;
     // 403 is Cloudflare's modern challenge status; 503 is the legacy "Just a moment…" interstitial.
     // The Anna's Archive copy of this fetcher always handled both — the GetComics path only caught
     // 403, so a 503 interstitial on a SEARCH page sailed past the solver entirely (2026-07 worklist
@@ -1024,14 +1041,14 @@ pub fn landed_hoster_url(original: &str, landed: &str) -> Option<String> {
 /// to its next candidate.
 pub async fn resolve_redirect(db: &sqlx::AnyPool, url: &str) -> anyhow::Result<Option<String>> {
     let client = crate::browser_http_client();
-    let resp = client.get(url)
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        .timeout(std::time::Duration::from_secs(25))
-        .send().await?;
-    if resp.status() == 429 {
-        mark_getcomics_rate_limit_flag(db).await;
-        anyhow::bail!("GetComics rate limited (429) the redirect link; deferring");
-    }
+    // #287 (Tobechukwu-Njoku): a 429 here used to fail the hoster at once, and with many requests
+    // starting together every hoster behind a redirect failed the same way. The same bounded backoff
+    // as the page fetch now; an error that is still "rate limited" keeps the request for a retry.
+    let resp = send_with_429_backoff(db, "the redirect link", || {
+        client.get(url)
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .timeout(std::time::Duration::from_secs(25))
+    }).await?;
     let landed = resp.url().to_string();
     let status = resp.status().as_u16();
     drop(resp); // never read the body — a mirror page or a file, either way not ours to fetch here
@@ -1885,5 +1902,108 @@ mod post_filter_tests {
     fn without_the_acronym_table_nothing_is_expanded() {
         let title = "Teenage Mutant Ninja Turtles - The Last Ronin #1 (2020)";
         assert!(!relevant("TMNT: The Last Ronin #1", "TMNT The Last Ronin 1", title, &HashMap::new()));
+    }
+
+    // ==== #287 (Tobechukwu-Njoku): resolving a /dls/ redirect gave up at the first 429, so when many
+    // requests started together every hoster behind the redirect failed at once. It now backs off the
+    // way the page fetch does: Retry-After honoured (at most 90 s), twice, then a "rate limited" error.
+
+    #[test]
+    fn a_429_waits_its_retry_after_else_5s_doubling_and_never_past_90s() {
+        assert_eq!(super::wait_after_429(Some("3"), 0), Some(3));
+        assert_eq!(super::wait_after_429(Some(" 90 "), 1), Some(90));
+        assert_eq!(super::wait_after_429(Some("91"), 0), None);
+        assert_eq!(super::wait_after_429(None, 0), Some(5));
+        assert_eq!(super::wait_after_429(None, 1), Some(10));
+        // A Retry-After given as an HTTP date isn't read; the doubling stands in.
+        assert_eq!(super::wait_after_429(Some("Wed, 21 Oct 2026 07:28:00 GMT"), 0), Some(5));
+    }
+
+    /// A raw HTTP server: each connection gets the next canned response, then closes. Counts them.
+    async fn canned_server(responses: Vec<&'static str>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = hits.clone();
+        tokio::spawn(async move {
+            for resp in responses {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (format!("http://{}", addr), hits)
+    }
+
+    async fn scratch_db() -> crate::db::Db {
+        let dir = std::env::temp_dir().join(format!("omnibus_gc287_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("gc.db");
+        std::fs::File::create(&file).unwrap();
+        crate::db::Db::connect(&format!("file:{}", file.to_string_lossy().replace('\\', "/")), 2).await.unwrap()
+    }
+
+    const TOO_MANY_1S: &str = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const TOO_MANY_600S: &str = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const TO_MIRROR: &str = "HTTP/1.1 302 Found\r\nLocation: /mirror/file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const MIRROR_PAGE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+
+    #[tokio::test]
+    async fn a_redirect_answered_429_waits_out_its_retry_after_then_resolves() {
+        let (base, hits) = canned_server(vec![TOO_MANY_1S, TO_MIRROR, MIRROR_PAGE]).await;
+        let db = scratch_db().await;
+        let started = std::time::Instant::now();
+
+        let landed = super::resolve_redirect(&db.pool, &format!("{base}/dls/x")).await.unwrap();
+
+        assert_eq!(landed, Some(format!("{base}/mirror/file")));
+        assert!(started.elapsed() >= std::time::Duration::from_secs(1), "waited out Retry-After: {:?}", started.elapsed());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_still_rate_limited_after_two_waits_is_a_rate_limit_error() {
+        let (base, hits) = canned_server(vec![TOO_MANY_1S, TOO_MANY_1S, TOO_MANY_1S]).await;
+        let db = scratch_db().await;
+
+        let err = super::resolve_redirect(&db.pool, &format!("{base}/dls/x")).await.unwrap_err().to_string();
+
+        assert!(err.contains("rate limited"), "{err}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn the_page_fetch_keeps_its_backoff_through_the_shared_helper() {
+        const PAGE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 17\r\nConnection: close\r\n\r\n<html>page</html>";
+        let (base, hits) = canned_server(vec![TOO_MANY_1S, PAGE]).await;
+        let db = scratch_db().await;
+
+        let html = super::fetch_html(&reqwest::Client::new(), &db.pool, &format!("{base}/search"), None).await.unwrap();
+
+        assert_eq!(html, "<html>page</html>");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_asked_to_wait_past_90s_gives_up_at_once() {
+        let (base, hits) = canned_server(vec![TOO_MANY_600S, MIRROR_PAGE]).await;
+        let db = scratch_db().await;
+        let started = std::time::Instant::now();
+
+        let err = super::resolve_redirect(&db.pool, &format!("{base}/dls/x")).await.unwrap_err().to_string();
+
+        assert!(err.contains("rate limited"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "no wait: {:?}", started.elapsed());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

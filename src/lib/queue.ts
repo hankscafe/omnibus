@@ -452,6 +452,9 @@ export function initWorker() {
                             // beta.011: each hoster first claims the request; once it has been closed (a
                             // cancel during a slow hoster, say) the loop stops and writes nothing more.
                             (async () => {
+                                // #287: a hoster that failed on a GetComics rate limit (its /dls/ redirect, or
+                                // GetComics' own link, answered 429 after the engine's backoff).
+                                let rateLimited = false;
                                 for (const cand of candidates) {
                                     if (!(await writeUnlessClosed(requestId, { status: 'DOWNLOADING', progress: 0, activeDownloadName: safeTitle, downloadLink: cand.url }))) {
                                         Logger.log(`[BullMQ] ${name} was closed while its download was being tried. Stopping.`, 'info');
@@ -461,7 +464,9 @@ export function initWorker() {
                                     try {
                                         ok = await DownloadService.downloadDirectFile(cand.url, safeTitle, config.download_path, requestId, cand.hoster);
                                     } catch (e) {
-                                        Logger.log(`[BullMQ] DDL candidate '${cand.hoster}' threw for ${name}: ${getErrorMessage(e)}`, 'warn');
+                                        const reason = getErrorMessage(e);
+                                        if (/rate limited/i.test(reason)) rateLimited = true;
+                                        Logger.log(`[BullMQ] DDL candidate '${cand.hoster}' threw for ${name}: ${reason}`, 'warn');
                                     }
                                     if (ok) {
                                         await new Promise(r => setTimeout(r, 2000));
@@ -476,7 +481,21 @@ export function initWorker() {
                                 // /md5/ link a keyless user must pass in-browser (downloadDirectFile already
                                 // holds the latter as MANUAL_DDL; this keeps the log accurate + is a backstop).
                                 const manualHold = candidates.find(c => /getcomics\.org\/dls\//i.test(c.url) || /\/md5\/[a-f0-9]{32}/i.test(c.url));
-                                if (manualHold) {
+                                if (rateLimited) {
+                                    // #287 (Tobechukwu-Njoku): when many requests start together GetComics answers
+                                    // 429 for all of them; holding each for a manual click only sends the user into
+                                    // the same throttle, and the throttle is gone in minutes. STALLED is the retry
+                                    // lane: the 60 s cron tries the link again after download_retry_delay (three
+                                    // times), then the parked sweep searches again. GetComics' own link is the one
+                                    // to keep: the cron streams it without a hoster, as getcomics_main does.
+                                    const retryWith = candidates.find(c => ['getcomics_main', 'getcomics_direct', 'getcomics'].includes(c.hoster)) ?? candidates[0];
+                                    if (await writeUnlessClosed(requestId, {
+                                        status: 'STALLED', progress: 0, downloadLink: retryWith.url,
+                                        statusNote: 'GetComics was rate limiting downloads. It is tried again automatically in a few minutes.',
+                                    })) {
+                                        Logger.log(`[BullMQ] GetComics rate limited the download for ${name}; marking STALLED for an automatic retry instead of holding it for a manual download.`, 'warn');
+                                    }
+                                } else if (manualHold) {
                                     if (await writeUnlessClosed(requestId, { status: 'MANUAL_DDL', downloadLink: manualHold.url, activeDownloadName: safeTitle })) {
                                         Logger.log(`[BullMQ] All hosters failed for ${name}; holding link for manual download.`, 'warn');
                                     }

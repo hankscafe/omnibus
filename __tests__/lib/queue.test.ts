@@ -1150,6 +1150,82 @@ describe('Cron: BullMQ Worker Router', () => {
         });
     });
 
+    // ==== #287 (Tobechukwu-Njoku): GetComics answered 429 for every hoster's link when many requests
+    // started together. All the hosters failed, a getcomics.org/dls/ link was among them, so the
+    // request was held for a manual click - into the same throttle. A rate limit is gone in minutes:
+    // the request goes to the retry cron instead.
+    describe('#287: every hoster failed', () => {
+        const ddlSearch = (requestId: string, candidates: { url: string; hoster: string }[]) => {
+            mocks.engineFetch.mockResolvedValueOnce({
+                ok: true, status: 200,
+                json: async () => ({
+                    success: true,
+                    best_match: { title: 'Saga 061', protocol: 'ddl', downloadUrl: candidates[0].url, indexer: candidates[0].hoster },
+                    ddl_candidates: candidates,
+                }),
+            });
+            return mocks.workerCb.current({
+                id: `job_${requestId}`,
+                data: { type: 'SEARCH_AND_DOWNLOAD', requestId, name: 'Saga #61', year: '2012', isManga: false, publisher: 'Image', skipIndexers: false },
+                updateProgress: vi.fn(),
+            });
+        };
+        const parks = () => mocks.requestUpdateMany.mock.calls.map((c: any[]) => c[0]?.data).filter((d: any) => d?.status === 'STALLED' || d?.status === 'MANUAL_DDL');
+        const setup = (id: string) => {
+            initWorker();
+            mocks.requestFindUnique.mockResolvedValue({ id, status: 'PENDING', volumeId: '0', failedLinks: '[]' });
+            mocks.systemSettingFindMany.mockResolvedValue([]);
+            mocks.requestFindFirst.mockResolvedValue(null);
+            mocks.requestFindMany.mockResolvedValue([]);
+        };
+
+        it('on a GetComics rate limit, parks it STALLED for the retry cron with GetComics\' own link, not for a manual download', async () => {
+            setup('req_rl');
+            mocks.downloadDirectFile
+                .mockRejectedValueOnce(new Error('GetComics redirect could not be resolved: GetComics rate limited (429) the redirect link after backoff retries'))
+                .mockRejectedValueOnce(new Error('GetComics rate limited (429) the download link; deferring for a later retry.'));
+
+            await ddlSearch('req_rl', [
+                { url: 'https://getcomics.org/dls/pd-1', hoster: 'pixeldrain' },
+                { url: 'https://getcomics.org/dls/main-1', hoster: 'getcomics_main' },
+            ]);
+
+            await vi.waitFor(() => expect(parks()).toHaveLength(1));
+            expect(parks()[0]).toEqual(expect.objectContaining({
+                status: 'STALLED', progress: 0, downloadLink: 'https://getcomics.org/dls/main-1',
+                statusNote: expect.stringMatching(/rate limit/i),
+            }));
+        });
+
+        it('keeps the first link when none of them is GetComics\' own', async () => {
+            setup('req_rl2');
+            mocks.downloadDirectFile.mockRejectedValue(new Error('GetComics redirect could not be resolved: GetComics rate limited (429) the redirect link after backoff retries'));
+
+            await ddlSearch('req_rl2', [
+                { url: 'https://getcomics.org/dls/pd-2', hoster: 'pixeldrain' },
+                { url: 'https://getcomics.org/dls/mf-2', hoster: 'mediafire' },
+            ]);
+
+            await vi.waitFor(() => expect(parks()).toHaveLength(1));
+            expect(parks()[0]).toEqual(expect.objectContaining({ status: 'STALLED', downloadLink: 'https://getcomics.org/dls/pd-2' }));
+        });
+
+        it('still holds a GetComics link for a manual download when nothing was rate limited', async () => {
+            setup('req_cf');
+            mocks.downloadDirectFile
+                .mockRejectedValueOnce(new Error('Failed to resolve pixeldrain link: file not found'))
+                .mockResolvedValueOnce(false);
+
+            await ddlSearch('req_cf', [
+                { url: 'https://getcomics.org/dls/pd-3', hoster: 'pixeldrain' },
+                { url: 'https://getcomics.org/dls/main-3', hoster: 'getcomics_main' },
+            ]);
+
+            await vi.waitFor(() => expect(parks()).toHaveLength(1));
+            expect(parks()[0]).toEqual(expect.objectContaining({ status: 'MANUAL_DDL', downloadLink: 'https://getcomics.org/dls/pd-3' }));
+        });
+    });
+
     // ==== beta.011: a running search never reopens a request a person closed meanwhile. Every search
     // is queued for a PENDING request; it waits its turn (the 5-second spacing), then the engine
     // searches for seconds to minutes - time enough to cancel the request in My Requests or mark it

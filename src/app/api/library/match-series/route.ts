@@ -874,11 +874,11 @@ export async function POST(request: Request) {
         // anything; it only added a second writer to race against. Removed rather than locked.
         //
         // Cost of removing it: this admin edit (SeriesGroup/Universe/Description/etc.) now only
-        // reaches the files on METADATA_SYNC's own embed -- which doesn't happen if that fetch fails,
-        // or if a sync for this series is already in flight and this one gets skipped (metadata.rs's
-        // own in-progress guard). In either case the edit is saved in the DB but waits for the next
-        // successful sync/embed to actually land in the files. A per-file lock in the writer, so a
-        // dedicated embed job could safely coexist with METADATA_SYNC's, would close that gap.
+        // reaches the files on METADATA_SYNC's own embed -- which doesn't happen if that fetch fails;
+        // the edit is then saved in the DB but waits for the next successful sync/embed to land in
+        // the files. A sync for this series already in flight no longer swallows this one (#275):
+        // metadata.rs's in-progress guard queues it, and it runs once the running sync ends, reading
+        // the series fresh and carrying this match's "Write to file" choice.
     } catch (e) {
         Logger.log(`[Match Series] Failed to queue jobs: ${getErrorMessage(e)}`, 'warn');
     }

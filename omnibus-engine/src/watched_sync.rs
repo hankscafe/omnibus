@@ -206,6 +206,18 @@ fn watched_comic_files(watched_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>
 /// How many skipped-file names the summary line lists.
 const SKIPPED_NAMES_SHOWN: usize = 5;
 
+fn escape_log_text(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        if ch.is_control() || matches!(ch, '\\' | '\u{2028}' | '\u{2029}') {
+            escaped.extend(ch.escape_debug());
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped
+}
+
 /// #290: one line per sweep for the files it can't import, or `None` when nothing was skipped.
 fn skipped_summary(skipped: &[PathBuf]) -> Option<String> {
     if skipped.is_empty() {
@@ -213,11 +225,21 @@ fn skipped_summary(skipped: &[PathBuf]) -> Option<String> {
     }
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for path in skipped {
-        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "no extension".to_string());
+        let ext = path.extension()
+            .filter(|ext| !ext.is_empty())
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .unwrap_or_else(|| "no extension".to_string());
         *counts.entry(ext).or_default() += 1;
     }
-    let counts = counts.iter().map(|(ext, n)| format!("{ext}: {n}")).collect::<Vec<_>>().join(", ");
-    let mut names = skipped.iter().take(SKIPPED_NAMES_SHOWN).map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned()).collect::<Vec<_>>().join(", ");
+    let counts = counts.iter()
+        .map(|(ext, n)| format!("{}: {n}", escape_log_text(ext)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut names = skipped.iter()
+        .take(SKIPPED_NAMES_SHOWN)
+        .map(|path| escape_log_text(&path.file_name().unwrap_or_default().to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(", ");
     if skipped.len() > SKIPPED_NAMES_SHOWN {
         names.push_str(&format!(" and {} more", skipped.len() - SKIPPED_NAMES_SHOWN));
     }
@@ -1109,10 +1131,19 @@ mod tests {
 
     #[test]
     fn skipped_summary_counts_each_extension() {
-        let skipped: Vec<PathBuf> = ["a.pdf", "b.PDF", "notes.txt", "README"].iter().map(PathBuf::from).collect();
+        let skipped: Vec<PathBuf> = ["a.pdf", "b.PDF", "notes.txt", "README", "README."].iter().map(PathBuf::from).collect();
         assert_eq!(
             skipped_summary(&skipped).as_deref(),
-            Some("Skipped 4 unsupported files in the watched folder (no extension: 1, pdf: 2, txt: 1): a.pdf, b.PDF, notes.txt, README")
+            Some("Skipped 5 unsupported files in the watched folder (no extension: 2, pdf: 2, txt: 1): a.pdf, b.PDF, notes.txt, README, README.")
+        );
+    }
+
+    #[test]
+    fn skipped_summary_escapes_controls_in_names_and_extensions() {
+        let skipped = [PathBuf::from("part\n2.p\r\t\nDf")];
+        assert_eq!(
+            skipped_summary(&skipped).as_deref(),
+            Some(r"Skipped 1 unsupported file in the watched folder (p\r\t\ndf: 1): part\n2.p\r\t\nDf")
         );
     }
 
@@ -1210,7 +1241,8 @@ mod tests {
     fn the_sweep_lists_the_watched_folder_while_the_pool_is_busy() {
         use crate::walk::test_support::{busy_pool, file_names, walk_tree};
         let root = walk_tree();
-        let found = busy_pool(|| watched_comic_files(&root)).expect("a busy pool doesn't fail the sweep").0;
+        let (found, skipped) = busy_pool(|| watched_comic_files(&root)).expect("a busy pool doesn't fail the sweep");
+        assert_eq!(skipped, [root.join("sub").join("notes.txt")]);
         assert_eq!(file_names(found), ["a.cbz", "b.cbr", "c.zip"]);
         assert!(watched_comic_files(&root.join("missing")).is_err(), "a folder that can't be read still fails it");
         let _ = std::fs::remove_dir_all(&root);

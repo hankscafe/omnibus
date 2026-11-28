@@ -1461,6 +1461,23 @@ fn issue_descriptor_from_filename_unhinted(file_name: &str) -> (String, bool) {
     }
     // 2. Strip bracketed/parenthesized 4-digit years (or year ranges) so they're not mistaken for issues.
     let clean = re_bracket.replace_all(&clean, "").to_string();
+    // 2b (#292): Drop bracketed cover counts before cross-reference handling. Parity: issue-parser.ts.
+    static RE_COVER_BRACKET: OnceLock<Regex> = OnceLock::new();
+    static RE_COVER_WORD: OnceLock<Regex> = OnceLock::new();
+    let re_cover_bracket = RE_COVER_BRACKET
+        .get_or_init(|| Regex::new(r"[\[(][^\[\]()]*[\])]").unwrap());
+    let re_cover_word = RE_COVER_WORD
+        .get_or_init(|| Regex::new(r"(?:^|[^a-zA-Z0-9])(?i-u:covers?)(?:[^a-zA-Z0-9]|$)").unwrap());
+    let clean = re_cover_bracket
+        .replace_all(&clean, |caps: &regex::Captures| {
+            let block = &clean[caps.get(0).unwrap().range()];
+            if block.bytes().any(|b| b.is_ascii_digit()) && re_cover_word.is_match(block) {
+                ""
+            } else {
+                block
+            }
+        })
+        .to_string();
     // 3. Smartly strip cross-references, keeping blocks that carry an explicit issue/vol marker.
     let clean = re_crossref
         .replace_all(&clean, |caps: &regex::Captures| {
@@ -1504,6 +1521,20 @@ fn issue_descriptor_from_filename_unhinted(file_name: &str) -> (String, bool) {
         return (strip_leading_zeros(&caps[1]), is_annual);
     }
 
+    // #292: Strip only the bare count and word after checking explicit issue and annual numbers.
+    static RE_COVER_BARE: OnceLock<Regex> = OnceLock::new();
+    let re_cover_bare = RE_COVER_BARE.get_or_init(|| {
+        Regex::new(r"(^|[^a-zA-Z0-9.])[0-9]+[ \t]+(?i-u:(?:variant[ \t]+)?covers?)").unwrap()
+    });
+    let clean = re_cover_bare.replace_all(&clean, |caps: &regex::Captures| {
+        let matched = caps.get(0).unwrap();
+        if clean.as_bytes().get(matched.end()).is_some_and(u8::is_ascii_alphanumeric) {
+            &clean[matched.range()]
+        } else {
+            &clean[caps.get(1).unwrap().range()]
+        }
+    });
+
     // 6. Temporarily hide Volume tokens (recording the first volume number as a tertiary fallback).
     // Emulates Node's `(?<=^|[^a-zA-Z])(?:vol...|v...)\s*0*(\d{1,3}...)(?!\d)`.
     let mut volume_num: Option<String> = None;
@@ -1528,6 +1559,23 @@ fn issue_descriptor_from_filename_unhinted(file_name: &str) -> (String, bool) {
         last_end = m0.end();
     }
     no_vol.push_str(&clean[last_end..]);
+
+    // 6b (#292): a bare "NN of MM" is issue NN, ranked after an explicit "#"/"Issue" (and after the
+    //     volume tokens are hidden, so "Vol 2 of 3" keeps its old reading). Parity: issue-parser.ts.
+    static RE_OF: OnceLock<Regex> = OnceLock::new();
+    let re_of = RE_OF.get_or_init(|| {
+        Regex::new(r"(?:^|[^a-zA-Z0-9.])([0-9]+(?:\.[0-9]+)?)[ \t]+(?i-u:of)[ \t]+[0-9]+").unwrap()
+    });
+    for caps in re_of.captures_iter(&no_vol) {
+        let end = caps.get(0).unwrap().end();
+        if no_vol.as_bytes().get(end).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'.') {
+            continue;
+        }
+        if caps[1].parse::<f64>().is_ok_and(|value| (1900.0..=2099.0).contains(&value)) {
+            continue;
+        }
+        return (strip_leading_zeros(&caps[1]), is_annual);
+    }
 
     // 7. SECONDARY PRIORITY: bare numbers — scan in REVERSE and skip 4-digit years. Negative signs
     // are intentionally NOT captured here so "Title - 001" parses as positive.
@@ -4259,6 +4307,36 @@ mod tests {
         assert_eq!(issue_number_from_filename("X-Men 1991 05.cbz", None), "5");
         assert_eq!(issue_number_from_filename("Batman 001 (2011).cbz", None), "1");
         assert_eq!(issue_number_from_filename("Series 2020.cbz", None), "1"); // only a year -> default
+    }
+
+    #[test]
+    fn issue_number_ignores_cover_counts_292() {
+        // Parity with the Node #292 extractor tests.
+        for (name, expected) in [
+            ("Series A 001 (2 Covers).cbz", "1"),
+            ("Series B 003 (4 covers).cbz", "3"),
+            ("Series C 01 of 02 covers.cbz", "1"),
+            ("Series A 001 (2016) (2 Covers) (Digital).cbz", "1"),
+            ("Batman 01 of 06.cbz", "1"),
+            ("Series C 05 of 06 covers.cbz", "5"),
+            ("Series B 003 [4 covers].cbz", "3"),
+            ("Series B 003 (2 Variant Covers).cbz", "3"),
+            ("Series B 003 (1 of 2 Covers).cbz", "3"),
+            ("Series #007 Covers (of 12).cbz", "7"),
+            ("Series Issue 007 Covers.cbz", "7"),
+            ("Series Issue #-007 Covers.cbz", "-7"),
+            ("Series Annual 007 Covers.cbz", "7"),
+            ("Series 003 2 Covers_Alt.cbz", "3"),
+            ("Series 003 2\tVariant\tCoversé.cbz", "3"),
+            ("Series 003 [1 Covers_Chapter Notes].cbz", "3"),
+            ("Series 003 [1 Covers2 Chapter Notes].cbz", "1"),
+            ("Series 02 of 3.5.cbz", "3.5"),
+            ("Series 2020 of 2021.cbz", "1"),
+            ("Series 02\tof\t03.cbz", "2"),
+            ("Series 02\u{00a0}of 03.cbz", "3"),
+        ] {
+            assert_eq!(issue_number_from_filename(name, None), expected, "{name}");
+        }
     }
 
     #[test]

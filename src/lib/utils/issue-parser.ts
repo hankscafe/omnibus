@@ -133,6 +133,11 @@ export function describeIssueFromFilename(filename: string, seriesName?: string)
     // 1. Strip years explicitly
     clean = clean.replace(/\[\d{4}(?:-\d{4})?\]/g, '').replace(/\(\d{4}(?:-\d{4})?\)/g, ''); 
 
+    // #292: Drop bracketed cover counts before cross-reference handling. Parity: scanner.rs.
+    clean = clean.replace(/[\[(][^[\]()]*[\])]/g, (block) =>
+        /[0-9]/.test(block) && /(?:^|[^a-zA-Z0-9])covers?(?:[^a-zA-Z0-9]|$)/i.test(block) ? '' : block,
+    );
+
     // 2. Smartly strip cross-references
     const crossRefRegex = /[\[\(][^[\]()]*[a-zA-Z]+[^[\]()]*\d+[^[\]()]*[\]\)]/g;
     clean = clean.replace(crossRefRegex, (match) => {
@@ -166,6 +171,11 @@ export function describeIssueFromFilename(filename: string, seriesName?: string)
     const issueMatch = clean.match(/(?:#|(?<=^|[^a-zA-Z])(?:issue\s*#?|ch(?:apter)?\.?))\s*0*(\d+(?:\.\d+)?[a-zA-Z]?)/i);
     if (issueMatch) return { number: issueMatch[1].replace(/^0+(?=\d)/, ''), isAnnual };
 
+    // #292: Strip only the bare count and word after checking explicit issue and annual numbers.
+    clean = clean.replace(/(^|[^a-zA-Z0-9.])[0-9]+[ \t]+(?:variant[ \t]+)?covers?/gi, (match, prefix, offset, input) =>
+        /[a-zA-Z0-9]/.test(input.charAt(offset + match.length)) ? match : prefix,
+    );
+
     // 4. Temporarily hide Volume tokens
     let volumeNum: string | null = null;
     const volRegex = /(?<=^|[^a-zA-Z])(?:vol(?:ume)?\s*\.?|v\s*\.?)\s*0*(\d{1,3}(?:\.\d+)?[a-zA-Z]?)(?!\d)/gi;
@@ -173,6 +183,15 @@ export function describeIssueFromFilename(filename: string, seriesName?: string)
         if (!volumeNum) volumeNum = p1.replace(/^0+(?=\d)/, '');
         return ''; 
     });
+
+    // #292: a bare "NN of MM" is issue NN, ranked after an explicit "#"/"Issue" (and after the
+    // volume tokens are hidden, so "Vol 2 of 3" keeps its old reading). Parity: scanner.rs.
+    for (const match of noVolString.matchAll(/(?:^|[^a-zA-Z0-9.])([0-9]+(?:\.[0-9]+)?)[ \t]+of[ \t]+[0-9]+/gi)) {
+        if (/[a-zA-Z0-9.]/.test(noVolString.charAt(match.index + match[0].length))) continue;
+        const value = Number(match[1]);
+        if (value >= 1900 && value <= 2099) continue;
+        return { number: match[1].replace(/^0+(?=\d)/, ''), isAnnual };
+    }
 
     // 5. SECONDARY PRIORITY: Standalone numbers
     // Note: We DO NOT capture negative signs here anymore. This ensures standalone
